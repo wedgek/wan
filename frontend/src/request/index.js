@@ -3,7 +3,7 @@ import router from "@/router"
 import { useAuthStore } from "@/stores/auth"
 
 const service = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL,
+  baseURL: import.meta.env.VITE_API_BASE_URL || "",
   timeout: 10000,
   headers: {
     "Content-Type": "application/json",

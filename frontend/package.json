@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "scripts": {
     "dev": "vite --mode development",
-    "dev:prod": "set VITE_API_BASE_URL=http://qw.manage.api.shenzhenmeiri.cn&& vite --mode development",
+    "dev:prod": "vite --mode development",
     "build:test": "rimraf dist && vite build --mode test",
     "build:prod": "rimraf dist && vite build --mode production",
     "analyze": "rimraf dist && vite build --mode analyze",

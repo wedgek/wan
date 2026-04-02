@@ -1,0 +1,196 @@
+// ============ 主色调 ============
+$primary-color: #1890FF;       // 主色 - 标准蓝色（大厂风格）
+$primary-hover: #40A9FF;       // 主色悬停 - 浅蓝色
+$primary-active: #096DD9;      // 主色激活 - 深蓝色
+$primary-light: #E6F7FF;       // 主色浅背景
+$primary-bg: #F0F7FF;          // 主色背景
+
+// ============ 功能色 ============
+$success-color: #52C41A;       // 成功 - 绿色
+$success-light: #F6FFED;       // 成功浅背景
+$warning-color: #FA8C16;       // 警告 - 橙色
+$warning-light: #FFF7E6;       // 警告浅背景
+$danger-color: #FF4D4F;        // 错误/危险 - 红色
+$danger-hover: #F5222D;        // 危险色悬停状态
+$danger-active: #CF1322;       // 危险色激活/点击状态
+$danger-light: #FFF2F0;        // 错误浅背景
+$info-color: #1890FF;          // 信息 - 蓝色
+$info-light: #E6F7FF;          // 信息浅背景
+
+// ============ 中性色 ============
+// 文字色
+$text-primary: #262626;        // 主要文字 - 深灰色
+$text-title:   #333333;       // 标题文字 - 深灰色
+$text-regular: #595959;        // 常规文字 - 中灰色
+$text-secondary: #8C8C8C;      // 次要文字 - 浅灰色
+$text-placeholder: #BFBFBF;    // 占位文字
+$text-disabled: #D9D9D9;       // 禁用文字
+
+// 边框色
+$border-color: #D9D9D9;        // 常规边框
+$border-light: #F0F0F0;        // 浅边框
+$border-lighter: #F5F5F5;      // 更浅边框
+
+// 背景色
+$bg-white: #FFFFFF;            // 白色背景
+$bg-page: #F5F7FA;             // 页面背景 - 截图中的浅灰蓝背景
+$bg-light: #FAFAFA;            // 浅灰背景
+$bg-grey: #F0F2F5;             // 灰色背景
+$bg-hover: #F5F5F5;            // 悬停背景
+$bg-selected: #E6F7FF;         // 选中背景
+
+// ============ 字体 ============
+// 主字体栈：Roboto(英文/数字) + 系统中文字体
+$font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+// 数字专用字体（表格、金额等场景）
+$font-family-number: 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+// 代码字体
+$font-family-mono: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', 'Consolas', monospace;
+
+$font-size-xs: 12px;
+$font-size-sm: 13px;
+$font-size-base: 14px;
+$font-size-lg: 16px;
+$font-size-xl: 18px;
+$font-weight-normal: 400;
+$font-weight-medium: 500;
+$font-weight-bold: 600;
+
+// ============ 布局 ============
+$header-height: 60px;
+$sidebar-width: 220px;
+$sidebar-collapsed: 64px;
+$content-outside-padding: 14px;
+$content-mini-padding: 12px;
+$content-padding: 18px;
+$footer-height: 48px;
+
+// ============ 导航与侧边栏 ============
+$navbar-bg: #ffffff;
+$navbar-text: $text-primary;
+$navbar-text-secondary: $text-secondary;
+$navbar-border: $border-light;
+$navbar-hover: $bg-light;
+$navbar-active: $primary-color;
+$navbar-active-bg: $primary-light;
+$navbar-active-border: $primary-color;
+
+$sidebar-bg: #ffffff;         
+$sidebar-text: $text-primary;
+$sidebar-text-hover: $primary-color;
+$sidebar-hover: $bg-light;
+$sidebar-active: $primary-color;
+$sidebar-active-bg: $primary-light;
+$sidebar-border: $border-light;
+$sidebar-header-bg: #ffffff;
+
+// ============ 间距 ============
+$space-xs: 4px;
+$space-sm: 8px;
+$space-md: 16px;
+$space-lg: 24px;
+$space-xl: 32px;
+
+// ============ 圆角 ============
+$border-radius-sm: 2px;        // 小圆角 - 用于标签等
+$border-radius: 4px;           // 常规圆角 - 用于按钮、输入框等
+$border-radius-lg: 6px;        // 大圆角 - 用于卡片等
+$border-radius-xl: 8px;        // 超大圆角
+$border-radius-full: 9999px;   // 全圆角 - 用于圆形按钮等
+
+// ============ 阴影 ============
+$shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+$shadow-base: 0 4px 10px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -1px rgba(0, 0, 0, 0.04);
+$shadow-md: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04);
+$shadow-lg: 0 20px 25px -5px rgba(0, 0, 0, 0.08), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+$shadow-xl: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+
+// ============ 动画 ============
+$transition-base: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+$transition-fast: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+$transition-slow: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+
+
+// ============ 表格 ============
+$table-header-bg: #FAFAFA;           // 表头背景
+$table-header-operate: #ebeef5;// 表头操作边框
+$table-row-hover: #F5F5F5;           // 行悬停背景
+$table-stripe: #F8F8F8;              // 斑马纹背景
+$table-border: $border-color;        // 表格边框
+$table-padding: 12px 16px;           // 表格内边距
+
+// ============ 按钮 ============
+$btn-height-sm: 24px;                // 小按钮高度
+$btn-height: 32px;                   // 常规按钮高度
+$btn-height-lg: 40px;                // 大按钮高度
+$btn-padding-sm: 0 7px;              // 小按钮内边距
+$btn-padding: 0 15px;                // 常规按钮内边距
+$btn-padding-lg: 0 20px;             // 大按钮内边距
+
+// 主按钮
+$btn-primary-bg: $primary-color;
+$btn-primary-color: #FFFFFF;
+$btn-primary-hover: $primary-hover;
+$btn-primary-active: $primary-active;
+
+// 默认按钮
+$btn-default-bg: #FFFFFF;
+$btn-default-color: $text-regular;
+$btn-default-border: $border-color;
+$btn-default-hover: $bg-light;
+$btn-default-active: $bg-grey;
+
+// 危险按钮
+$btn-danger-bg: $danger-color;
+$btn-danger-color: #FFFFFF;
+$btn-danger-hover: #FF7875;
+$btn-danger-active: #D9363E;
+
+// ============ 表单 ============
+$input-height: 32px;                 // 输入框高度
+$input-bg: #FFFFFF;                  // 输入框背景
+$input-color: $text-primary;         // 输入框文字颜色
+$input-border: $border-color;        // 输入框边框
+$input-border-hover: $primary-color; // 输入框悬停边框
+$input-border-focus: $primary-color; // 输入框聚焦边框
+$input-placeholder: $text-placeholder; // 输入框占位符
+$input-disabled-bg: $bg-light;      // 输入框禁用背景
+$input-disabled-color: $text-disabled; // 输入框禁用文字
+
+// ============ 菜单 ============
+$menu-bg: #FFFFFF;                   // 菜单背景
+$menu-color: $text-regular;         // 菜单文字颜色
+$menu-hover: $bg-hover;              // 菜单悬停背景
+$menu-selected: $primary-color;      // 菜单选中颜色
+$menu-selected-bg: $primary-light;   // 菜单选中背景
+$menu-border: $border-color;        // 菜单边框
+
+// ============ 状态色 ============
+$status-error: $danger-color;        // 错误状态
+$status-warning: $warning-color;     // 警告状态
+$status-success: $success-color;     // 成功状态
+$status-info: $info-color;           // 信息状态
+$status-disabled: $text-disabled;    // 禁用状态
+
+// ============ 标签 ============
+$tag-default-bg: $bg-light;          // 默认标签背景
+$tag-primary-bg: $primary-light;     // 主色标签背景
+$tag-success-bg: $success-light;     // 成功标签背景
+$tag-warning-bg: $warning-light;     // 警告标签背景
+$tag-danger-bg: $danger-light;       // 危险标签背景
+$tag-info-bg: $info-light;           // 信息标签背景
+$tag-border-radius: $border-radius-sm; // 标签圆角
+
+// ============ 弹窗 ============
+$modal-bg: #FFFFFF;                  // 弹窗背景
+$modal-header-bg: #FFFFFF;           // 弹窗头部背景
+$modal-footer-bg: #FAFAFA;           // 弹窗底部背景
+$modal-border: $border-color;        // 弹窗边框
+$modal-shadow: $shadow-xl;           // 弹窗阴影
+$modal-mask: rgba(0, 0, 0, 0.45);    // 遮罩层颜色
+
+// ============ 滚动条 ============
+$scrollbar-width: 8px;               // 滚动条宽度
+$scrollbar-bg: #F5F5F5;              // 滚动条背景
+$scrollbar-thumb: #D9D9D9;           // 滚动条滑块
+$scrollbar-thumb-hover: #BFBFBF;     // 滚动条滑块悬停

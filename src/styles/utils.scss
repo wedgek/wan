@@ -1,0 +1,37 @@
+// ============================================================
+// 工具类 - 按需使用，需主动添加 class 才生效
+// ============================================================
+
+// ============ Textarea 工具类 ============
+// 无边框样式（嵌入式场景）
+.el-textarea--plain {
+  .el-textarea__inner {
+    border: none;
+    border-radius: 0;
+    resize: none;
+    box-shadow: none !important;
+    &:hover, &:focus { box-shadow: none !important; }
+  }
+}
+
+// 高度撑满父容器
+.el-textarea--fill {
+  height: 100%;
+  .el-textarea__inner {
+    height: 100% !important;
+  }
+}
+
+// 无边框 + 撑满（常用组合）
+.el-textarea--plain-fill {
+  height: 100%;
+  .el-textarea__inner {
+    height: 100% !important;
+    border: none;
+    border-radius: 0;
+    resize: none;
+    box-shadow: none !important;
+    &:hover, &:focus { box-shadow: none !important; }
+  }
+}
+

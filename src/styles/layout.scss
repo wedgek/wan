@@ -1,0 +1,211 @@
+@use './variables.scss' as *;
+
+// ============ 全局滚动条优化 ============
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 0.3s ease;
+}
+
+*:hover {
+  scrollbar-color: rgba(0, 0, 0, 0.1) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+  background: transparent;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 10px;
+  transition: background 0.3s ease;
+}
+
+*:hover::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+// ============ 基础布局工具类 ============
+.center {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.flex {
+  display: flex;
+}
+
+.flex-between {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.flex-column {
+  display: flex;
+  flex-direction: column;
+}
+
+.m-auto {
+  margin: auto;
+}
+
+// 间距工具类
+@for $i from 1 through 5 {
+  .p-#{$i} { padding: $i * 8px !important; }
+  .m-#{$i} { margin: $i * 8px !important; }
+  .pt-#{$i} { padding-top: $i * 8px !important; }
+  .pb-#{$i} { padding-bottom: $i * 8px !important; }
+  .pl-#{$i} { padding-left: $i * 8px !important; }
+  .pr-#{$i} { padding-right: $i * 8px !important; }
+  .mt-#{$i} { margin-top: $i * 8px !important; }
+  .mb-#{$i} { margin-bottom: $i * 8px !important; }
+}
+
+.text-center { text-align: center; }
+.cursor-pointer { cursor: pointer; }
+.overflow-hidden { overflow: hidden; }
+.w-full { width: 100%; }
+.h-full { height: 100%; }
+
+// ============ 字体工具类 ============
+// 数字字体（适用于金额、统计数据等）
+.font-number {
+  font-family: $font-family-number;
+  font-variant-numeric: tabular-nums;
+}
+
+// 代码字体
+.font-mono {
+  font-family: $font-family-mono;
+}
+
+// 字重
+.font-normal { font-weight: $font-weight-normal; }
+.font-medium { font-weight: $font-weight-medium; }
+.font-bold { font-weight: $font-weight-bold; }
+
+// 字号
+.text-xs { font-size: $font-size-xs; }
+.text-sm { font-size: $font-size-sm; }
+.text-base { font-size: $font-size-base; }
+.text-lg { font-size: $font-size-lg; }
+.text-xl { font-size: $font-size-xl; }
+
+// 文字颜色
+.text-primary { color: $text-primary; }
+.text-regular { color: $text-regular; }
+.text-secondary { color: $text-secondary; }
+.text-placeholder { color: $text-placeholder; }
+.text-brand { color: $primary-color; }
+.text-success { color: $success-color; }
+.text-warning { color: $warning-color; }
+.text-danger { color: $danger-color; }
+
+// ============ UI 效果 ============
+
+// 玻璃拟态
+.glass-effect {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+// 卡片悬停提升
+.hover-lift {
+  transition: $transition-base;
+  &:hover {
+    transform: translateY(-4px);
+    box-shadow: $shadow-md;
+  }
+}
+
+// 容器类
+.page-container {
+  display: flex;
+  flex-direction: column;
+  padding: $content-padding;
+  background-color: $bg-white;
+  border-radius: $border-radius-lg;
+  box-shadow: $shadow-sm;
+  height: calc(100vh - #{$header-height} - #{$content-padding * 2});
+  overflow: hidden;
+  .page-filter-box{
+    display: flex;
+    justify-content: space-between;
+    .el-button + .el-button {
+      margin-left: 0;
+    }
+    .page-filter-left{
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap; 
+      gap: 12px;
+      flex: 1;
+      .el-input {
+        width: 220px;
+      }
+      .el-select{
+        width: 220px;
+      }
+      .el-date-editor.el-range-editor {
+        width: 280px;
+        flex: initial;
+      }
+    }
+    .page-filter-right{
+      display: flex;
+      align-items: center;
+    }
+  }
+  .page-table-box{
+    flex: 1;
+    overflow: auto;
+  }
+  .page-table-header{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: $content-mini-padding;
+    background-color: $bg-light;
+    border-radius: 4px 4px 0 0;
+    border: 1px solid $table-header-operate;
+    border-bottom: none;
+    box-sizing: border-box;
+  }
+  .page-pagination-box{
+    display: flex;
+    justify-content: flex-end;
+  }
+}
+
+// ============ 按钮悬浮样式 ============
+.btn-hover-danger:hover {
+  color: #fff !important;
+  border-color: $danger-color !important;
+  background-color: $danger-color !important;
+}
+
+.btn-hover-success:hover {
+  color: #fff !important;
+  border-color: $success-color !important;
+  background-color: $success-color !important;
+}
+
+.btn-hover-warning:hover {
+  color: #fff !important;
+  border-color: $warning-color !important;
+  background-color: $warning-color !important;
+}
+

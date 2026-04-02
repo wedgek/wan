@@ -1,0 +1,242 @@
+@use './variables.scss' as *;
+
+// ============ Element Plus 全局字体 ============
+:root {
+  --el-font-family: #{$font-family};
+}
+
+// ============ Element Plus 全局重置 ============
+.el-container,
+.el-header,
+.el-aside,
+.el-main {
+  padding: 0;
+  margin: 0;
+}
+
+// ============ 全局字体设置 ============
+// 输入框 - 仅默认尺寸
+.el-input:not(.el-input--large):not(.el-input--small) {
+  .el-input__inner {
+    font-size: 12px !important;
+    font-family: $font-family;
+  }
+  
+  .el-input__inner::placeholder { 
+    font-size: 12px !important;
+    font-family: $font-family;
+  }
+}
+
+// 文本域 - 仅默认尺寸
+.el-textarea:not(.el-textarea--large):not(.el-textarea--small) {
+  .el-textarea__inner {
+    font-size: 12px !important;
+    font-family: $font-family;
+  }
+  
+  .el-textarea__inner::placeholder { 
+    font-size: 12px !important;
+    font-family: $font-family;
+  }
+}
+
+// 选择器 - 仅默认尺寸
+.el-select:not(.el-select--large):not(.el-select--small) {
+  .el-select__placeholder,
+  .el-select__input {
+    font-size: 12px !important;
+    font-family: $font-family;
+  }
+}
+
+// 日期选择器 - 仅默认尺寸
+.el-date-editor:not(.el-date-editor--large):not(.el-date-editor--small) {
+  .el-range-input,
+  .el-range-separator {
+    font-size: 12px !important;
+    font-family: $font-family;
+  }
+}
+
+
+// 表格
+.el-table {
+  td.el-table__cell,
+  .cell {
+    font-size: 12px !important;
+  }
+
+  // 表头
+  th.el-table__cell {
+    color: $text-title;
+    background-color: $bg-light !important;
+    font-weight: normal;
+  }
+
+  td.el-table__cell {
+    color: $text-regular;           
+  }
+
+  // 表格内btn
+  .el-button {
+    font-size: 12px;
+  }
+  
+  .el-button--text {
+    font-size: 12px !important;
+  }
+}
+
+// 选择器下拉菜单
+.el-select-dropdown__item {
+  font-size: 12px !important;
+}
+
+// 标签 - 仅默认尺寸
+.el-tag:not(.el-tag--large):not(.el-tag--small) {
+  font-size: 12px !important;
+  
+  &.el-tag--success,
+  &.el-tag--danger,
+  &.el-tag--info {
+    font-size: 12px !important;
+  }
+}
+
+// 单选按钮组 - 仅默认尺寸
+.el-radio:not(.el-radio--large):not(.el-radio--small) {
+  font-size: 12px !important;
+  
+  .el-radio__label {
+    font-size: 12px !important;
+  }
+  
+  &.is-bordered .el-radio__label {
+    font-size: 12px !important;
+  }
+}
+
+// 标签样式
+.el-tag {
+  border-radius: $border-radius-sm;
+  font-weight: 500;
+  border: none;
+  
+  &--plain {
+    background-color: transparent;
+    box-shadow: 0 0 0 1px currentColor inset;
+  }
+}
+
+// ============ 弹框表单标签样式 ============
+.el-dialog {
+  .el-form-item__label {
+    font-size: 14px !important;
+  }
+}
+
+// ============ 按钮样式 ============
+// 按钮基础样式
+.el-button {
+  border-radius: $border-radius;
+  font-weight: 500;
+  font-family: $font-family;
+}
+
+// 主要按钮样式
+.el-button.el-button--primary {
+  background-color: $primary-color;
+  border-color: $primary-color;
+  color: #ffffff;
+  
+  &.is-plain {
+    background-color: rgba($primary-color, 0.1);
+    border-color: $primary-color;
+    color: $primary-color;
+    
+    &:hover, &:focus {
+      background-color: $primary-color;
+      border-color: $primary-color;
+      color: #ffffff;
+    }
+  }
+  
+  &.is-link, &.is-text {
+    color: $primary-color;
+    background-color: transparent;
+    border-color: transparent;
+  }
+}
+
+// 危险按钮样式
+.el-button.el-button--danger {
+  background-color: $danger-color;
+  border-color: $danger-color;
+  color: #ffffff;
+  
+  &.is-plain {
+    background-color: rgba($danger-color, 0.1);
+    border-color: $danger-color;
+    color: $danger-color;
+    
+    &:hover, &:focus {
+      background-color: $danger-color;
+      border-color: $danger-color;
+      color: #ffffff;
+    }
+  }
+  
+  &.is-link, &.is-text {
+    color: $danger-color;
+    background-color: transparent;
+    border-color: transparent;
+  }
+}
+
+// ============ Tooltip 提示框样式 ============
+.el-popper{
+  max-width: 800px !important;
+  font-size: 12px !important;
+  line-height: 1.6;
+  border-radius: 4px !important;
+  word-break: break-all;
+  // 亮色
+  &.is-light { 
+    color: $text-primary;    
+  }
+  // 暗色
+  &.is-dark { 
+    color: $bg-white !important; 
+    background: $text-title !important;
+    border-color: $text-title !important;
+  }
+  &.is-dark .el-popper__arrow::before {
+    background: $text-title !important;
+  }
+  // 主题色1
+  &.is-primary {
+    padding: 6px 12px;
+    background-color: $primary-bg !important;
+    color: $sidebar-active !important;
+  }
+  &.is-primary .el-popper__arrow::before {
+    background-color: $primary-bg !important;
+  }
+  // 主题色2
+  &.is-customized {
+    padding: 6px 12px;
+    background: linear-gradient(90deg, rgb(159, 229, 151), rgb(204, 229, 129));
+  }
+  &.is-customized .el-popper__arrow::before {
+    background: linear-gradient(45deg, #b2e68d, #bce689);
+  }
+}
+
+// ============ message 提示 ============
+.el-message {
+  max-width: 1000px !important;
+  .el-message__content {
+    font-size: 14px;
+  }
+}

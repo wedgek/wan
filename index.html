@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>企微管理平台</title>
+  </head>
+  <body>
+    <div id="app"></div>
+
+    <div id="initial-loading" style="
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      transition: opacity 0.3s ease; 
+      font-size: 14px;
+      font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+    ">
+      <div style="
+        width: 200px;  
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+      ">
+        <div class="spinner" style="
+          width: 100%;
+          height: 6px;
+          background: #f3f3f3;
+          border-radius: 3px;
+          overflow: hidden;
+          margin-bottom: 10px;
+        ">
+          <div class="progress-bar" style="
+            width: 30%;
+            height: 100%;
+            background: #1890FF;
+            border-radius: 3px;
+            animation: initial-progress-loading 2s ease-in-out infinite;
+          "></div>
+        </div>
+        <span>正在加载资源...</span>
+      </div>
+    </div>
+
+    <style>
+      *, *::before, *::after {
+        box-sizing: border-box;
+      }
+      html{
+        line-height: 1.5;
+      }
+      @keyframes initial-progress-loading {
+        0%, 100% {
+          transform: translateX(-100%);
+        }
+        50% {
+          transform: translateX(200%);
+        }
+      }
+    </style>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

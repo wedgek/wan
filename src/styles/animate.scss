@@ -1,0 +1,247 @@
+// ============ 基础动画关键帧 ============
+// 淡入淡出
+@keyframes ani-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes ani-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+// 向上淡入
+@keyframes ani-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+// 缩放淡入
+@keyframes ani-scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+// 弹性向上淡入
+@keyframes ani-fade-up-spring {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+// 导航激活条
+@keyframes ani-nav-active {
+  from {
+    width: 0;
+    opacity: 0;
+  }
+  to {
+    width: 70%;
+    opacity: 1;
+  }
+}
+
+// 脉冲
+@keyframes ani-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 0.8;
+  }
+}
+
+@keyframes ani-pulse-dot {
+  0% {
+    transform: scale(0.5);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(0.5);
+    opacity: 0;
+  }
+}
+
+// 浮动
+@keyframes ani-float {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-20px);
+  }
+}
+
+// 弹跳
+@keyframes ani-bounce {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+@keyframes ani-bounce-lg {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  25% {
+    transform: translateY(-8px);
+  }
+  50% {
+    transform: translateY(0);
+  }
+  75% {
+    transform: translateY(-4px);
+  }
+}
+
+// 旋转
+@keyframes ani-spin {
+  to { transform: rotate(360deg); }
+}
+
+// 抖动
+@keyframes ani-shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-5px); }
+  40%, 80% { transform: translateX(5px); }
+}
+
+// 铃铛摇晃
+@keyframes ani-bell-ring {
+  0%, 100% { transform: rotate(0); }
+  15% { transform: rotate(10deg); }
+  30% { transform: rotate(-10deg); }
+  45% { transform: rotate(5deg); }
+  60% { transform: rotate(-5deg); }
+  75% { transform: rotate(2deg); }
+}
+
+// ============ 动画工具类 ============
+// 基础动画
+.ani-fade-in { animation: ani-fade-in 0.3s ease-out; }
+.ani-fade-in-slow { animation: ani-fade-in 0.6s ease-out; }
+.ani-fade-in-fast { animation: ani-fade-in 0.15s ease-out; }
+
+.ani-fade-up { animation: ani-fade-up 0.4s ease-out; }
+.ani-fade-up-sm { animation: ani-fade-up 0.3s ease-out forwards; } // 小动画，保留最终状态
+.ani-fade-up-spring { animation: ani-fade-up-spring 0.4s cubic-bezier(0.68, -0.55, 0.27, 1.55) forwards; }
+
+.ani-scale-in { animation: ani-scale-in 0.3s ease; }
+
+// 弹跳动画
+.ani-bounce { animation: ani-bounce 0.3s ease; }
+.ani-bounce-lg { animation: ani-bounce-lg 0.4s ease; }
+.ani-bounce-hover:hover { animation: ani-bounce 0.3s ease; }
+
+// 旋转动画
+.ani-spin { animation: ani-spin 1s linear infinite; }
+.ani-spin-fast { animation: ani-spin 0.5s linear infinite; }
+.ani-spin-slow { animation: ani-spin 2s linear infinite; }
+
+// 其他效果
+.ani-pulse { animation: ani-pulse 1.5s ease-in-out infinite; }
+.ani-pulse-dot { animation: ani-pulse-dot 1.2s infinite; }
+.ani-float { animation: ani-float 6s ease-in-out infinite; }
+.ani-float-slow { animation: ani-float 8s ease-in-out infinite; }
+.ani-float-reverse { animation: ani-float 7s ease-in-out infinite reverse; }
+.ani-shake { animation: ani-shake 0.5s ease-in-out; }
+
+// 铃铛摇晃
+.ani-bell-ring {
+  transform-origin: top center;
+  &:hover {
+    animation: ani-bell-ring 0.9s ease-in-out;
+  }
+}
+
+// 延迟工具
+.ani-delay-1 { animation-delay: 0.1s; }
+.ani-delay-2 { animation-delay: 0.2s; }
+.ani-delay-3 { animation-delay: 0.3s; }
+.ani-delay-4 { animation-delay: 0.4s; }
+.ani-delay-5 { animation-delay: 0.5s; }
+
+// 导航激活条
+.ani-nav-active { animation: ani-nav-active 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards; }
+
+// Vue过渡动画
+.ani-fade-enter-active, .ani-fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+.ani-fade-enter, .ani-fade-leave-to {
+  opacity: 0;
+}
+
+.ani-slide-up-enter-active, .ani-slide-up-leave-active {
+  transition: all 0.3s ease;
+}
+.ani-slide-up-enter, .ani-slide-up-leave-to {
+  transform: translateY(20px);
+  opacity: 0;
+}
+
+// ============ 悬浮缩放效果 ============
+// 图片容器悬浮放大
+.ani-img-zoom {
+  overflow: hidden;
+  img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform 0.1s ease;
+  }
+  &:hover img { transform: scale(1.05); }
+}
+
+.ani-img-zoom-lg {
+  overflow: hidden;
+  img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform 0.15s ease;
+  }
+  &:hover img { transform: scale(1.1); }
+}
+
+// 元素自身悬浮放大
+.ani-scale-hover {
+  transition: transform 0.1s ease;
+  &:hover { transform: scale(1.05); }
+}
+
+.ani-scale-hover-sm {
+  transition: transform 0.1s ease;
+  &:hover { transform: scale(1.02); }
+}
+
+.ani-scale-hover-lg {
+  transition: transform 0.15s ease;
+  &:hover { transform: scale(1.1); }
+}

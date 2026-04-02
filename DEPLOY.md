@@ -64,8 +64,54 @@ pm2 save
 pm2 startup
 ```
 
+- `ecosystem.config.cjs` 会把当前 shell 里的 `PORT`、`DATA_DIR`、`ADMIN_PASSWORD`、`ADMIN_USERNAME` 传给进程（请勿把密码写进仓库）。
 - **PM2 实例数保持 1**（SQLite 单写）
 - 会话在内存，重启需重新登录
+
+### 第 6 步起（在同一终端、已 export 之后执行）
+
+**必须在项目根目录**（与 `ecosystem.config.cjs` 同级），且与第 5 步 **同一个 SSH 会话**，否则环境变量不会带进 PM2：
+
+```bash
+cd /path/to/wan-ai   # 换成你服务器上的实际路径
+
+pm2 start ecosystem.config.cjs
+pm2 status
+pm2 logs wan-ai --lines 50    # 确认无报错；Ctrl+C 仅退出日志，不停服务
+```
+
+持久化进程列表并设开机自启：
+
+```bash
+pm2 save
+pm2 startup
+# 按屏幕提示复制执行输出的那一行（通常带 sudo 或 env PATH=...）
+```
+
+若之前误启动过旧配置，先删掉再起：
+
+```bash
+pm2 delete wan-ai
+# 重新 export 第 5 步变量后
+pm2 start ecosystem.config.cjs && pm2 save
+```
+
+### 第 7 步：本机验证
+
+```bash
+curl -sI http://127.0.0.1:3000 | head -5
+# 浏览器：http://服务器公网IP:3000
+```
+
+### 第 8 步：安全组与防火墙
+
+- 云控制台 **安全组** 放行 **TCP 3000**（或你只开 80/443 时放行对应端口）。
+- 系统防火墙示例（firewalld）：`firewall-cmd --permanent --add-port=3000/tcp && firewall-cmd --reload`
+- ufw：`ufw allow 3000/tcp && ufw reload`
+
+### 第 9 步（可选）：Nginx 反向代理
+
+域名解析到服务器后，配置 `location / { proxy_pass http://127.0.0.1:3000; ... }`，并设置 `Host`、`X-Forwarded-Proto` 等；证书可用 certbot。
 
 ---
 

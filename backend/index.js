@@ -4,6 +4,7 @@ const db = require('./db')
 const apiRouter = require('./routes')
 
 const PORT = Number(process.env.PORT) || 3000
+const HOST = process.env.HOST || '0.0.0.0'
 const isProd = process.env.NODE_ENV === 'production'
 
 db.initDb()
@@ -28,6 +29,8 @@ if (isProd) {
   }
 }
 
-app.listen(PORT, () => {
-  console.log(`[wan-ai] server listening on http://127.0.0.1:${PORT} (${isProd ? 'production' : 'development'})`)
+app.listen(PORT, HOST, () => {
+  console.log(
+    `[wan-ai] server listening on http://${HOST}:${PORT} (${isProd ? 'production' : 'development'})`
+  )
 })

@@ -11,8 +11,11 @@ module.exports = {
       exec_mode: 'fork',
       env: {
         NODE_ENV: 'production',
-        PORT: 3000,
-        DATA_DIR: path.join(__dirname, 'backend', 'data'),
+        PORT: Number(process.env.PORT) || 3000,
+        DATA_DIR: process.env.DATA_DIR || path.join(__dirname, 'backend', 'data'),
+        // 启动前 export ADMIN_PASSWORD / ADMIN_USERNAME，勿把密码写进仓库
+        ADMIN_USERNAME: process.env.ADMIN_USERNAME || 'admin',
+        ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || '',
       },
     },
   ],

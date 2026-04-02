@@ -1,3 +1,8 @@
+# SQLite 数据（WAL/SHM 一并忽略）
+backend/data/*.db
+backend/data/*.db-wal
+backend/data/*.db-shm
+
 # Logs
 logs
 *.log
@@ -24,5 +29,5 @@ dist-ssr
 *.sln
 *.sw?
 
-# Script files
-/scripts/deploy-prod.js
+# Local MCP server
+mcp-server/

@@ -3,8 +3,8 @@
     <!-- 左侧插画区域 -->
     <div class="login-illustration">
       <div class="logo-text">
-        <img src="@/assets/images/logo.png" alt="企微管理平台">
-        <span>企微管理平台</span>
+        <img src="@/assets/images/logo.png" alt="万相中台">
+        <span>万相中台</span>
       </div>
       <div class="illustration-content">
         <!-- 可视化面板 -->
@@ -37,8 +37,6 @@
       <div class="login-form">
         <div class="title-block">
           <h1 class="login-title">欢迎登录</h1>
-          <!-- <h2 class="login-subtitle">企微管理平台</h2> -->
-          <h2 class="login-subtitle">使用管理员分配的账号登录</h2>
         </div>
 
         <div class="form-block">
@@ -75,21 +73,6 @@
               />
             </div>
 
-            <div class="form-group">
-              <label class="form-label">
-                <el-icon class="label-icon"><Finished /></el-icon>
-                验证码
-              </label>
-              <el-input 
-                v-model="loginForm.dynamicCode" 
-                placeholder="请输入验证码" 
-                size="large" 
-                clearable
-                clear-icon="Close"
-                class="custom-input"
-              />
-            </div>
-
             <div class="form-options">
               <el-checkbox v-model="rememberPassword">记住密码</el-checkbox>
               <a href="#" class="forgot-password">忘记密码？</a>
@@ -114,7 +97,7 @@
             没有账户？<a href="#" class="register-link">注册</a>
           </p>
 
-          <p class="copyright">&copy; 2026 赤子网络 - All Rights Reserved</p>
+          <p class="copyright">&copy; 2026 万相中台 - All Rights Reserved</p>
         </div>
       </div>
 
@@ -140,7 +123,6 @@ const rememberPassword = ref(false)
 const loginForm = reactive({
   username: '',
   password: '',
-  dynamicCode: ''
 })
 
 // 从本地存储读取记住的密码
@@ -164,10 +146,6 @@ const validateLoginForm = () => {
   }
   if (!loginForm.password) {
     ElMessage.error('请输入密码')
-    return false
-  }
-  if (!loginForm.dynamicCode) {
-    ElMessage.error('请输入验证码')
     return false
   }
   if (loginForm.password.length < 6) {
@@ -491,18 +469,8 @@ const handleLogin = async () => {
         font-size: 32px;
         font-weight: 700;
         color: #000;
-        margin-bottom: 12px;
-        line-height: 1.2;
-      }
-
-      .login-subtitle {
-        // font-size: 14px;
-        // color: $text-secondary;
-        font-size: 25px;
-        color: $primary-color;
         margin-bottom: 40px;
-        line-height: 1.5;
-        cursor: pointer;
+        line-height: 1.2;
       }
 
       .form-group {

@@ -3,7 +3,7 @@
     <!-- Logo 区域 -->
     <div class="nav-brand" @click="goToHome">
       <img src="@/assets/images/logo.png" class="brand-logo" alt="LOGO">
-      <span class="brand-name">企微管理平台</span>
+      <span class="brand-name">万相中台</span>
     </div>
 
     <!-- 分隔线 -->

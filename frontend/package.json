@@ -5,9 +5,9 @@
   "scripts": {
     "dev": "vite --mode development",
     "dev:prod": "vite --mode development",
-    "build:test": "rimraf dist && vite build --mode test",
-    "build:prod": "rimraf dist && vite build --mode production",
-    "analyze": "rimraf dist && vite build --mode analyze",
+    "build:test": "vite build --mode test",
+    "build:prod": "vite build --mode production",
+    "analyze": "vite build --mode analyze",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -28,7 +28,6 @@
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.1",
-    "rimraf": "^6.1.2",
     "rollup-plugin-visualizer": "^6.0.5",
     "sass": "^1.96.0",
     "unplugin-auto-import": "^20.3.0",

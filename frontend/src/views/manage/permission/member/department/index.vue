@@ -52,7 +52,7 @@
                     :header-cell-style="{ 'text-align': 'center' }"
                     @cell-click="handleCellClick"
                 >
-                    <el-table-column prop="name" label="部门名称" min-width="180" fixed="left" align="left" />
+                    <el-table-column prop="name" label="部门名称" min-width="180" fixed="left" align="center" />
                     <el-table-column prop="id" label="部门ID" width="150" align="center" />
                     <el-table-column prop="leaderUserName" label="负责人" min-width="150" align="center" />
                     <el-table-column prop="status" label="状态" width="150" align="center">
@@ -142,6 +142,8 @@ const deptModalRef = ref()
     display: flex;
     flex-direction: column;
     height: 100%;
+    min-height: 0;
+
     .department-content-panel {
         flex: 1;
         min-height: 0;
@@ -150,12 +152,14 @@ const deptModalRef = ref()
         border-radius: 4px;
         border: 1px solid var(--el-border-color-lighter);
         padding: 14px;
-        
+        background-color: var(--el-bg-color);
+
         .page-filter-box {
             margin-bottom: 16px;
         }
-        .header-right{
-            .btn-text{
+
+        .header-right {
+            .btn-text {
                 font-size: 13px;
             }
         }

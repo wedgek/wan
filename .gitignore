@@ -1,3 +1,6 @@
+# 开发环境：后端当前监听端口（供 Vite 动态代理）
+backend/.dev-port
+
 # SQLite 数据（WAL/SHM 一并忽略）
 backend/data/*.db
 backend/data/*.db-wal

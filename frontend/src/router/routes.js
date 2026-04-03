@@ -20,7 +20,10 @@ export const staticRoutes = [
     meta: {
       requiresAuth: true,
       showNavbar: true,
-      showSidebar: false,
+      showSidebar: true,
+      title: "工作台",
+      /** 主内容区横向更贴边，工作台占满侧栏右侧区域 */
+      wideContent: true,
     },
   },
   {
@@ -30,7 +33,7 @@ export const staticRoutes = [
     meta: {
       requiresAuth: true,
       showNavbar: true,
-      showSidebar: false,
+      showSidebar: true,
       title: "个人中心",
     },
   },

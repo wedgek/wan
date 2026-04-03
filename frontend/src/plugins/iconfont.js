@@ -59,7 +59,7 @@ iconfont 图标使用说明
    <el-input :suffix-icon="$iconfont.Search" />
 
 3. 单独使用（推荐 el-icon 包裹）：
-   <el-icon :size="20" color="#409eff">
+   <el-icon :size="20" color="#4078fc">
      <component :is="$iconfont.Edit" />
    </el-icon>
 

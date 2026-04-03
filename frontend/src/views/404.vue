@@ -5,7 +5,7 @@
     <div class="content ani-fade-in">
       <p class="message">
         抱歉，您访问的页面不存在或已被移动。<br>
-        请检查URL是否正确，或点击下方按钮返回首页。
+        请检查URL是否正确，或点击下方按钮返回工作台。
       </p>
       
       <el-button 
@@ -14,7 +14,7 @@
         @click="goToHome"
         :icon="House"
       >
-        返回首页
+        返回工作台
       </el-button>
     </div>
   </div>

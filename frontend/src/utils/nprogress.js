@@ -10,7 +10,7 @@ export function setupNProgress() {
   })
   
   // 设置颜色
-  setNProgressColor('#1890ff')
+  setNProgressColor('#4078fc')
   
   return NProgress
 }

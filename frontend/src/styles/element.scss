@@ -1,8 +1,26 @@
+@use 'sass:color';
 @use './variables.scss' as *;
 
-// ============ Element Plus 全局字体 ============
+// ============ Element Plus 主色链（与登录「万相AI中台」/ $primary-color 一致）============
 :root {
   --el-font-family: #{$font-family};
+  --el-color-primary: #{$primary-color};
+  --el-color-primary-light-3: #{color.mix(#fff, $primary-color, 30%)};
+  --el-color-primary-light-5: #{color.mix(#fff, $primary-color, 50%)};
+  --el-color-primary-light-7: #{color.mix(#fff, $primary-color, 70%)};
+  --el-color-primary-light-8: #{color.mix(#fff, $primary-color, 80%)};
+  --el-color-primary-light-9: #{color.mix(#fff, $primary-color, 90%)};
+  --el-color-primary-dark-2: #{color.mix(#000, $primary-color, 20%)};
+}
+
+html.dark {
+  --el-color-primary: #{$primary-color-dark-mode};
+  --el-color-primary-light-3: #{color.mix(#fff, $primary-color-dark-mode, 22%)};
+  --el-color-primary-light-5: #{color.mix(#fff, $primary-color-dark-mode, 38%)};
+  --el-color-primary-light-7: #{color.mix(#fff, $primary-color-dark-mode, 52%)};
+  --el-color-primary-light-8: #{color.mix(#fff, $primary-color-dark-mode, 62%)};
+  --el-color-primary-light-9: #{color.mix(#1a1a1a, $primary-color-dark-mode, 88%)};
+  --el-color-primary-dark-2: #{color.mix(#000, $primary-color-dark-mode, 18%)};
 }
 
 // ============ Element Plus 全局重置 ============
@@ -60,22 +78,21 @@
 }
 
 
-// 表格
+// 表格（跟随 Element Plus 明暗变量，避免暗色表头仍刷浅色）
 .el-table {
   td.el-table__cell,
   .cell {
     font-size: 12px !important;
   }
 
-  // 表头
   th.el-table__cell {
-    color: $text-title;
-    background-color: $bg-light !important;
+    color: var(--el-text-color-primary);
+    background-color: var(--el-fill-color-light) !important;
     font-weight: normal;
   }
 
   td.el-table__cell {
-    color: $text-regular;           
+    color: var(--el-text-color-regular);
   }
 
   // 表格内btn
@@ -201,9 +218,8 @@
   line-height: 1.6;
   border-radius: 4px !important;
   word-break: break-all;
-  // 亮色
-  &.is-light { 
-    color: $text-primary;    
+  &.is-light {
+    color: var(--el-text-color-primary);
   }
   // 暗色
   &.is-dark { 

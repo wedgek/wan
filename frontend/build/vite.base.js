@@ -35,7 +35,7 @@ export default defineConfig({
     }
   },
   optimizeDeps: {
-    // 预构建依赖，加快冷启动
-    include: ['vue', 'vue-router', 'pinia', 'axios', 'lodash-es', 'dayjs'] 
-  }
+    // 预构建依赖；纳入 element-plus 可减少 dev 下 504 Outdated Optimize Dep / 动态 import 失败
+    include: ['vue', 'vue-router', 'pinia', 'axios', 'lodash-es', 'dayjs', 'element-plus'],
+  },
 })

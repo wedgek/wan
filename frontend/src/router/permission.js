@@ -21,7 +21,11 @@ export async function initPermission({ force = false } = {}) {
     }
   } catch (error) {
     console.error("权限初始化失败:", error)
-    ElMessage.error('请求超时，' + error.message)
+    if (force) {
+      ElMessage.error("刷新权限失败：" + (error?.message || "请稍后重试"))
+    } else {
+      authStore.clearSession()
+    }
   }
 }
 

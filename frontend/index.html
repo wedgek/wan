@@ -1,69 +1,219 @@
 <!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.ico" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>万相中台</title>
-  </head>
-  <body>
-    <div id="app"></div>
 
-    <div id="initial-loading" style="
-      position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background: white;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 9999;
-      transition: opacity 0.3s ease; 
-      font-size: 14px;
-      font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
-    ">
-      <div style="
-        width: 200px;  
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-      ">
-        <div class="spinner" style="
-          width: 100%;
-          height: 6px;
-          background: #f3f3f3;
-          border-radius: 3px;
-          overflow: hidden;
-          margin-bottom: 10px;
-        ">
-          <div class="progress-bar" style="
-            width: 30%;
-            height: 100%;
-            background: #1890FF;
-            border-radius: 3px;
-            animation: initial-progress-loading 2s ease-in-out infinite;
-          "></div>
-        </div>
-        <span>正在加载资源...</span>
-      </div>
-    </div>
+<html lang="zh-CN">
+
+  <head>
+
+    <meta charset="UTF-8" />
+
+    <script>
+
+      (function () {
+
+        try {
+
+          var dark = false
+
+          var v = localStorage.getItem("app-appearance")
+
+          if (v === "dark") dark = true
+
+          else if (v === "light") dark = false
+
+          else
+
+            dark =
+
+              window.matchMedia &&
+
+              window.matchMedia("(prefers-color-scheme: dark)").matches
+
+          if (dark) document.documentElement.classList.add("dark")
+
+        } catch (e) {}
+
+      })()
+
+    </script>
+
+    <link rel="icon" type="image/svg+xml" href="/favicon.ico" />
+
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/cn-fontsource-ding-talk-jin-bu-ti-regular/font.css"
+    />
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+
+    <title>万相AI</title>
 
     <style>
-      *, *::before, *::after {
+
+      *,
+
+      *::before,
+
+      *::after {
+
         box-sizing: border-box;
+
       }
-      html{
+
+      html {
+
         line-height: 1.5;
+
       }
+
+      html.dark,
+
+      html.dark body {
+
+        background-color: #0a0a0a;
+
+      }
+
+      #initial-loading {
+
+        position: fixed;
+
+        inset: 0;
+
+        display: flex;
+
+        align-items: center;
+
+        justify-content: center;
+
+        z-index: 9999;
+
+        transition: opacity 0.3s ease;
+
+        font-size: 14px;
+
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB",
+
+          "Microsoft YaHei", "Noto Sans SC", sans-serif;
+
+        background: #ffffff;
+
+        color: #595959;
+
+      }
+
+      html.dark #initial-loading {
+
+        background: #0a0a0a;
+
+        color: rgba(255, 255, 255, 0.55);
+
+      }
+
+      #initial-loading .initial-loading__inner {
+
+        width: 200px;
+
+        display: flex;
+
+        flex-direction: column;
+
+        align-items: center;
+
+        justify-content: center;
+
+      }
+
+      #initial-loading .initial-loading__track {
+
+        width: 100%;
+
+        height: 6px;
+
+        background: #f3f3f3;
+
+        border-radius: 3px;
+
+        overflow: hidden;
+
+        margin-bottom: 10px;
+
+      }
+
+      html.dark #initial-loading .initial-loading__track {
+
+        background: #2a2a2a;
+
+      }
+
+      #initial-loading .initial-loading__bar {
+
+        width: 30%;
+
+        height: 100%;
+
+        background: #1890ff;
+
+        border-radius: 3px;
+
+        animation: initial-progress-loading 2s ease-in-out infinite;
+
+      }
+
+      html.dark #initial-loading .initial-loading__bar {
+
+        background: #177ddc;
+
+      }
+
       @keyframes initial-progress-loading {
-        0%, 100% {
+
+        0%,
+
+        100% {
+
           transform: translateX(-100%);
+
         }
+
         50% {
+
           transform: translateX(200%);
+
         }
+
       }
+
     </style>
+
+  </head>
+
+  <body>
+
+    <div id="app"></div>
+
+
+
+    <div id="initial-loading">
+
+      <div class="initial-loading__inner">
+
+        <div class="initial-loading__track">
+
+          <div class="initial-loading__bar"></div>
+
+        </div>
+
+        <span>正在加载资源...</span>
+
+      </div>
+
+    </div>
+
+
+
     <script type="module" src="/src/main.js"></script>
+
   </body>
+
 </html>
+

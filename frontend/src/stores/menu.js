@@ -6,6 +6,8 @@ export const useMenuStore = defineStore("menu", () => {
   const activeTopMenu = ref(null) 
   const activeSideMenu = ref(null)
   const sidebarCollapsed = ref(false) // 侧边栏折叠状态
+  /** 移动端左侧导航抽屉（与桌面侧栏二选一展示） */
+  const mobileDrawerOpen = ref(false)
 
   // 初始化menus
   const initMenus = () => {
@@ -31,6 +33,14 @@ export const useMenuStore = defineStore("menu", () => {
     setSidebarCollapsed(!sidebarCollapsed.value)
   }
 
+  const setMobileDrawerOpen = (open) => {
+    mobileDrawerOpen.value = !!open
+  }
+
+  const toggleMobileDrawer = () => {
+    mobileDrawerOpen.value = !mobileDrawerOpen.value
+  }
+
   const setMenus = (menuList) => {
     const list = menuList || []
     menus.value = list
@@ -50,6 +60,7 @@ export const useMenuStore = defineStore("menu", () => {
     activeTopMenu.value = null
     activeSideMenu.value = null
     sidebarCollapsed.value = false
+    mobileDrawerOpen.value = false
     removeStorage("menus")
     removeStorage("sidebarCollapsed")
   }
@@ -115,18 +126,8 @@ export const useMenuStore = defineStore("menu", () => {
     return filterMenusForDisplay(menus.value)
   })
   
-  // 侧边栏菜单 - 过滤有权限且可见的菜单
-  const sidebarMenus = computed(() => {
-    let sourceMenus = []
-    if (!activeTopMenu.value) {
-      sourceMenus = menus.value[0]?.children || []
-    } else {
-      sourceMenus = activeTopMenu.value?.children || []
-    }
-    
-    // 过滤出有权限且可见的菜单
-    return filterMenusForDisplay(sourceMenus)
-  })
+  // 侧边栏：完整多级菜单（与后端顶级树一致，不再依赖顶部 Tab 切换）
+  const sidebarMenus = computed(() => filterMenusForDisplay(menus.value))
 
   /**
    * 获取用于路由的菜单（只过滤无权限的）
@@ -265,6 +266,9 @@ export const useMenuStore = defineStore("menu", () => {
     setActiveSideMenu,
     setSidebarCollapsed,
     toggleSidebarCollapsed,
+    mobileDrawerOpen,
+    setMobileDrawerOpen,
+    toggleMobileDrawer,
     findTopMenuByPath,
     hasPermission,
     isMenuVisible,

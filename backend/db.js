@@ -28,6 +28,24 @@ function ensureColumn(db, table, column, defSql) {
   }
 }
 
+/** 热升级：已运行的进程拉新代码后，仍会在首次 getDb() 时补上缺失表 */
+function applySchemaPatches(dbi) {
+  if (!dbi) return
+  try {
+    dbi.exec(`
+      CREATE TABLE IF NOT EXISTS user_quick_entries (
+        user_id INTEGER NOT NULL,
+        menu_id INTEGER NOT NULL,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now')),
+        PRIMARY KEY (user_id, menu_id)
+      );
+    `)
+  } catch (e) {
+    console.error('[db] applySchemaPatches failed', e.message)
+  }
+}
+
 function initDb() {
   if (dbInstance) return dbInstance
 
@@ -110,6 +128,8 @@ function initDb() {
     );
   `)
 
+  applySchemaPatches(dbInstance)
+
   // 老库迁移
   ensureColumn(dbInstance, 'users', 'dept_id', 'INTEGER DEFAULT 0')
   ensureColumn(dbInstance, 'users', 'status', 'INTEGER DEFAULT 0')
@@ -190,6 +210,7 @@ function initDb() {
 
 function getDb() {
   if (!dbInstance) initDb()
+  else applySchemaPatches(dbInstance)
   return dbInstance
 }
 

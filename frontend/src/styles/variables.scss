@@ -1,9 +1,12 @@
-// ============ 主色调 ============
-$primary-color: #1890FF;       // 主色 - 标准蓝色（大厂风格）
-$primary-hover: #40A9FF;       // 主色悬停 - 浅蓝色
-$primary-active: #096DD9;      // 主色激活 - 深蓝色
-$primary-light: #E6F7FF;       // 主色浅背景
-$primary-bg: #F0F7FF;          // 主色背景
+@use 'sass:color';
+
+// ============ 主色调（与登录页「万相AI中台」/ logo #4078FC 一致）============
+$primary-color: #4078fc;
+$primary-color-dark-mode: #7acbfe; // 暗色主题下与登录标题蓝一致
+$primary-hover: color.adjust($primary-color, $lightness: 8%);
+$primary-active: color.adjust($primary-color, $lightness: -12%);
+$primary-light: color.mix(#fff, $primary-color, 88%);
+$primary-bg: color.mix(#fff, $primary-color, 92%);
 
 // ============ 功能色 ============
 $success-color: #52C41A;       // 成功 - 绿色
@@ -14,8 +17,8 @@ $danger-color: #FF4D4F;        // 错误/危险 - 红色
 $danger-hover: #F5222D;        // 危险色悬停状态
 $danger-active: #CF1322;       // 危险色激活/点击状态
 $danger-light: #FFF2F0;        // 错误浅背景
-$info-color: #1890FF;          // 信息 - 蓝色
-$info-light: #E6F7FF;          // 信息浅背景
+$info-color: $primary-color;
+$info-light: $primary-light;
 
 // ============ 中性色 ============
 // 文字色
@@ -37,13 +40,14 @@ $bg-page: #F5F7FA;             // 页面背景 - 截图中的浅灰蓝背景
 $bg-light: #FAFAFA;            // 浅灰背景
 $bg-grey: #F0F2F5;             // 灰色背景
 $bg-hover: #F5F5F5;            // 悬停背景
-$bg-selected: #E6F7FF;         // 选中背景
+$bg-selected: $primary-light;    // 选中背景
 
 // ============ 字体 ============
-// 主字体栈：Roboto(英文/数字) + 系统中文字体
-$font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+// 主字体栈：Sora(拉丁/数字) + 系统 UI + 中文无衬线
+$font-family: 'Sora', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+  'Helvetica Neue', Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
 // 数字专用字体（表格、金额等场景）
-$font-family-number: 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+$font-family-number: 'Sora', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
 // 代码字体
 $font-family-mono: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', 'Consolas', monospace;
 

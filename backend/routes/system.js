@@ -1,6 +1,7 @@
 const express = require('express')
 const db = require('../db')
-const { requireAuth } = require('./auth')
+const auth = require('./auth')
+const { requireAuth, menuRowsForUser } = auth
 const { buildTree } = require('../utils/tree')
 const { ok, fail } = require('../utils/response')
 
@@ -8,6 +9,117 @@ const router = express.Router()
 router.use(requireAuth)
 
 const database = () => db.getDb()
+
+/** 工作台资源概览（用户数 / 角色 / 菜单 / 部门） */
+router.get('/workbench-summary', (req, res) => {
+  const d = database()
+  const row = d
+    .prepare(
+      `SELECT
+         (SELECT COUNT(*) FROM users) AS userCount,
+         (SELECT COUNT(*) FROM roles) AS roleCount,
+         (SELECT COUNT(*) FROM menus) AS menuCount,
+         (SELECT COUNT(*) FROM departments) AS deptCount`
+    )
+    .get()
+  res.json(
+    ok({
+      userCount: Number(row.userCount) || 0,
+      roleCount: Number(row.roleCount) || 0,
+      menuCount: Number(row.menuCount) || 0,
+      deptCount: Number(row.deptCount) || 0,
+    })
+  )
+})
+
+/** 自根菜单拼出前端路由 path（与动态路由注册规则一致） */
+function menuFullPath(menuId, dbi) {
+  const parts = []
+  let id = menuId
+  const seen = new Set()
+  while (id && !seen.has(id)) {
+    seen.add(id)
+    const row = dbi.prepare('SELECT parent_id, path FROM menus WHERE id = ?').get(id)
+    if (!row) break
+    const seg = String(row.path || '').replace(/^\/+|\/+$/g, '')
+    if (seg) parts.unshift(seg)
+    id = row.parent_id
+  }
+  const s = `/${parts.join('/')}`
+  return s.replace(/\/+/g, '/') || '/'
+}
+
+function allowedLeafMenuIdSet(userId) {
+  const rows = menuRowsForUser(userId)
+  const s = new Set()
+  for (const r of rows) {
+    if (r.status === 0 && Number(r.type) === 2 && String(r.path || '').trim()) s.add(r.id)
+  }
+  return s
+}
+
+/** 工作台快捷入口（按用户持久化）；双路径避免旧网关/缓存只识别短路径 */
+function getQuickEntriesList(req, res) {
+  try {
+    const d = database()
+    const allowed = allowedLeafMenuIdSet(req.userId)
+    const rows = d
+      .prepare(
+        `SELECT uqe.menu_id, uqe.sort_order, m.name, m.path, m.icon, m.type, m.status, m.visible
+         FROM user_quick_entries uqe
+         INNER JOIN menus m ON m.id = uqe.menu_id
+         WHERE uqe.user_id = ?
+         ORDER BY uqe.sort_order ASC, uqe.menu_id ASC`
+      )
+      .all(req.userId)
+
+    const list = rows
+      .filter((r) => allowed.has(r.menu_id) && r.status === 0)
+      .map((r) => ({
+        menuId: r.menu_id,
+        name: r.name || '',
+        path: menuFullPath(r.menu_id, d),
+        icon: r.icon || '',
+      }))
+    res.json(ok(list))
+  } catch (e) {
+    console.error('[system] quick-entries list', e.message)
+    res.json(ok([]))
+  }
+}
+
+function putQuickEntries(req, res) {
+  const raw = req.body?.menuIds
+  if (!Array.isArray(raw)) return res.json(fail(400, 'menuIds 须为数组'))
+  const menuIds = [...new Set(raw.map((x) => Number(x)).filter((x) => Number.isFinite(x) && x > 0))]
+  if (menuIds.length > 24) return res.json(fail(400, '最多添加 24 个快捷入口'))
+
+  try {
+    const d = database()
+    const allowed = allowedLeafMenuIdSet(req.userId)
+    for (const mid of menuIds) {
+      if (!allowed.has(mid)) return res.json(fail(400, '存在无权限或不可作为入口的菜单'))
+    }
+
+    const tx = d.transaction(() => {
+      d.prepare('DELETE FROM user_quick_entries WHERE user_id = ?').run(req.userId)
+      const ins = d.prepare(
+        'INSERT INTO user_quick_entries (user_id, menu_id, sort_order) VALUES (?, ?, ?)'
+      )
+      menuIds.forEach((mid, i) => ins.run(req.userId, mid, i))
+    })
+    tx()
+    res.json(ok(true))
+  } catch (e) {
+    console.error('[system] quick-entries put', e.message)
+    res.json(fail(500, '保存快捷入口失败'))
+  }
+}
+
+router.get('/quick-entries', getQuickEntriesList)
+router.put('/quick-entries', putQuickEntries)
+router.get('/workbench/quick-entries', getQuickEntriesList)
+router.put('/workbench/quick-entries', putQuickEntries)
 
 function n(v, d = 0) {
   if (v === undefined || v === null || v === '') return d

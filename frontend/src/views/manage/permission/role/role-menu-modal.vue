@@ -212,15 +212,16 @@ defineExpose({ show })
 <style lang="scss" scoped>
 .tree-wrapper {
     width: 100%;
-    border: 1px solid #e4e7ed;
-    border-radius: 4px;
+    border: 1px solid var(--el-border-color);
+    border-radius: var(--el-border-radius-base);
     overflow: hidden;
+    background-color: var(--el-bg-color);
 }
 
 .tree-search {
     padding: 12px;
-    border-bottom: 1px solid #e4e7ed;
-    background-color: #fafafa;
+    border-bottom: 1px solid var(--el-border-color-lighter);
+    background-color: var(--el-fill-color-light);
 }
 
 .tree-toolbar {
@@ -228,9 +229,9 @@ defineExpose({ show })
     align-items: center;
     justify-content: space-between;
     padding: 8px 12px;
-    border-bottom: 1px solid #e4e7ed;
-    background-color: #fafafa;
-    
+    border-bottom: 1px solid var(--el-border-color-lighter);
+    background-color: var(--el-fill-color-light);
+
     .el-button {
         font-size: 13px;
     }
@@ -240,7 +241,8 @@ defineExpose({ show })
     max-height: 350px;
     overflow-y: auto;
     padding: 8px 0;
-    
+    background-color: var(--el-fill-color-blank);
+
     :deep(.el-tree-node__content) {
         height: 32px;
     }

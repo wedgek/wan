@@ -18,9 +18,6 @@
             >
                 <el-icon><Folder /></el-icon>
                 <span>{{ allText }}</span>
-                <transition name="dot-fade">
-                    <span v-if="isAllSelected" class="cz-dept-tree__dot"></span>
-                </transition>
             </div>
             <el-tree
                 v-if="filteredData.length"
@@ -33,13 +30,10 @@
                 highlight-current
                 @node-click="handleNodeClick"
             >
-                <template #default="{ node, data }">
+                <template #default="{ node }">
                     <div class="cz-dept-tree__node">
                         <el-icon><FolderOpened v-if="node.expanded" /><Folder v-else /></el-icon>
                         <span class="cz-dept-tree__label">{{ node.label }}</span>
-                        <transition name="dot-fade">
-                            <span v-if="data[nodeKey] === modelValue" class="cz-dept-tree__dot"></span>
-                        </transition>
                     </div>
                 </template>
             </el-tree>
@@ -155,27 +149,39 @@ defineExpose({
         display: flex;
         align-items: center;
         gap: 6px;
-        padding: 8px 10px;
+        padding: 8px 10px 8px 12px;
         margin-bottom: 2px;
         border-radius: 4px;
         cursor: pointer;
-        color: $text-regular;
+        color: var(--el-text-color-regular);
         font-size: 13px;
         position: relative;
         
-        .el-icon { font-size: 14px; color: $text-secondary; }
+        .el-icon { font-size: 14px; color: var(--el-text-color-secondary); }
         
-        &:hover {
-            background-color: $bg-page;
-            color: $primary-color;
-            .el-icon { color: $primary-color; }
+        &:hover:not(.is-active) {
+            background-color: var(--el-fill-color-light);
+            color: var(--el-color-primary);
+            .el-icon { color: var(--el-color-primary); }
         }
         
         &.is-active {
-            background-color: $primary-bg;
-            color: $primary-color;
+            background-color: transparent !important;
+            color: var(--el-color-primary);
             font-weight: 500;
-            .el-icon { color: $primary-color; }
+            .el-icon { color: var(--el-color-primary); }
+
+            &::before {
+                content: '';
+                position: absolute;
+                left: 2px;
+                top: 50%;
+                transform: translateY(-50%);
+                width: 3px;
+                height: 16px;
+                background-color: var(--el-color-primary);
+                border-radius: 2px;
+            }
         }
     }
     
@@ -185,20 +191,39 @@ defineExpose({
         font-size: 13px;
         
         .el-tree-node__content {
+            position: relative;
             border-radius: 4px;
             
             &:hover {
-                background-color: $bg-page;
+                background-color: var(--el-fill-color-light);
                 .cz-dept-tree__node .el-icon,
-                .cz-dept-tree__node .cz-dept-tree__label { color: $primary-color; }
+                .cz-dept-tree__node .cz-dept-tree__label { color: var(--el-color-primary); }
             }
         }
         
-        .el-tree-node.is-current > .el-tree-node__content {
-            background-color: $primary-bg;
+        .el-tree-node.is-current > .el-tree-node__content,
+        .el-tree-node.is-current:focus > .el-tree-node__content {
+            background-color: transparent !important;
+            box-shadow: none !important;
             .cz-dept-tree__node .el-icon,
-            .cz-dept-tree__node .cz-dept-tree__label { color: $primary-color; }
+            .cz-dept-tree__node .cz-dept-tree__label { color: var(--el-color-primary); }
             .cz-dept-tree__node .cz-dept-tree__label { font-weight: 500; }
+
+            &::before {
+                content: '';
+                position: absolute;
+                left: 0;
+                top: 50%;
+                transform: translateY(-50%);
+                width: 3px;
+                height: 16px;
+                background-color: var(--el-color-primary);
+                border-radius: 2px;
+            }
+        }
+
+        .el-tree-node.is-current > .el-tree-node__content:hover {
+            background-color: transparent !important;
         }
     }
     
@@ -209,47 +234,18 @@ defineExpose({
         flex: 1;
         min-width: 0;
         position: relative;
-        .el-icon { font-size: 14px; color: $text-secondary; }
+        .el-icon { font-size: 14px; color: var(--el-text-color-secondary); }
     }
     
     &__label {
         font-size: 13px;
-        color: $text-regular;
+        color: var(--el-text-color-regular);
     }
     
     &__empty {
         font-size: 12px;
-        color: #A8ABB2;
+        color: var(--el-text-color-placeholder);
     }
-
-    &__dot {
-        position: absolute;
-        right: 10px;
-        top: 50%;
-        transform: translateY(-50%);
-        width: 6px;
-        height: 6px;
-        background-color: $primary-color;
-        border-radius: 50%;
-    }
-}
-
-// 小圆点过渡动画
-.dot-fade-enter-active,
-.dot-fade-leave-active {
-    transition: opacity 0.2s, transform 0.2s;
-}
-
-.dot-fade-enter-from,
-.dot-fade-leave-to {
-    opacity: 0;
-    transform: translateY(-50%) scale(0);
-}
-
-.dot-fade-enter-to,
-.dot-fade-leave-from {
-    opacity: 1;
-    transform: translateY(-50%) scale(1);
 }
 </style>
 

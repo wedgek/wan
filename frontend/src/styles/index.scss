@@ -1,6 +1,8 @@
 @use './reset.scss';      // 浏览器重置
+@use './theme-app.scss';  // 全局明暗主题 CSS 变量
 @use './variables.scss';  // 全局变量、配色
 @use './element.scss';    // Element Plus 样式覆盖
+@use './element-dark.scss'; // 暗色下 EP 与自定义浮层对齐
 @use './layout.scss';     // 布局、快捷类
 @use './animate.scss';    // 全局动画
 @use './iconfont.scss';   // iconfont 图标样式

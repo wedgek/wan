@@ -1,135 +1,216 @@
 <template>
-  <div class="home-page">
-    <div class="header-section">
-      <div class="welcome-card">
-        <div class="welcome-main">
-          <h2 class="welcome-title">欢迎回来，{{ userName }}</h2>
-          <p class="welcome-desc">{{ greetingText }}</p>
-        </div>
-        <div class="welcome-meta">
-          <span class="meta-date">{{ currentDate }}</span>
-          <span class="meta-time">{{ currentTime }}</span>
+  <div class="workbench">
+    <!-- 首行三栏等高：经营 KPI｜爆量趋势｜日历 -->
+    <section class="workbench__top" aria-label="概览与日程">
+      <div class="workbench__top-cell workbench__top-cell--kpi">
+        <WorkbenchTopKpi :user-name="userName" />
+      </div>
+      <div class="workbench__top-cell workbench__top-cell--trend">
+        <WorkbenchVolumeTrend />
+      </div>
+      <div class="workbench__top-cell workbench__top-cell--cal">
+        <div class="workbench__cal-wrap">
+          <WorkbenchCalendar embed />
         </div>
       </div>
+    </section>
+
+    <!-- 中部：待办与小工具 / 快捷入口，两栏顶对齐、拉伸同高 -->
+    <div class="workbench__grid">
+      <div class="workbench__col workbench__col--main">
+        <WorkbenchTodoPanel class="workbench__card workbench__fill" />
+      </div>
+
+      <aside class="workbench__col workbench__col--side" aria-label="小工具与快捷入口">
+        <WorkbenchToolkit class="workbench__card" />
+        <QuickEntry class="workbench__card" compact />
+      </aside>
     </div>
 
-    <div class="main-content">
-      <QuickEntry class="main-quick" />
-      <RecentActivity class="main-recent" />
+    <!-- 底栏：通知｜图表 -->
+    <div class="workbench__bottom">
+      <WorkbenchNotifications class="workbench__card workbench__fill" />
+      <WorkbenchTrendChart class="workbench__card workbench__fill" />
     </div>
   </div>
 </template>
 
 <script setup>
+import { computed, provide } from "vue"
 import { useAuthStore } from "@/stores/auth"
-import QuickEntry from './components/QuickEntry.vue'
-import RecentActivity from './components/RecentActivity.vue'
+import { useWorkbenchTodos } from "./useWorkbenchTodos"
+import WorkbenchCalendar from "./components/WorkbenchCalendar.vue"
+import WorkbenchNotifications from "./components/WorkbenchNotifications.vue"
+import WorkbenchTodoPanel from "./components/WorkbenchTodoPanel.vue"
+import WorkbenchToolkit from "./components/WorkbenchToolkit.vue"
+import WorkbenchTopKpi from "./components/WorkbenchTopKpi.vue"
+import WorkbenchTrendChart from "./components/WorkbenchTrendChart.vue"
+import WorkbenchVolumeTrend from "./components/WorkbenchVolumeTrend.vue"
+import QuickEntry from "./components/QuickEntry.vue"
 
 const authStore = useAuthStore()
 
+const userId = computed(() => authStore.user?.id ?? "guest")
+const wbTodos = useWorkbenchTodos(userId)
+provide("wbTodos", wbTodos)
+
 const userName = computed(() => authStore.user?.nickname || "用户")
-
-const greetingText = computed(() => {
-  const hour = new Date().getHours()
-  if (hour < 6) return "凌晨了，注意休息哦"
-  if (hour < 9) return "早上好！新的一天开始了"
-  if (hour < 12) return "上午好！祝你工作顺利"
-  if (hour < 14) return "中午好！记得午休哦"
-  if (hour < 18) return "下午好！继续加油"
-  if (hour < 22) return "晚上好！记得休息哦"
-  return "夜深了，早点休息吧"
-})
-
-const currentDate = ref('')
-const currentTime = ref('')
-
-const updateDateTime = () => {
-  const now = new Date()
-  const weekDays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
-  currentDate.value = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日 ${weekDays[now.getDay()]}`
-  currentTime.value = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
-}
-
-let timeInterval = null
-onMounted(() => {
-  updateDateTime()
-  timeInterval = setInterval(updateDateTime, 60000)
-})
-onUnmounted(() => {
-  if (timeInterval) clearInterval(timeInterval)
-})
 </script>
 
 <style scoped lang="scss">
-.home-page {
+.workbench {
+  --wb-radius: 22px;
+  --wb-top-row-h: minmax(268px, min(36vh, 380px));
+  --wb-section-gap: clamp(16px, 1.5vw, 24px);
+  /* 与首行共用三列，竖向分割线（趋势|日历、待办|侧栏）才能对齐 */
+  --wb-cols: minmax(280px, 1.25fr) minmax(260px, 1.15fr) minmax(268px, min(26vw, 500px));
+  --wb-col-gap: clamp(12px, 1.5vw, 20px);
+  --wb-card-bg: var(--el-bg-color-overlay);
+  --wb-card-border: var(--app-border);
+  --wb-card-shadow: 0 24px 56px -32px rgba(15, 23, 42, 0.18);
+  --wb-accent: var(--el-color-primary);
+  --wb-accent-secondary: #7acbfe;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: none;
+  margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  min-height: 100%;
+  gap: var(--wb-section-gap);
+  padding: 0 0 clamp(4px, 0.75vw, 14px);
 }
 
-.header-section {
-  display: flex;
+html.dark .workbench {
+  --wb-card-shadow: 0 28px 64px -36px rgba(0, 0, 0, 0.72);
+  --wb-accent: #d4ff37;
 }
 
-.welcome-card {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  padding: 20px 24px;
-  background: $bg-white;
-  border-radius: 8px;
-  border: 1px solid $border-lighter;
-
-  .welcome-main {
-    .welcome-title {
-      font-size: 18px;
-      font-weight: 600;
-      color: $text-primary;
-      margin: 0 0 6px;
-    }
-
-    .welcome-desc {
-      font-size: 13px;
-      color: $text-secondary;
-      margin: 0;
-    }
-  }
-
-  .welcome-meta {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    margin-top: 16px;
-    padding-top: 14px;
-    border-top: 1px solid $border-lighter;
-
-    .meta-date {
-      font-size: 13px;
-      color: $text-secondary;
-    }
-
-    .meta-time {
-      font-size: 22px;
-      font-weight: 600;
-      color: $primary-color;
-      font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
-    }
-  }
-}
-
-.main-content {
-  flex: 1;
+/* 左 KPI | 爆量趋势折线 | 日历（整体靠右两格在宽屏上与左栏并排） */
+.workbench__top {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
+  grid-template-columns: var(--wb-cols);
+  grid-template-rows: var(--wb-top-row-h);
+  gap: var(--wb-col-gap);
+  align-items: stretch;
+  padding-bottom: clamp(10px, 1.2vw, 18px);
+  border-bottom: 1px solid color-mix(in srgb, var(--app-border) 55%, transparent);
+}
+
+.workbench__top-cell {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
+}
+
+.workbench__top-cell--trend :deep(.vol-trend),
+.workbench__top-cell--kpi :deep(.top-kpi),
+.workbench__cal-wrap {
+  flex: 1;
+  min-height: 0;
+}
+
+.workbench__cal-wrap {
+  display: flex;
+  justify-content: stretch;
   align-items: stretch;
 }
 
-@media (max-width: 960px) {
-  .main-content {
+.workbench__grid {
+  display: grid;
+  grid-template-columns: var(--wb-cols);
+  gap: var(--wb-col-gap);
+  align-items: stretch;
+}
+
+.workbench__col {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(12px, 1.4vw, 18px);
+  min-width: 0;
+}
+
+.workbench__card {
+  min-width: 0;
+}
+
+.workbench__fill {
+  flex: 1;
+  min-height: 0;
+}
+
+.workbench__col--main {
+  grid-column: 1 / span 2;
+  min-height: 0;
+}
+
+.workbench__col--side {
+  grid-column: 3;
+}
+
+/* 右侧小工具 + 快捷入口与左侧待办同高，底部留白由快捷入口卡片吃满 */
+.workbench__col--side > :last-child {
+  flex: 1;
+  min-height: 0;
+}
+
+.workbench__bottom {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--wb-col-gap);
+  align-items: stretch;
+  min-width: 0;
+}
+
+@media (max-width: 1180px) {
+  .workbench__top {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: var(--wb-top-row-h) var(--wb-top-row-h);
+  }
+
+  .workbench__top-cell--kpi {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .workbench__top-cell--trend {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .workbench__top-cell--cal {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  /* 首行改为 2+1 后，中间区不再沿用三列模板，避免窄屏第三轨过窄 */
+  .workbench__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .workbench__col--main,
+  .workbench__col--side {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 720px) {
+  .workbench__top {
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
+    grid-auto-rows: minmax(240px, auto);
+  }
+
+  .workbench__top-cell--kpi,
+  .workbench__top-cell--trend,
+  .workbench__top-cell--cal {
+    grid-column: 1;
+    grid-row: auto;
+  }
+}
+
+@media (max-width: 1100px) {
+  .workbench__bottom {
     grid-template-columns: 1fr;
   }
 }

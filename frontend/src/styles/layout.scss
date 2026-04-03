@@ -135,13 +135,15 @@
 .page-container {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-height: 0;
   padding: $content-padding;
   background-color: var(--app-surface);
   border-radius: $border-radius-lg;
   box-shadow: $shadow-sm;
-  height: calc(100vh - #{$header-height} - #{$content-padding * 2});
   overflow: hidden;
   .page-filter-box{
+    flex-shrink: 0;
     display: flex;
     justify-content: space-between;
     .el-button + .el-button {
@@ -171,9 +173,19 @@
   }
   .page-table-box{
     flex: 1;
-    overflow: auto;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+
+    /* 让 el-table 根节点参与 flex 伸展，height="100%" 才能吃到父级高度 */
+    :deep(.el-table) {
+      flex: 1;
+      min-height: 0;
+    }
   }
   .page-table-header{
+    flex-shrink: 0;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -185,6 +197,7 @@
     box-sizing: border-box;
   }
   .page-pagination-box{
+    flex-shrink: 0;
     display: flex;
     justify-content: flex-end;
   }

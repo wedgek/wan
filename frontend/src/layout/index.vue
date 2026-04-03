@@ -113,6 +113,9 @@ const keepAlivePages = computed(() => {
 
       .content-wrapper {
         flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
         overflow-y: auto;
         background-color: var(--app-bg);
         position: relative;
@@ -131,9 +134,12 @@ const keepAlivePages = computed(() => {
           padding-bottom: clamp(8px, 1vw, 16px);
         }
 
-        /* 高度随内容增长，避免短页被外壳强制拉高 */
+        /* 与 .page-container（flex:1）撑满主内容区，保证 el-table height="100%" 能正确计算 */
         .page-transition-wrapper {
-          height: auto;
+          flex: 1;
+          min-height: 0;
+          display: flex;
+          flex-direction: column;
           position: relative;
         }
 

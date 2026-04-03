@@ -665,4 +665,122 @@ router.post('/permission/assign-role-data-scope', (req, res) => {
   res.json(ok(true))
 })
 
+function rowToAiPrompt(r) {
+  if (!r) return null
+  return {
+    id: r.id,
+    name: r.name || '',
+    scene: r.scene || '',
+    content: r.content || '',
+    sort: r.sort ?? 0,
+    status: r.status ?? 0,
+    remark: r.remark || '',
+    createTime: r.create_time ? String(r.create_time).replace('T', ' ').slice(0, 19) : '',
+    updateTime: r.update_time ? String(r.update_time).replace('T', ' ').slice(0, 19) : '',
+  }
+}
+
+/* ---------- AI 提示词 ---------- */
+router.get('/ai-prompt/page', (req, res) => {
+  const pageNo = Math.max(1, parseInt(req.query.pageNo, 10) || 1)
+  const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 20))
+  const name = (req.query.name || '').trim()
+  const scene = (req.query.scene || '').trim()
+  const status = req.query.status
+  const keyword = (req.query.keyword || '').trim()
+  const conds = ['1=1']
+  const params = []
+  if (name) {
+    conds.push('name LIKE ?')
+    params.push(`%${name}%`)
+  }
+  if (scene) {
+    conds.push('scene LIKE ?')
+    params.push(`%${scene}%`)
+  }
+  if (keyword) {
+    conds.push('(name LIKE ? OR content LIKE ? OR COALESCE(scene, \'\') LIKE ?)')
+    const k = `%${keyword}%`
+    params.push(k, k, k)
+  }
+  if (status !== undefined && status !== '') {
+    conds.push('status = ?')
+    params.push(Number(status))
+  }
+  const where = conds.join(' AND ')
+  const total = database().prepare(`SELECT COUNT(*) as c FROM ai_prompts WHERE ${where}`).get(...params).c
+  const offset = (pageNo - 1) * pageSize
+  const rows = database()
+    .prepare(
+      `SELECT id, name, scene, content, sort, status, remark,
+              datetime(created_at) as create_time, datetime(updated_at) as update_time
+       FROM ai_prompts WHERE ${where} ORDER BY sort ASC, id DESC LIMIT ? OFFSET ?`
+    )
+    .all(...params, pageSize, offset)
+  res.json(ok({ list: rows.map(rowToAiPrompt), total }))
+})
+
+router.get('/ai-prompt/get', (req, res) => {
+  const id = Number(req.query.id)
+  if (!id) return res.json(fail(400, '缺少 id'))
+  const row = database()
+    .prepare(
+      `SELECT id, name, scene, content, sort, status, remark,
+              datetime(created_at) as create_time, datetime(updated_at) as update_time
+       FROM ai_prompts WHERE id = ?`
+    )
+    .get(id)
+  if (!row) return res.json(fail(404, '记录不存在'))
+  res.json(ok(rowToAiPrompt(row)))
+})
+
+router.post('/ai-prompt/create', (req, res) => {
+  const b = req.body || {}
+  if (!String(b.name || '').trim()) return res.json(fail(400, '请填写名称'))
+  if (!String(b.content || '').trim()) return res.json(fail(400, '请填写提示词内容'))
+  const info = database()
+    .prepare(
+      `INSERT INTO ai_prompts (name, scene, content, sort, status, remark)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      String(b.name).trim(),
+      String(b.scene || '').trim() || null,
+      String(b.content).trim(),
+      Number(b.sort) || 0,
+      n(b.status, 0),
+      String(b.remark || '').trim() || null
+    )
+  res.json(ok({ id: Number(info.lastInsertRowid) }))
+})
+
+router.put('/ai-prompt/update', (req, res) => {
+  const b = req.body || {}
+  const id = Number(b.id)
+  if (!id) return res.json(fail(400, '缺少 id'))
+  if (!String(b.name || '').trim()) return res.json(fail(400, '请填写名称'))
+  if (!String(b.content || '').trim()) return res.json(fail(400, '请填写提示词内容'))
+  database()
+    .prepare(
+      `UPDATE ai_prompts SET name = ?, scene = ?, content = ?, sort = ?, status = ?, remark = ?, updated_at = datetime('now') WHERE id = ?`
+    )
+    .run(
+      String(b.name).trim(),
+      String(b.scene || '').trim() || null,
+      String(b.content).trim(),
+      Number(b.sort) || 0,
+      n(b.status, 0),
+      String(b.remark || '').trim() || null,
+      id
+    )
+  res.json(ok(true))
+})
+
+router.delete('/ai-prompt/delete', (req, res) => {
+  const id = Number(req.query.id)
+  if (!id) return res.json(fail(400, '缺少 id'))
+  database().prepare('DELETE FROM ai_prompts WHERE id = ?').run(id)
+  res.json(ok(true))
+})
+
 module.exports = router

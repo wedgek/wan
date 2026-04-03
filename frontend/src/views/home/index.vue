@@ -32,6 +32,8 @@
       <WorkbenchNotifications class="workbench__card workbench__fill" />
       <WorkbenchTrendChart class="workbench__card workbench__fill" />
     </div>
+    <!-- 底部留白：放在工作台 flex 列末尾，不依赖布局 meta / 外层 padding，避免与其它页耦合 -->
+    <div class="workbench__end-spacer" aria-hidden="true" />
   </div>
 </template>
 
@@ -77,7 +79,17 @@ const userName = computed(() => authStore.user?.nickname || "用户")
   display: flex;
   flex-direction: column;
   gap: var(--wb-section-gap);
-  padding: 0 0 clamp(4px, 0.75vw, 14px);
+  padding: 0;
+}
+
+/* 独立占位块（非 margin/padding）：紧挨底栏卡片下方，高度肉眼可见 */
+/* 与 layout 里 .content-wrapper--wide 左右 padding 同节奏，底边与两侧边距视觉一致 */
+.workbench__end-spacer {
+  flex-shrink: 0;
+  flex-grow: 0;
+  width: 100%;
+  height: clamp(12px, 1vw, 12px);
+  min-height: clamp(12px, 1vw, 12px);
 }
 
 html.dark .workbench {

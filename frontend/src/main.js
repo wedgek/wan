@@ -27,6 +27,5 @@ await initPermission()
 app.use(router)
 app.use(directives)
 registerIcons(app)
-await router.isReady()
-
+// 不再 await isReady()：在弱网/HTTP1.1 下 isReady 会等到懒加载 chunk 全部就绪才 resolve，易与大包并发排队冲突，长期白屏且无 XHR
 app.mount("#app")

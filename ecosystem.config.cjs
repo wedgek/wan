@@ -16,6 +16,8 @@ module.exports = {
         // 启动前 export ADMIN_PASSWORD / ADMIN_USERNAME，勿把密码写进仓库
         ADMIN_USERNAME: process.env.ADMIN_USERNAME || 'admin',
         ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || '',
+        // Nginx 反代时：export TRUST_PROXY=1 再 pm2 start/restart --update-env
+        TRUST_PROXY: process.env.TRUST_PROXY || '',
       },
     },
   ],

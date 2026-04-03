@@ -17,6 +17,10 @@ db.initDb()
 
 const app = express()
 app.disable("x-powered-by")
+// 置于 Nginx 后时启用：export TRUST_PROXY=1，以便 req.ip / 限流等识别真实客户端
+if (process.env.TRUST_PROXY === "1") {
+  app.set("trust proxy", 1)
+}
 app.use(express.json({ limit: "2mb" }))
 
 app.use("/admin-api", apiRouter)

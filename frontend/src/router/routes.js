@@ -4,6 +4,8 @@ export const routeComponents = {
   managePermissionMenu: () => import("@/views/manage/permission/menu/index.vue"),
   managePermissionRole: () => import("@/views/manage/permission/role/index.vue"),
   managePermissionMember: () => import("@/views/manage/permission/member/index.vue"),
+  // AI
+  aiPromptManage: () => import("@/views/ai/prompts/index.vue"),
 }
 
 

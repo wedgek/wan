@@ -15,11 +15,11 @@
         <el-sub-menu index="console">
           <template #title>
             <el-icon class="menu-icon"><Monitor /></el-icon>
-            <span>控制台</span>
+            <span>工作台</span>
           </template>
           <el-menu-item index="/home">
             <el-icon class="menu-icon menu-icon--nested"><Odometer /></el-icon>
-            <span>工作台</span>
+            <span>控制面板</span>
           </el-menu-item>
         </el-sub-menu>
         <menu-item
@@ -173,6 +173,14 @@ const toggleCollapse = () => {
       --el-menu-hover-text-color: var(--sidebar-item-hover-color);
       --el-menu-active-color: var(--sidebar-item-active-color);
       --el-menu-bg-color: transparent;
+
+      /* 与 menu-item.vue 一致：顶级图标间距。写死项不在 MenuItem 内，scoped 未生效 */
+      :deep(.el-sub-menu__title > .el-icon.menu-icon:not(.menu-icon--nested)),
+      :deep(.el-menu-item > .el-icon.menu-icon:not(.menu-icon--nested)) {
+        margin-right: 10px !important;
+        font-size: 18px;
+        vertical-align: middle;
+      }
 
       :deep(.el-menu-item) {
         height: 50px;

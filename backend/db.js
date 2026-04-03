@@ -40,9 +40,46 @@ function applySchemaPatches(dbi) {
         created_at TEXT DEFAULT (datetime('now')),
         PRIMARY KEY (user_id, menu_id)
       );
+      CREATE TABLE IF NOT EXISTS ai_prompts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        scene TEXT,
+        content TEXT NOT NULL,
+        sort INTEGER DEFAULT 0,
+        status INTEGER DEFAULT 0,
+        remark TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT
+      );
     `)
+    ensureAiPromptMenus(dbi)
   } catch (e) {
     console.error('[db] applySchemaPatches failed', e.message)
+  }
+}
+
+/** 旧库升级：补「AI 应用 / 提示词管理」菜单并授权给超级管理员（空库由下方 seed 写入，此处跳过） */
+function ensureAiPromptMenus(dbi) {
+  const hit = dbi.prepare('SELECT 1 FROM menus WHERE component_name = ? LIMIT 1').get('aiPromptManage')
+  if (hit) return
+  const menuCount = dbi.prepare('SELECT COUNT(*) AS c FROM menus').get().c
+  if (!menuCount) return
+  const maxRow = dbi.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM menus').get()
+  const parentId = maxRow.m + 1
+  const childId = maxRow.m + 2
+  const ins = dbi.prepare(`
+    INSERT INTO menus (id, parent_id, type, name, path, component_name, icon, sort, permission, status, visible, keep_alive)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+  ins.run(parentId, 0, 1, 'AI 应用', '/ai', '', 'Cpu', 5, '', 0, 1, 0)
+  ins.run(childId, parentId, 2, '提示词管理', 'prompts', 'aiPromptManage', 'Document', 1, 'ai:prompt:list', 0, 1, 0)
+  const ir = dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (?, ?)')
+  ir.run(1, parentId)
+  ir.run(1, childId)
+  try {
+    dbi.prepare('INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES (?, ?)').run('menus', childId)
+  } catch (_) {
+    /* ignore */
   }
 }
 
@@ -126,6 +163,18 @@ function initDb() {
       dept_id INTEGER NOT NULL,
       PRIMARY KEY (role_id, dept_id)
     );
+
+    CREATE TABLE IF NOT EXISTS ai_prompts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      scene TEXT,
+      content TEXT NOT NULL,
+      sort INTEGER DEFAULT 0,
+      status INTEGER DEFAULT 0,
+      remark TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT
+    );
   `)
 
   applySchemaPatches(dbInstance)
@@ -172,9 +221,11 @@ function initDb() {
     stmt.run(2, 1, 2, '菜单管理', 'permission/menu', 'managePermissionMenu', 'Menu', 1, 'system:menu:list', 0, 1, 0)
     stmt.run(3, 1, 2, '角色管理', 'permission/role', 'managePermissionRole', 'UserFilled', 2, 'system:role:list', 0, 1, 0)
     stmt.run(4, 1, 2, '成员管理', 'permission/member', 'managePermissionMember', 'Postcard', 3, 'system:user:list', 0, 1, 0)
-    dbInstance.prepare("UPDATE sqlite_sequence SET seq = 4 WHERE name = 'menus'").run()
+    stmt.run(5, 0, 1, 'AI 应用', '/ai', '', 'Cpu', 5, '', 0, 1, 0)
+    stmt.run(6, 5, 2, '提示词管理', 'prompts', 'aiPromptManage', 'Document', 1, 'ai:prompt:list', 0, 1, 0)
+    dbInstance.prepare("UPDATE sqlite_sequence SET seq = 6 WHERE name = 'menus'").run()
 
-    const mids = [1, 2, 3, 4]
+    const mids = [1, 2, 3, 4, 5, 6]
     const ir = dbInstance.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (?, ?)')
     for (const mid of mids) ir.run(1, mid)
   }

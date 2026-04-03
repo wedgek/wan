@@ -1,0 +1,129 @@
+// html.dark 下与 Element Plus 变量对齐的全局补丁（弹窗/侧栏/自定义 popper 等）
+// EP 已通过 theme-chalk/dark/css-vars 设置 --el-*；此处修正本项目中覆盖浅色或写死 #fff 的地方
+
+html.dark {
+  // 列表页主容器阴影在暗色下改用 EP 变量
+  .page-container {
+    box-shadow: var(--el-box-shadow);
+  }
+
+  // 侧栏与折叠浮层样式由 theme-app + sidebar 组件内 CSS 变量统一管理
+
+  // 顶栏用户卡片
+  .cz-user-card-popper {
+    border: 1px solid var(--el-border-color) !important;
+    box-shadow: var(--el-box-shadow) !important;
+
+    .user-card {
+      background: var(--el-bg-color-overlay) !important;
+    }
+
+    .user-name {
+      color: var(--el-text-color-primary) !important;
+    }
+
+    .sub-account {
+      color: var(--el-text-color-secondary) !important;
+    }
+
+    .role-tag {
+      background: color-mix(in srgb, var(--el-color-primary) 22%, transparent) !important;
+      color: var(--el-color-primary) !important;
+    }
+
+    .card-menu .menu-item {
+      color: var(--el-text-color-primary) !important;
+      border-bottom-color: var(--el-border-color-lighter) !important;
+
+      .menu-icon,
+      .menu-arrow {
+        color: var(--el-text-color-secondary) !important;
+      }
+
+      &:hover {
+        background: var(--el-fill-color-light) !important;
+
+        .menu-icon,
+        .menu-text,
+        .menu-arrow {
+          color: var(--el-color-primary) !important;
+        }
+      }
+
+      &.menu-logout:hover {
+        background: rgba(245, 108, 108, 0.12) !important;
+
+        .menu-icon,
+        .menu-text,
+        .menu-arrow {
+          color: var(--el-color-danger) !important;
+        }
+      }
+    }
+  }
+
+  // 浅色 effect 的 Tooltip 在暗色页上仍可能走 is-light，统一为暗色表面
+  .el-popper.is-light {
+    color: var(--el-text-color-primary) !important;
+    background: var(--el-bg-color-overlay) !important;
+    border: 1px solid var(--el-border-color) !important;
+  }
+
+  /* 箭头不要用 border 简写，否则会盖住 EP 按方位设置的两条 transparent 边，变成空心描边 */
+  .el-popper.is-light .el-popper__arrow::before {
+    background: var(--el-bg-color-overlay) !important;
+  }
+
+  /* 默认 effect=dark 的 Tooltip：覆盖 element.scss 里写死的 #333，并与箭头填满同色 */
+  .el-popper.is-dark {
+    color: var(--el-color-white) !important;
+    background: var(--el-bg-color-overlay) !important;
+    border: 1px solid var(--el-border-color) !important;
+  }
+
+  .el-popper.is-dark .el-popper__arrow::before {
+    background: var(--el-bg-color-overlay) !important;
+    border: 1px solid var(--el-border-color) !important;
+  }
+
+  .el-popper.is-dark[data-popper-placement^='top'] > .el-popper__arrow::before {
+    border-top-color: transparent !important;
+    border-left-color: transparent !important;
+  }
+
+  .el-popper.is-dark[data-popper-placement^='bottom'] > .el-popper__arrow::before {
+    border-bottom-color: transparent !important;
+    border-right-color: transparent !important;
+  }
+
+  .el-popper.is-dark[data-popper-placement^='left'] > .el-popper__arrow::before {
+    border-left-color: transparent !important;
+    border-bottom-color: transparent !important;
+  }
+
+  .el-popper.is-dark[data-popper-placement^='right'] > .el-popper__arrow::before {
+    border-right-color: transparent !important;
+    border-top-color: transparent !important;
+  }
+
+  /* is-light 箭头同样补全透明边（若走了 light 皮肤） */
+  .el-popper.is-light[data-popper-placement^='top'] > .el-popper__arrow::before {
+    border-top-color: transparent !important;
+    border-left-color: transparent !important;
+  }
+
+  .el-popper.is-light[data-popper-placement^='bottom'] > .el-popper__arrow::before {
+    border-bottom-color: transparent !important;
+    border-right-color: transparent !important;
+  }
+
+  .el-popper.is-light[data-popper-placement^='left'] > .el-popper__arrow::before {
+    border-left-color: transparent !important;
+    border-bottom-color: transparent !important;
+  }
+
+  .el-popper.is-light[data-popper-placement^='right'] > .el-popper__arrow::before {
+    border-right-color: transparent !important;
+    border-top-color: transparent !important;
+  }
+}

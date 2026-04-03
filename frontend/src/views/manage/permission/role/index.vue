@@ -56,7 +56,7 @@
                     </template>
                 </el-table-column>
                 <el-table-column prop="createTime" label="创建时间" min-width="160" align="center" show-overflow-tooltip />
-                <el-table-column prop="remark" label="备注" min-width="150" show-overflow-tooltip />
+                <el-table-column prop="remark" label="备注" min-width="150" align="center" show-overflow-tooltip />
                 <el-table-column label="操作" width="280" fixed="right" align="center">
                     <template #default="{ row }">
                         <el-button type="primary" link :icon="$icons.Edit" @click="roleModalRef?.showEdit(row)">编辑</el-button>

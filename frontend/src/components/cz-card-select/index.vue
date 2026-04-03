@@ -64,11 +64,12 @@ const handleSelect = (value) => {
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        border: 1px solid #dcdfe6;
-        border-radius: 4px;
+        border: 1px solid var(--el-border-color);
+        border-radius: var(--el-border-radius-base);
         cursor: pointer;
-        transition: all 0.2s;
-        color: #606266;
+        transition: border-color 0.2s, color 0.2s, background-color 0.2s;
+        color: var(--el-text-color-regular);
+        background-color: var(--el-fill-color-blank);
 
         .el-icon {
             transition: transform 0.2s;
@@ -81,8 +82,9 @@ const handleSelect = (value) => {
         }
 
         &:hover {
-            border-color: #409eff;
-            color: #409eff;
+            border-color: var(--el-color-primary);
+            color: var(--el-color-primary);
+            background-color: var(--el-fill-color-light);
 
             .el-icon {
                 transform: scale(1.1);
@@ -90,9 +92,9 @@ const handleSelect = (value) => {
         }
 
         &.active {
-            border-color: #409eff;
-            background-color: #ecf5ff;
-            color: #409eff;
+            border-color: var(--el-color-primary);
+            background-color: var(--el-color-primary-light-9);
+            color: var(--el-color-primary);
         }
     }
 

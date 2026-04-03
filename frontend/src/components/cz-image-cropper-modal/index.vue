@@ -461,7 +461,7 @@ onBeforeUnmount(() => {
       position: absolute;
       width: 6px;
       height: 6px;
-      background: #1890ff;
+      background: #4078fc;
       border-radius: 50%;
       bottom: 4px;
       right: 4px;
@@ -485,7 +485,7 @@ onBeforeUnmount(() => {
   }
 
   &:hover {
-    border-color: rgba(24, 144, 255, 0.55);
+    border-color: rgba(64, 120, 252, 0.55);
     background: #f8fbff;
   }
 }

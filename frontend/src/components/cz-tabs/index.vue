@@ -157,7 +157,7 @@ const handleClick = async (tab) => {
     
     // ==================== Line 模式 ====================
     &--line .cz-tab-nav__item {
-        color: $text-regular;
+        color: var(--el-text-color-regular);
         &:hover { color: $primary-color; }
         &.is-active { color: $primary-color; font-weight: 500; }
     }
@@ -186,16 +186,16 @@ const handleClick = async (tab) => {
     &--card .cz-tab-nav__wrapper { gap: 0; }
     
     &--card .cz-tab-nav__item {
-        color: $text-regular;
-        background: $bg-white;
-        border: 1px solid $border-color;
+        color: var(--el-text-color-regular);
+        background: var(--el-bg-color-overlay);
+        border: 1px solid var(--el-border-color);
         margin-left: -1px;
         
         &:first-child { margin-left: 0; }
         &:hover:not(.is-active) { color: $primary-color; z-index: 1; }
         &.is-active {
             color: $primary-color;
-            background: $primary-bg;
+            background: var(--el-color-primary-light-9);
             border-color: $primary-color;
             z-index: 2;
             font-weight: 500;
@@ -223,14 +223,14 @@ const handleClick = async (tab) => {
     // ==================== Capsule 模式 ====================
     &--capsule .cz-tab-nav__wrapper {
         gap: 4px;
-        background: $bg-light;
+        background: var(--el-fill-color-light);
     }
     
     &--capsule .cz-tab-nav__item {
-        color: $text-primary;
+        color: var(--el-text-color-primary);
         &:hover:not(.is-active) { color: $primary-color; }
         &.is-active {
-            background: $bg-white;
+            background: var(--el-bg-color-overlay);
             color: $primary-color;
             font-weight: 500;
             box-shadow: 0 1px 2px rgba(0, 0, 0, .05);

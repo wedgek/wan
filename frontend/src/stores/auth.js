@@ -11,6 +11,25 @@ export const useAuthStore = defineStore("auth", () => {
   const roles = ref([])
   const roleNames = ref([])
 
+  /** 清会话与动态路由，不跳转（供路由未 install 时复用） */
+  const clearSession = () => {
+    token.value = ""
+    user.value = null
+    permissions.value = []
+    roles.value = []
+    roleNames.value = []
+
+    removeStorage("token")
+    removeStorage("user")
+    removeStorage("permissions")
+    removeStorage("roles")
+    removeStorage("roleNames")
+
+    const menuStore = useMenuStore()
+    menuStore.clearMenus()
+    resetDynamicRoutes()
+  }
+
   // 初始化auth
   const initAuth = () => {
     const savedToken = getStorage("token")
@@ -20,14 +39,16 @@ export const useAuthStore = defineStore("auth", () => {
     const savedRoleNames = getStorage("roleNames")
 
     const menuStore = useMenuStore()
-    menuStore.initMenus()
 
     if (savedToken) {
+      menuStore.initMenus()
       token.value = savedToken
       user.value = savedUser
       permissions.value = savedPermissions || []
       roles.value = savedRoles || []
       roleNames.value = savedRoleNames || []
+    } else {
+      menuStore.clearMenus()
     }
   }
 
@@ -81,24 +102,7 @@ export const useAuthStore = defineStore("auth", () => {
 
   // 登出
   const logout = () => {
-    token.value = ""
-    user.value = null
-    permissions.value = []
-    roles.value = []
-    roleNames.value = []
-
-    removeStorage("token")
-    removeStorage("user")
-    removeStorage("permissions")
-    removeStorage("roles")
-    removeStorage("roleNames")
-
-    const menuStore = useMenuStore()
-    menuStore.clearMenus()
-
-    // 重置动态路由，确保切换账号时路由重新注册
-    resetDynamicRoutes()
-
+    clearSession()
     router.replace("/login")
   }
 
@@ -114,6 +118,7 @@ export const useAuthStore = defineStore("auth", () => {
     roles,
     roleNames,
     initAuth,
+    clearSession,
     login,
     logout,
     getUserInfo,

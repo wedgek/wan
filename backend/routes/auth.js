@@ -133,5 +133,5 @@ router.post('/refresh-token', (req, res) => {
   })
 })
 
+Object.assign(router, { requireAuth, menuRowsForUser })
 module.exports = router
-module.exports.requireAuth = requireAuth

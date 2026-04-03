@@ -2,15 +2,16 @@
     <div class="member-wrapper">
         <!-- 主内容区域 -->
         <div class="member-main-layout">
-            <!-- 左侧部门树 -->
-            <CzDeptTree
-                ref="deptTreeRef"
-                v-model="tableParams.deptId"
-                :data="deptTreeData"
-                :loading="deptLoading"
-                class="dept-tree-panel"
-                @change="tableSearch"
-            />
+            <!-- 左侧部门树：外层只保留右边框分隔，与 :deep(.cz-dept-tree) 选择器匹配 -->
+            <div class="dept-tree-panel">
+                <CzDeptTree
+                    ref="deptTreeRef"
+                    v-model="tableParams.deptId"
+                    :data="deptTreeData"
+                    :loading="deptLoading"
+                    @change="tableSearch"
+                />
+            </div>
 
             <!-- 右侧内容 -->
             <div class="member-content-panel">
@@ -69,11 +70,10 @@
                         <el-table-column prop="mobile" label="电话" min-width="100" align="center" />
                         <el-table-column prop="email" label="邮箱" min-width="120" align="center" show-overflow-tooltip />
                         <el-table-column prop="createTime" label="创建时间" width="160" align="center" />
-                        <el-table-column label="操作" width="340" fixed="right" align="center">
+                        <el-table-column label="操作" width="280" fixed="right" align="center">
                             <template #default="{ row }">
                                 <el-button type="primary" link :icon="$icons.Edit" @click="memberModalRef?.showEdit(row)">编辑</el-button>
                                 <el-button type="primary" link :icon="$iconfont.User" @click="memberRoleModalRef?.show(row)">角色</el-button>
-                                <el-button type="primary" link :icon="$iconfont.Auth" @click="handleAuthCode(row)">授权</el-button>
                                 <el-button type="primary" link :icon="$icons.Lock" @click="handlePassword(row)">密码</el-button>
                                 <el-button type="danger" link :icon="$icons.Delete" @click="handleDelete(row.id)">删除</el-button>
                             </template>
@@ -98,26 +98,6 @@
         
         <!-- 设置角色弹框 -->
         <MemberRoleModal ref="memberRoleModalRef" @success="getTableData" />
-
-        <!-- 授权二维码弹框 -->
-        <el-dialog
-            v-model="authCodeVisible"
-            width="360"
-            destroy-on-close
-            align-center
-        >
-            <div class="auth-code-box" v-loading="authCodeLoading">
-                <div class="qr-frame" v-if="authCodeData">
-                    <span class="corner corner-tl"></span>
-                    <span class="corner corner-tr"></span>
-                    <span class="corner corner-bl"></span>
-                    <span class="corner corner-br"></span>
-                    <img :src="'data:image/png;base64,' + authCodeData" alt="授权二维码" />
-                </div>
-                <el-empty v-else-if="!authCodeLoading" description="获取失败" :image-size="60" />
-                <div class="qr-tip" v-if="authCodeData">请扫码授权</div>
-            </div>
-        </el-dialog>
     </div>
 </template>
 
@@ -225,33 +205,6 @@ const handlePassword = (row) => {
     }).catch(() => {})
 }
 
-// ==================== 授权二维码 ====================
-const authCodeVisible = ref(false)
-const authCodeLoading = ref(false)
-const authCodeData = ref('')
-
-const handleAuthCode = async (row) => {
-    authCodeData.value = ''
-    authCodeVisible.value = true
-    authCodeLoading.value = true
-    
-    try {
-        const result = await request({
-            url: '/admin-api/system/user/qcCode?username=' + row.username,
-            method: 'GET',
-        })
-        if (result.code === 0) {
-            authCodeData.value = result.data
-        } else {
-            ElMessage.error(result.msg || '获取二维码失败')
-        }
-    } catch (error) {
-        ElMessage.error('请求失败: ' + (error.message || '未知错误'))
-    } finally {
-        authCodeLoading.value = false
-    }
-}
-
 // ==================== 导出 ====================
 const exportTable = async () => {
     const params = { ...tableParams, pageSize: 100 }
@@ -278,99 +231,83 @@ const memberRoleModalRef = ref()
     display: flex;
     flex-direction: column;
     height: 100%;
+    min-height: 0;
+
     .member-main-layout {
         display: flex;
         flex: 1;
         min-height: 0;
-        gap: 14px;
+        gap: 0;
+        align-items: stretch;
     }
 }
 
-// 左侧部门树面板
+/* 左侧部门树：无外框，与右侧仅一根竖线 */
 .dept-tree-panel {
-    width: 280px;
+    width: 268px;
     flex-shrink: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding-right: 14px;
+    border-right: 1px solid var(--el-border-color-lighter);
+
+    :deep(.cz-dept-tree) {
+        border: none !important;
+        border-radius: 0 !important;
+        background: transparent;
+        height: 100%;
+    }
+
+    /* 与右侧 page-filter-box 同一顶线：顶 padding 为 0，底边距与右侧筛选区 margin 对齐 */
+    :deep(.cz-dept-tree__search) {
+        padding: 0 0 12px;
+        margin: 0;
+        box-sizing: border-box;
+    }
+
+    :deep(.cz-dept-tree__body) {
+        padding: 0 0 8px;
+    }
 }
 
-// 右侧内容面板
+/* 右侧列表：与全局 page-container 内边距节奏一致（同角色/菜单等页） */
 .member-content-panel {
     flex: 1;
     min-width: 0;
+    min-height: 0;
     display: flex;
     flex-direction: column;
-    background-color: var(--el-bg-color);
-    border-radius: 4px;
-    border: 1px solid var(--el-border-color-lighter);
-    padding: 14px;
-    
-    .page-filter-box {
-        margin-bottom: 16px;
-    }
-    .page-pagination-box {
-        margin-top: 15px;
-    }
-}
+    padding-left: $content-padding;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    box-sizing: border-box;
 
-// 授权二维码
-.auth-code-box {
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-    min-height: 300px;
-    
-    .qr-frame {
-        position: relative;
-        
-        img {
-            display: block;
-            width: 230px;
-            height: 230px;
-        }
-        
-        .corner {
-            position: absolute;
-            width: 16px;
-            height: 16px;
-            border-color: $primary-color;
-            border-style: solid;
-            border-width: 0;
-            
-            &.corner-tl {
-                top: 0;
-                left: 0;
-                border-top-width: 2px;
-                border-left-width: 2px;
-                border-top-left-radius: 2px;
-            }
-            &.corner-tr {
-                top: 0;
-                right: 0;
-                border-top-width: 2px;
-                border-right-width: 2px;
-                border-top-right-radius: 2px;
-            }
-            &.corner-bl {
-                bottom: 0;
-                left: 0;
-                border-bottom-width: 2px;
-                border-left-width: 2px;
-                border-bottom-left-radius: 2px;
-            }
-            &.corner-br {
-                bottom: 0;
-                right: 0;
-                border-bottom-width: 2px;
-                border-right-width: 2px;
-                border-bottom-right-radius: 2px;
-            }
-        }
+    /* 与下方表格、工具条同宽对齐，避免 flex 子项撑破视觉宽度 */
+    .page-filter-box,
+    .page-table-header,
+    .page-table-box,
+    .page-pagination-box {
+        width: 100%;
+        max-width: 100%;
+        box-sizing: border-box;
     }
-    
-    .qr-tip {
-        margin-top: 16px;
-        font-size: 12px;
-        color: $text-secondary;
+
+    .page-filter-box .page-filter-left {
+        min-width: 0;
+        align-items: center;
+    }
+
+    .page-filter-box {
+        flex-shrink: 0;
+        padding-top: 0;
+        margin-top: 0;
+        margin-bottom: 12px;
+    }
+
+    .page-pagination-box {
+        margin-top: 12px;
     }
 }
 

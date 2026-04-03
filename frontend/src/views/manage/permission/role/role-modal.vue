@@ -11,7 +11,13 @@
             </el-form-item>
 
             <el-form-item label="角色标识" v-required-dot>
-                <el-input v-model="formData.code" placeholder="请输入角色标识" clearable clear-icon="Close" />
+                <el-input
+                    v-model="formData.code"
+                    placeholder="请输入角色标识"
+                    :disabled="isBuiltinRoleEdit"
+                    clearable
+                    clear-icon="Close"
+                />
             </el-form-item>
 
             <el-form-item label="显示排序" v-required-dot>
@@ -59,6 +65,10 @@ const defaultFormData = () => ({
     remark: "",
 })
 const formData = reactive(defaultFormData())
+
+const isBuiltinRoleEdit = computed(
+    () => modalMode.value === "edit" && Number(formData.id) === 1,
+)
 
 // 新增
 const showAdd = () => {
@@ -123,4 +133,3 @@ const handleSubmit = async () => {
 
 defineExpose({ showAdd, showEdit })
 </script>
-

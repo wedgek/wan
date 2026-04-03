@@ -393,7 +393,7 @@ defineExpose({ clear, stats })
     margin-top: 8px;
     font-size: 13px;
     color: #606266;
-    .num { color: #409eff; margin: 0 4px; }
+    .num { color: #4078fc; margin: 0 4px; }
     .num.warning { color: #e6a23c; }
     .dot { margin: 0 6px; color: #c0c4cc; }
     > span:last-child {

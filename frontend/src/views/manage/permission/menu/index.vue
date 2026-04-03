@@ -27,6 +27,7 @@
                 row-key="id" 
                 border 
                 height="100%" 
+                default-expand-all
                 :tree-props="{ children: 'children' }"
                 :header-cell-style="{ 'text-align': 'center' }" 
                 @cell-click="handleCellClick"
@@ -100,6 +101,27 @@ const handleDelete = useDelete({
 })
 
 const tableRef = ref()
+
+/** 树形数据异步到达后仍默认全部展开（单靠 default-expand-all 在首屏为空时可能不生效） */
+const expandAllMenuRows = () => {
+    nextTick(() => {
+        const t = tableRef.value
+        if (!t) return
+        const walk = (rows) => {
+            rows?.forEach((row) => {
+                if (row.children?.length) {
+                    t.toggleRowExpansion(row, true)
+                    walk(row.children)
+                }
+            })
+        }
+        walk(tableData.value)
+    })
+}
+
+watch(tableData, (rows) => {
+    if (rows?.length) expandAllMenuRows()
+}, { flush: 'post' })
 
 // cell click hook - 点击名称列展开/收起
 const { handleCellClick } = useCellClick(tableRef, {

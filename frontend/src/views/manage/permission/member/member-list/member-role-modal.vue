@@ -88,10 +88,6 @@ const show = async (row) => {
         const roleResult = await getRoleApi()
         if (roleResult.code === 0) {
             roleList.value = roleResult.data || []
-            // 超级管理员特殊处理
-            if (row.id === 1) {
-                roleList.value.push({ id: 1, name: '超级管理员' })
-            }
         } else {
             ElMessage.error(roleResult.msg)
         }

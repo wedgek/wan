@@ -1,6 +1,30 @@
 import request from '@/request'
 import { urlEncode } from "@/utils/public";
 
+/** 工作台概览统计 */
+export const getWorkbenchSummaryApi = () => {
+  return request({
+    url: '/admin-api/system/workbench-summary',
+    method: 'GET',
+  })
+}
+
+/** 工作台快捷入口（当前用户，服务端持久化） */
+export const getWorkbenchQuickEntriesApi = () => {
+  return request({
+    url: '/admin-api/system/quick-entries',
+    method: 'GET',
+  })
+}
+
+export const saveWorkbenchQuickEntriesApi = (menuIds) => {
+  return request({
+    url: '/admin-api/system/quick-entries',
+    method: 'PUT',
+    data: { menuIds },
+  })
+}
+
 // 获取菜单列表
 export const getMenuApi = () => {
   return request({

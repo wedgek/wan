@@ -6,6 +6,9 @@ import { setupNProgress } from "@/utils/nprogress"
 
 const NProgress = setupNProgress()
 
+/** 与 routes.js 中 notFoundRoute.name 一致，勿写成 NotFound（否则会重复注册多个 catch-all，首点动态页无法匹配） */
+const NOT_FOUND_NAME = notFoundRoute.name
+
 const router = createRouter({
   history: createWebHistory(),
   routes: staticRoutes,
@@ -13,6 +16,24 @@ const router = createRouter({
 
 // 已添加的动态路由名称（用于判断是否已注册 & 移除时使用）
 let addedRouteNames = []
+
+function collectMenuComponentNames(menus, out = new Set()) {
+  if (!menus?.length) return out
+  for (const m of menus) {
+    const key = m.componentName
+    if (key && typeof routeComponents[key] === "function") out.add(key)
+    if (m.children?.length) collectMenuComponentNames(m.children, out)
+  }
+  return out
+}
+
+/** 登录后后台预拉取菜单页 chunk，避免首点侧栏才请求模块时出现长时间进度条/跳转失败感 */
+export function prefetchMenuRouteChunks(menus) {
+  const names = collectMenuComponentNames(menus)
+  for (const key of names) {
+    routeComponents[key]().catch(() => {})
+  }
+}
 
 // 注册动态路由
 export const addDynamicRoutes = (menus, { force = false } = {}) => {
@@ -27,6 +48,10 @@ export const addDynamicRoutes = (menus, { force = false } = {}) => {
 
   if (!menus?.length) return
 
+  if (router.hasRoute(NOT_FOUND_NAME)) {
+    router.removeRoute(NOT_FOUND_NAME)
+  }
+
   const processMenu = (menu, parentPath = "") => {
     if (!menu.path) return
 
@@ -34,11 +59,12 @@ export const addDynamicRoutes = (menus, { force = false } = {}) => {
       .replace(/\/+/g, "/").replace(/\/$/, "") || "/"
     const routeName = fullPath.replace(/\//g, "-").replace(/^-+|-+$/g, "") || `menu-${menu.id}`
     const hasPermission = menu.status === 0
+    const load = menu.componentName ? routeComponents[menu.componentName] : null
 
     router.addRoute({
       path: fullPath,
       name: routeName,
-      component: hasPermission && menu.componentName ? routeComponents[menu.componentName] : null,
+      component: hasPermission && load ? load : null,
       redirect: hasPermission ? undefined : '/404',
       meta: {
         requiresAuth: true,
@@ -59,38 +85,22 @@ export const addDynamicRoutes = (menus, { force = false } = {}) => {
 
   menus.forEach(menu => processMenu(menu))
 
-  // 最后添加 404
-  if (!router.hasRoute('NotFound')) {
-    router.addRoute(notFoundRoute)
-  }
+  router.addRoute(notFoundRoute)
+  prefetchMenuRouteChunks(menus)
 }
 
 // 重置动态路由（退出登录时调用）
 export const resetDynamicRoutes = () => {
   addedRouteNames.forEach(name => router.removeRoute(name))
   addedRouteNames = []
-}
-
-// 清理残留遮罩层
-const clearOverlays = () => {
-  document.querySelectorAll('.el-overlay').forEach(el => {
-    // 只清理包含 dialog 或 message-box 的 overlay
-    if (el.querySelector('.el-dialog, .el-message-box')) {
-      el.remove()
-    }
-  })
-  document.body.style.overflow = ''
-  document.body.classList.remove('el-popup-parent--hidden')
+  if (router.hasRoute(NOT_FOUND_NAME)) {
+    router.removeRoute(NOT_FOUND_NAME)
+  }
 }
 
 // 路由守卫
 router.beforeEach(async (to, from, next) => {
   NProgress.start()
-  
-  // 路由切换时清理残留遮罩
-  if (from.path !== to.path) {
-    clearOverlays()
-  }
 
   const authStore = useAuthStore()
   const menuStore = useMenuStore()
@@ -135,16 +145,12 @@ router.beforeEach(async (to, from, next) => {
     return next('/404')
   }
 
-  // 顶部菜单联动
-  if (to.meta?.showNavbar) {
-    const topMenu = to.path === "/home" ? null : menuStore.findTopMenuByPath(to.path)
-    menuStore.setActiveTopMenu(topMenu)
-  }
-
   next()
 })
 
-router.afterEach(() => NProgress.done())
+router.afterEach(() => {
+  NProgress.done()
+})
 router.onError((err) => {
   console.error("路由错误:", err)
   NProgress.done()

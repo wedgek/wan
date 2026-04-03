@@ -5,7 +5,7 @@
     :index="fullPath"
   >
     <template #title>
-      <el-icon v-if="menu.icon" class="menu-icon">
+      <el-icon v-if="menu.icon" :class="menuIconClass">
         <component :is="menu.icon" />
       </el-icon>
       <span>{{ menu.name }}</span>
@@ -25,7 +25,7 @@
     v-else
     :index="fullPath"
   >
-    <el-icon v-if="menu.icon" class="menu-icon">
+    <el-icon v-if="menu.icon" :class="menuIconClass">
       <component :is="menu.icon" />
     </el-icon>
     <span>{{ menu.name }}</span>
@@ -38,6 +38,12 @@ const props = defineProps({
   menu: { type: Object, required: true },
   basePath: { type: String, default: '' }
 })
+
+/** 有 basePath 时为展开菜单下的子项（含多级子菜单标题），图标略小于顶级 */
+const menuIconClass = computed(() => [
+  'menu-icon',
+  props.basePath ? 'menu-icon--nested' : null,
+])
 
 // 过滤可见的子菜单（status === 0 且 visible === true）
 const visibleChildren = computed(() => {
@@ -68,5 +74,15 @@ const fullPath = computed(() => {
   margin-right: 10px !important;
   font-size: 18px;
   vertical-align: middle;
+
+  &--nested {
+    margin-right: 8px !important;
+    font-size: 15px;
+
+    :deep(svg) {
+      width: 1em;
+      height: 1em;
+    }
+  }
 }
 </style>

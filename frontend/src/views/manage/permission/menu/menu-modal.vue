@@ -34,8 +34,8 @@
                     <template #reference>
                         <div class="icon-selector-trigger">
                             <template v-if="formData.icon">
-                                <el-icon :size="18" class="selected-icon">
-                                    <component :is="ElementPlusIconsVue[formData.icon]" />
+                                <el-icon v-if="selectedIconComponent" :size="18" class="selected-icon">
+                                    <component :is="selectedIconComponent" />
                                 </el-icon>
                                 <span class="icon-name">{{ formData.icon }}</span>
                                 <el-icon class="clear-icon" @click.stop="formData.icon = ''">
@@ -108,12 +108,16 @@
 <script setup>
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import { iconfontIcons } from '@/plugins/iconfont'
-import { Compass, Postcard, Pointer } from '@element-plus/icons-vue'
+import { Close, Compass, Postcard, Pointer } from '@element-plus/icons-vue'
 import request from "@/request"
 import { resetState, cloneDeep } from "@/utils/lodash"
 import CzCardSelect from '@/components/cz-card-select/index.vue'
 
-const allIcons = Object.keys(ElementPlusIconsVue)
+/** 选择器里不展示的品牌 Logo 类图标（用户指定移除图 2 等） */
+const EXCLUDED_EP_MENU_ICONS = new Set(['Eleme', 'ElemeFilled', 'ElementPlus'])
+
+const allIcons = Object.keys(ElementPlusIconsVue).filter((name) => !EXCLUDED_EP_MENU_ICONS.has(name))
+
 const menuTypeOptions = [
     { value: 1, label: '导航', icon: Compass },
     { value: 2, label: '菜单', icon: iconfontIcons.Menu },
@@ -135,6 +139,13 @@ const filteredIcons = computed(() => {
     if (!iconSearch.value) return allIcons
     const keyword = iconSearch.value.toLowerCase()
     return allIcons.filter(name => name.toLowerCase().includes(keyword))
+})
+
+/** EP 主选；个别历史数据可能仅存 iconfont 名 */
+const selectedIconComponent = computed(() => {
+    const n = formData.icon
+    if (!n) return null
+    return ElementPlusIconsVue[n] || iconfontIcons[n] || null
 })
 
 // 弹框状态
@@ -257,38 +268,39 @@ defineExpose({ showAdd, showEdit })
     min-width: 200px;
     height: 32px;
     padding: 0 12px;
-    border: 1px solid #dcdfe6;
-    border-radius: 4px;
+    border: 1px solid var(--el-border-color);
+    border-radius: var(--el-border-radius-base);
+    background-color: var(--el-fill-color-blank);
     cursor: pointer;
-    transition: all 0.2s;
+    transition: border-color 0.2s, background-color 0.2s;
 
     &:hover {
-        border-color: #409eff;
+        border-color: var(--el-color-primary);
     }
 
     .selected-icon {
-        color: #409eff;
+        color: var(--el-color-primary);
     }
 
     .icon-name {
         flex: 1;
-        color: #606266;
+        color: var(--el-text-color-regular);
         font-size: 12px;
     }
 
     .placeholder {
         flex: 1;
-        color: #a8abb2;
+        color: var(--el-text-color-placeholder);
         font-size: 12px;
     }
 
     .clear-icon {
-        color: #c0c4cc;
+        color: var(--el-text-color-secondary);
         font-size: 14px;
         transition: color 0.2s;
         
         &:hover {
-            color: #909399;
+            color: var(--el-text-color-regular);
         }
     }
 }
@@ -313,23 +325,40 @@ defineExpose({ showAdd, showEdit })
             justify-content: center;
             width: 40px;
             height: 40px;
-            border: 1px solid #ebeef5;
-            border-radius: 4px;
+            border: 1px solid var(--el-border-color);
+            border-radius: var(--el-border-radius-base);
             cursor: pointer;
-            transition: all 0.2s;
-            color: #606266;
+            transition: border-color 0.2s, color 0.2s, background-color 0.2s;
+            color: var(--el-text-color-regular);
+            background-color: var(--el-fill-color-blank);
 
             &:hover {
-                border-color: #409eff;
-                color: #409eff;
-                background-color: #ecf5ff;
+                border-color: var(--el-color-primary);
+                color: var(--el-color-primary);
+                background-color: var(--el-fill-color-light);
             }
 
             &.active {
-                border-color: #409eff;
-                color: #fff;
-                background-color: #409eff;
+                border-color: var(--el-color-primary);
+                color: var(--el-color-white);
+                background-color: var(--el-color-primary);
             }
+        }
+
+        scrollbar-width: thin;
+        scrollbar-color: var(--el-fill-color-darker) transparent;
+
+        &::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        &::-webkit-scrollbar-thumb {
+            background-color: var(--el-fill-color-darker);
+            border-radius: 3px;
+        }
+
+        &::-webkit-scrollbar-track {
+            background: transparent;
         }
     }
 }

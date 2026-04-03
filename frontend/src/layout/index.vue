@@ -1,15 +1,32 @@
 <template>
-  <div class="layout-container">
-    <!-- 导航栏 -->
-    <Navbar v-if="showNavbar" />
+  <div class="layout-container" :class="{ 'layout-container--fullpage': isFullPage }">
+    <Navbar v-if="!isFullPage && showNavbar" />
 
-    <div class="layout-main">
-      <!-- 侧边栏 -->
-      <Sidebar v-if="showSidebar" />
+    <div class="layout-main" :class="{ 'layout-main--fullpage': isFullPage }">
+      <Sidebar v-if="!isFullPage && showSidebar && !isMobile" />
 
-      <!-- 页面内容 -->
-      <div class="page-content">
-        <div class="content-wrapper" :class="{ 'no-padding': route.meta?.noPadding }">
+      <el-drawer
+        v-if="!isFullPage && showSidebar && isMobile"
+        v-model="mobileDrawerOpen"
+        direction="rtl"
+        size="min(300px, 88vw)"
+        :with-header="false"
+        body-class="layout-mobile-drawer-body"
+        append-to-body
+        class="layout-mobile-nav-drawer"
+      >
+        <Sidebar in-drawer />
+      </el-drawer>
+
+      <div class="page-content" :class="{ 'page-content--fullpage': isFullPage }">
+        <div
+          class="content-wrapper"
+          :class="{
+            'no-padding': route.meta?.noPadding || isFullPage,
+            'content-wrapper--fullpage': isFullPage,
+            'content-wrapper--wide': route.meta?.wideContent && !isFullPage,
+          }"
+        >
           <router-view v-slot="{ Component, route: routeItem }">
             <keep-alive :include="keepAlivePages">
               <component v-if="Component" :is="Component" :key="routeItem.path" class="page-transition-wrapper" />
@@ -25,12 +42,35 @@
 </template>
 
 <script setup>
+import { watch } from "vue"
+import { storeToRefs } from "pinia"
+import { useMenuStore } from "@/stores/menu"
+import { isMobileViewport } from "@/composables/useIsMobile"
 import Navbar from "./components/navbar/index.vue"
 import Sidebar from "./components/sidebar/index.vue"
 
 const route = useRoute()
+const menuStore = useMenuStore()
+const { mobileDrawerOpen } = storeToRefs(menuStore)
 
-// 控制显示导航栏和侧边栏
+const isMobile = isMobileViewport
+
+watch(isMobile, (m) => {
+  if (!m) menuStore.setMobileDrawerOpen(false)
+})
+
+watch(
+  () => route.fullPath,
+  () => {
+    if (isMobile.value) menuStore.setMobileDrawerOpen(false)
+  },
+)
+
+// 登录/404 等整页：不显顶栏与侧栏，也不套内容区外壳（避免首屏闪现管理台骨架）
+const isFullPage = computed(
+  () => route.meta?.showNavbar === false && route.meta?.showSidebar === false,
+)
+
 const showNavbar = computed(() => route.meta?.showNavbar ?? true)
 const showSidebar = computed(() => route.meta?.showSidebar ?? true)
 
@@ -46,32 +86,74 @@ const keepAlivePages = computed(() => {
   flex-direction: column;
   height: 100vh;
   overflow: hidden;
-  background-color: $bg-page;
+  background-color: var(--app-bg);
+
+  &.layout-container--fullpage {
+    background-color: transparent;
+  }
+
   .layout-main {
     display: flex;
     flex: 1;
     overflow: hidden;
+
+    &.layout-main--fullpage {
+      min-height: 0;
+    }
+
     .page-content {
       flex: 1;
       display: flex;
       flex-direction: column;
       overflow: hidden;
+
+      &.page-content--fullpage {
+        min-height: 0;
+      }
+
       .content-wrapper {
         flex: 1;
         overflow-y: auto;
-        background-color: $bg-page;
+        background-color: var(--app-bg);
         position: relative;
         padding: $content-outside-padding;
         &.no-padding {
           padding: 0;
         }
-        .page-transition-wrapper,
+
+        &.content-wrapper--fullpage {
+          background-color: transparent;
+        }
+
+        /* 工作台：四边略小于常规页；仅底部内边距略收紧，不动内部布局 */
+        &.content-wrapper--wide {
+          padding: clamp(12px, 1.35vw, 22px);
+          padding-bottom: clamp(8px, 1vw, 16px);
+        }
+
+        /* 高度随内容增长，避免短页被外壳强制拉高 */
+        .page-transition-wrapper {
+          height: auto;
+          position: relative;
+        }
+
         .page-empty-box {
-          height: 100%;
+          min-height: min(620px, 70vh);
           position: relative;
         }
       }
     }
   }
+}
+</style>
+
+<style lang="scss">
+/* 移动端导航抽屉：无内边距，侧栏铺满 */
+.layout-mobile-drawer-body.el-drawer__body {
+  padding: 0 !important;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
 }
 </style>

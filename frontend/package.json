@@ -11,6 +11,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fontsource/sora": "^5.2.8",
     "ali-oss": "^6.23.0",
     "axios": "^1.13.2",
     "cropperjs": "^1.6.2",

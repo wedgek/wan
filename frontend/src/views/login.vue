@@ -1,113 +1,107 @@
 <template>
-  <section class="login-page">
-    <!-- 左侧插画区域 -->
-    <div class="login-illustration">
-      <div class="logo-text">
-        <img src="@/assets/images/logo.png" alt="万相中台">
-        <span>万相中台</span>
+  <div class="login-frame">
+    <section class="login-page">
+    <header class="login-top">
+      <div class="brand-row">
+        <img src="@/assets/images/logo.svg" alt="万相AI中台" class="brand-logo" />
       </div>
-      <div class="illustration-content">
-        <!-- 可视化面板 -->
-        <div class="data-panel panel-1">
-          <div class="chart-bar"></div>
-        </div>
-        <div class="data-panel panel-2">
-          <div class="chart-line"></div>
-        </div>
-        <div class="data-panel panel-3">
-          <div class="chart-bars"></div>
-        </div>
-        <div class="data-panel panel-4">
-          <div class="chart-donut"></div>
-        </div>
-        <div class="data-panel panel-5">
-          <div class="chart-donut-small"></div>
-        </div>
-        <!-- 圆形平台 -->
-        <div class="circular-platform"></div>
-        <!-- 装饰元素 -->
-        <div class="decorative-element element-1"></div>
-        <div class="decorative-element element-2"></div>
-        <div class="decorative-element element-3"></div>
+      <div class="top-tools">
+        <ThemeSwitch />
+        <span class="login-tool-divider" aria-hidden="true" />
+        <el-tooltip :content="isFullscreen ? '退出全屏' : '全屏'" placement="bottom" :show-after="300">
+          <button
+            type="button"
+            class="login-tool-btn"
+            :aria-label="isFullscreen ? '退出全屏' : '全屏'"
+            @click="toggleFullscreen"
+          >
+            <el-icon><Notification /></el-icon>
+          </button>
+        </el-tooltip>
       </div>
-    </div>
+    </header>
 
-    <!-- 登录表单 -->
-    <div class="login-form-wrapper">
-      <div class="login-form">
-        <div class="title-block">
-          <h1 class="login-title">欢迎登录</h1>
+    <main class="login-main">
+      <div class="login-stack">
+        <h1 class="headline-main">欢迎登录<span class="headline-brand">万相AI中台</span></h1>
+        <p class="subhead">请使用管理员为您分配的账号与密码</p>
+
+        <div class="section-label">
+          <span class="section-label-line" />
+          <span>使用账号密码登录</span>
+          <span class="section-label-line" />
         </div>
 
-        <div class="form-block">
-          <form @submit.prevent="handleLogin">
-            <div class="form-group">
-              <label class="form-label">
-                <el-icon class="label-icon"><User /></el-icon>
-                用户名
-              </label>
-              <el-input 
-                v-model="loginForm.username" 
-                placeholder="请输入用户名" 
-                size="large" 
-                clearable
-                clear-icon="Close"
-                class="custom-input"
-              />
-            </div>
-
-            <div class="form-group">
-              <label class="form-label">
-                <el-icon class="label-icon"><Lock /></el-icon>
-                密码
-              </label>
-              <el-input 
-                v-model="loginForm.password" 
-                type="password" 
-                placeholder="请输入登录密码" 
-                size="large" 
-                show-password 
-                clearable
-                clear-icon="Close"
-                class="custom-input"
-              />
-            </div>
-
-            <div class="form-options">
-              <el-checkbox v-model="rememberPassword">记住密码</el-checkbox>
-              <a href="#" class="forgot-password">忘记密码？</a>
-            </div>
-
-            <el-button 
-              type="primary" 
-              class="login-btn" 
-              native-type="submit" 
-              size="large" 
-              :loading="loading"
+        <form class="login-form" @submit.prevent="handleLogin">
+          <div class="field">
+            <el-input
+              v-model="loginForm.username"
+              size="large"
+              placeholder="请输入用户名或账号"
+              clearable
+              clear-icon="Close"
+              class="premium-input"
+              autocomplete="username"
             >
-              <span>登录</span>
-            </el-button>
-          </form>
-        </div>
+              <template #prefix>
+                <el-icon class="input-ico"><User /></el-icon>
+              </template>
+            </el-input>
+          </div>
 
-        <div class="bottom-block">
-          <hr class="divider" />
+          <div class="field">
+            <el-input
+              v-model="loginForm.password"
+              type="password"
+              size="large"
+              placeholder="请输入密码"
+              show-password
+              clearable
+              clear-icon="Close"
+              class="premium-input"
+              autocomplete="current-password"
+            >
+              <template #prefix>
+                <el-icon class="input-ico"><Lock /></el-icon>
+              </template>
+            </el-input>
+          </div>
 
-          <p class="register-text">
-            没有账户？<a href="#" class="register-link">注册</a>
-          </p>
+          <div class="form-row">
+            <el-checkbox v-model="rememberPassword" class="remember-check">记住密码</el-checkbox>
+            <a href="#" class="link-subtle" @click.prevent="onForgotPassword">忘记密码？</a>
+          </div>
 
-          <p class="copyright">&copy; 2026 万相中台 - All Rights Reserved</p>
-        </div>
+          <el-button
+            type="primary"
+            class="submit-premium"
+            native-type="submit"
+            size="large"
+            :loading="loading"
+          >
+            登录
+          </el-button>
+        </form>
+
+        <p class="extra-hint">
+          没有账户？
+          <a href="#" class="link-accent" @click.prevent="onRegister">申请开通</a>
+        </p>
       </div>
+    </main>
 
-    </div>
-  </section>
+    <footer class="login-footer">
+      <p class="copyright">&copy; {{ year }} wedgex · All rights reserved</p>
+    </footer>
+    </section>
+  </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
-import router, { addDynamicRoutes } from "@/router"
+import { ref, reactive, onMounted, onUnmounted, computed } from 'vue'
+import { Notification } from '@element-plus/icons-vue'
+import ThemeSwitch from '@/components/theme-switch/index.vue'
+import router, { addDynamicRoutes } from '@/router'
 import { useAuthStore } from '@/stores/auth.js'
 import { useMenuStore } from '@/stores/menu.js'
 import { ElMessage } from 'element-plus'
@@ -117,6 +111,8 @@ import { getTimeGreeting } from '@/utils/time.js'
 const authStore = useAuthStore()
 const menuStore = useMenuStore()
 
+const year = computed(() => new Date().getFullYear())
+
 const loading = ref(false)
 const rememberPassword = ref(false)
 
@@ -125,20 +121,43 @@ const loginForm = reactive({
   password: '',
 })
 
-// 从本地存储读取记住的密码
+const isFullscreen = ref(false)
+
+const syncFullscreen = () => {
+  isFullscreen.value = !!document.fullscreenElement
+}
+
+const toggleFullscreen = async () => {
+  try {
+    if (!document.fullscreenElement) {
+      await document.documentElement.requestFullscreen()
+    } else {
+      await document.exitFullscreen()
+    }
+  } catch {
+    ElMessage.warning('当前浏览器或环境不支持全屏')
+  }
+}
+
 onMounted(() => {
   const savedUsername = getStorage('saved_username')
   const savedPassword = getStorage('saved_password')
   const savedRemember = getStorage('remember_password')
-  
+
   if (savedRemember === 'true' && savedUsername && savedPassword) {
     loginForm.username = savedUsername
     loginForm.password = savedPassword
     rememberPassword.value = true
   }
+
+  document.addEventListener('fullscreenchange', syncFullscreen)
+  syncFullscreen()
 })
 
-// 校验登录表单函数
+onUnmounted(() => {
+  document.removeEventListener('fullscreenchange', syncFullscreen)
+})
+
 const validateLoginForm = () => {
   if (!loginForm.username) {
     ElMessage.error('请输入用户名')
@@ -156,9 +175,8 @@ const validateLoginForm = () => {
 }
 
 const handleLogin = async () => {
-  // 表单校验
   if (!validateLoginForm()) return
-  
+
   loading.value = true
   try {
     await authStore.login(loginForm)
@@ -172,448 +190,464 @@ const handleLogin = async () => {
       removeStorage('saved_password')
       removeStorage('remember_password')
     }
-    
-    // 获取用户信息
+
     await authStore.getUserInfo()
-    
-    // 强制注册动态路由，确保切换账号时路由正确更新
+
     if (menuStore.menus?.length) {
       addDynamicRoutes(menuStore.menus, { force: true })
     }
-    
+
     ElMessage.success(getTimeGreeting(authStore.user?.nickname))
-    router.replace("/home")
+    router.replace('/home')
   } catch (error) {
-    console.log("🚀 ~ handleLogin ~ error:", error)
+    console.log('handleLogin error:', error)
     ElMessage.error(error.message || '登录失败')
   } finally {
     loading.value = false
   }
 }
 
+const onForgotPassword = () => {
+  ElMessage.info('请联系管理员重置密码')
+}
+
+const onRegister = () => {
+  ElMessage.info('注册功能暂未开放，请联系管理员开通账号')
+}
 </script>
 
 <style scoped lang="scss">
+@use '@/styles/variables.scss' as *;
+
+// 外层留白 + 四周边框画框（参考 Lobe 整页线框）；与 inner 的 min-height 联动
+$login-frame-gutter: 10px;
+
+.login-frame {
+  box-sizing: border-box;
+  min-height: 100vh;
+  padding: $login-frame-gutter;
+  background: var(--login-frame-bg);
+}
+
 .login-page {
+  box-sizing: border-box;
+  min-height: calc(100vh - #{$login-frame-gutter * 2});
   display: flex;
-  height: 100vh;
+  flex-direction: column;
+  background: var(--login-page-bg);
+  color: var(--login-text-secondary);
+  border: 1px solid var(--login-page-border);
+  border-radius: 10px;
   overflow: hidden;
+  transition:
+    background 0.2s ease,
+    color 0.2s ease,
+    border-color 0.2s ease;
+}
 
-  // 左侧插画区域
-  .login-illustration {
-    display: none;
-    position: relative;
-    flex: 1.4;
-    background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 50%, #90caf9 100%);
-    overflow: hidden;
+.login-top {
+  flex-shrink: 0;
+  padding: 16px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
 
-    @media (min-width: 1024px) {
-      display: block;
-    }
+.brand-row {
+  display: inline-flex;
+  align-items: center;
+}
 
-    .logo-text {
-      position: absolute;
-      top: 40px;
-      left: 40px;
-      font-size: 18px;
-      font-weight: bold;
-      color: #000;
-      z-index: 10;
-      display: flex;
-      align-items: center;
-      gap: 15px;
-      img{
-        height: 30px;
-      }
-    }
+.brand-logo {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+}
 
-    .illustration-content {
-      position: relative;
-      width: 100%;
-      height: 100%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
+.login-footer {
+  flex-shrink: 0;
+  padding: 8px 24px 22px;
+  text-align: center;
+}
 
-    // 数据面板
-    .data-panel {
-      position: absolute;
-      background: rgba(255, 255, 255, 0.9);
-      border-radius: 8px;
-      backdrop-filter: blur(10px);
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-      padding: 20px;
-      z-index: 2;
-      animation: ani-float 6s ease-in-out infinite;
-    }
+.top-tools {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  /* 与顶栏一致：默认灰、悬浮略深灰 + 浅底，不用主题色 */
+  --theme-trigger-color: var(--app-muted);
+  --theme-trigger-hover-bg: var(--nav-tool-hover-bg);
+  --theme-trigger-hover-color: var(--nav-tool-icon-hover);
+}
 
-    .panel-1 {
-      width: 180px;
-      height: 120px;
-      top: 20%;
-      left: 15%;
-      animation-delay: 0s;
-    }
+.login-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--theme-trigger-color, var(--app-muted));
+  cursor: pointer;
+  transition:
+    background 0.2s ease,
+    color 0.2s ease;
 
-    .panel-2 {
-      width: 160px;
-      height: 100px;
-      top: 15%;
-      right: 20%;
-      animation-delay: 1s;
-    }
-
-    .panel-3 {
-      width: 140px;
-      height: 140px;
-      bottom: 35%;
-      left: 10%;
-      animation-delay: 2s;
-    }
-
-    .panel-4 {
-      width: 120px;
-      height: 120px;
-      bottom: 25%;
-      left: 25%;
-      animation-delay: 1.5s;
-    }
-
-    .panel-5 {
-      width: 100px;
-      height: 100px;
-      bottom: 20%;
-      right: 15%;
-      animation-delay: 2.5s;
-    }
-
-    // 图表样式
-    .chart-bar {
-      width: 100%;
-      height: 100%;
-      display: flex;
-      align-items: flex-end;
-      justify-content: space-around;
-      gap: 8px;
-      
-      &::before,
-      &::after {
-        content: '';
-        background: #64b5f6;
-        border-radius: 2px;
-      }
-      
-      &::before {
-        width: 20%;
-        height: 60%;
-      }
-      
-      &::after {
-        width: 20%;
-        height: 80%;
-      }
-    }
-
-    .chart-line {
-      width: 100%;
-      height: 100%;
-      position: relative;
-      background: linear-gradient(to top, 
-        transparent 0%, 
-        transparent 30%,
-        #64b5f6 30%,
-        #64b5f6 35%,
-        transparent 35%,
-        transparent 50%,
-        #64b5f6 50%,
-        #64b5f6 65%,
-        transparent 65%,
-        transparent 80%,
-        #64b5f6 80%,
-        #64b5f6 100%
-      );
-      border-radius: 4px;
-    }
-
-    .chart-bars {
-      width: 100%;
-      height: 100%;
-      display: flex;
-      align-items: flex-end;
-      justify-content: space-around;
-      gap: 6px;
-      
-      &::before,
-      &::after {
-        content: '';
-        background: #64b5f6;
-        border-radius: 2px;
-      }
-      
-      &::before {
-        width: 25%;
-        height: 40%;
-      }
-      
-      &::after {
-        width: 25%;
-        height: 70%;
-      }
-    }
-
-    .chart-donut {
-      width: 100%;
-      height: 100%;
-      position: relative;
-      border-radius: 50%;
-      background: conic-gradient(
-        #64b5f6 0deg 120deg,
-        #90caf9 120deg 240deg,
-        #bbdefb 240deg 360deg
-      );
-      mask: radial-gradient(circle at center, transparent 40%, black 40%);
-    }
-
-    .chart-donut-small {
-      width: 100%;
-      height: 100%;
-      position: relative;
-      border-radius: 50%;
-      background: conic-gradient(
-        #90caf9 0deg 180deg,
-        #bbdefb 180deg 360deg
-      );
-      mask: radial-gradient(circle at center, transparent 35%, black 35%);
-    }
-
-    // 圆形平台
-    .circular-platform {
-      position: absolute;
-      bottom: 15%;
-      left: 50%;
-      transform: translateX(-50%);
-      width: 300px;
-      height: 300px;
-      background: radial-gradient(circle, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.8) 100%);
-      border-radius: 50%;
-      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
-      z-index: 1;
-      
-      &::before {
-        content: '';
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        width: 250px;
-        height: 250px;
-        background: radial-gradient(circle, rgba(187, 222, 251, 0.3) 0%, transparent 70%);
-        border-radius: 50%;
-      }
-    }
-
-    // 装饰元素
-    .decorative-element {
-      position: absolute;
-      background: rgba(144, 202, 249, 0.3);
-      border-radius: 50%;
-      backdrop-filter: blur(5px);
-    }
-
-    .element-1 {
-      width: 200px;
-      height: 200px;
-      top: 10%;
-      right: 10%;
-      border-radius: 30% 70% 70% 30% / 30% 30% 70% 70%;
-      animation: ani-float 8s ease-in-out infinite;
-    }
-
-    .element-2 {
-      width: 150px;
-      height: 150px;
-      bottom: 10%;
-      right: 20%;
-      border-radius: 60% 40% 30% 70% / 60% 30% 70% 40%;
-      animation: ani-float 7s ease-in-out infinite reverse;
-    }
-
-    .element-3 {
-      width: 100px;
-      height: 100px;
-      top: 50%;
-      left: 5%;
-      border-radius: 40% 60% 60% 40% / 60% 30% 70% 40%;
-      animation: ani-float 9s ease-in-out infinite;
-    }
-
+  .el-icon {
+    font-size: 19px;
+    color: inherit;
   }
 
-  // 右侧登录表单
-  .login-form-wrapper {
-    flex: 1;
-    display: flex;
+  &:hover {
+    background: var(--theme-trigger-hover-bg, var(--login-focus-ring));
+    color: var(--theme-trigger-hover-color, var(--el-color-primary));
+  }
+}
+
+.login-tool-divider {
+  width: 1px;
+  height: 14px;
+  margin: 0 6px;
+  flex-shrink: 0;
+  align-self: center;
+  background: var(--login-divider);
+  opacity: 0.9;
+}
+
+.login-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 24px 32px;
+}
+
+.login-stack {
+  width: 100%;
+  max-width: 432px;
+  font-family: $font-family;
+  animation: stack-in 0.65s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.headline-main {
+  --login-brand-font:
+    'DingTalk JinBuTi',
+    'PingFang SC',
+    'Microsoft YaHei',
+    ui-sans-serif,
+    system-ui,
+    sans-serif;
+  font-family: var(--login-brand-font);
+  margin: 0 0 16px;
+  font-size: clamp(24px, 4vw, 30px);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.22;
+  color: var(--login-text-primary);
+}
+
+.headline-brand {
+  display: inline;
+  color: var(--login-headline-brand);
+}
+
+.subhead {
+  --login-brand-font:
+    'PingFang SC',
+    'Microsoft YaHei',
+    ui-sans-serif,
+    system-ui,
+    sans-serif;
+  font-family: var(--login-brand-font);
+  margin: 0 0 36px;
+  font-size: 15px;
+  font-weight: 400;
+  color: var(--login-text-muted);
+  line-height: 1.65;
+  letter-spacing: 0.01em;
+}
+
+.section-label {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 22px;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  color: var(--login-text-faint);
+  user-select: none;
+}
+
+.section-label-line {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--login-divider) 15%,
+    var(--login-divider) 85%,
+    transparent
+  );
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.field {
+  margin-bottom: 14px;
+}
+
+.input-ico {
+  font-size: 18px;
+  color: var(--login-icon-muted);
+}
+
+.premium-input {
+  :deep(.el-input__wrapper) {
+    border-radius: 14px;
+    padding: 4px 16px;
+    min-height: 52px;
+    background: var(--login-input-bg);
+    box-shadow: none;
+    border: 1px solid var(--login-input-border);
+    transition:
+      border-color 0.2s,
+      background 0.2s,
+      box-shadow 0.2s;
+
+    &:hover {
+      background: var(--login-input-bg-hover);
+      border-color: var(--login-input-border-hover);
+    }
+
+    &.is-focus {
+      background: var(--login-input-bg-hover);
+      border-color: var(--login-input-focus);
+      box-shadow: 0 0 0 3px var(--login-focus-ring);
+    }
+  }
+
+  :deep(.el-input__inner) {
+    font-size: 15px;
+    font-weight: 400;
+    letter-spacing: 0.01em;
+    color: var(--login-input-text);
+
+    &::placeholder {
+      color: var(--login-placeholder);
+      font-weight: 400;
+    }
+  }
+}
+
+.form-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 6px 0 22px;
+  gap: 12px;
+}
+
+.remember-check {
+  :deep(.el-checkbox__label) {
+    font-size: 13px;
+    color: var(--login-check-label);
+  }
+
+  :deep(.el-checkbox__input.is-checked .el-checkbox__inner) {
+    background-color: var(--login-check-checked);
+    border-color: var(--login-check-checked);
+  }
+}
+
+.link-subtle {
+  font-size: 13px;
+  color: var(--login-text-muted);
+  text-decoration: none;
+  transition: color 0.2s;
+
+  &:hover {
+    color: var(--login-link-accent);
+  }
+}
+
+.submit-premium {
+  width: 100%;
+  height: 50px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.015em;
+  font-family: $font-family;
+  border-radius: 14px;
+  border: none;
+  background: var(--login-submit-bg) !important;
+  color: var(--login-submit-color) !important;
+
+  &:hover,
+  &:focus {
+    background: var(--login-submit-bg-hover) !important;
+    color: var(--login-submit-color) !important;
+  }
+
+  &:active {
+    background: var(--login-submit-bg-active) !important;
+  }
+}
+
+.link-accent {
+  color: var(--login-link-accent);
+  text-decoration: none;
+  font-weight: 500;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.2s;
+
+  &:hover {
+    border-bottom-color: var(--login-link-accent);
+  }
+}
+
+.extra-hint {
+  margin: 20px 0 0;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--login-text-muted);
+}
+
+.copyright {
+  --login-brand-font:
+    'DingTalk JinBuTi',
+    'PingFang SC',
+    'Microsoft YaHei',
+    ui-sans-serif,
+    system-ui,
+    sans-serif;
+  font-family: var(--login-brand-font);
+  margin: 0;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--login-copyright);
+  letter-spacing: 0.03em;
+}
+
+@keyframes stack-in {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 电脑端：整块略上移，大屏上不再「沉底」；标题略加大以匹配产品名 */
+@media (min-width: 641px) {
+  .login-main {
+    padding: 16px 32px 48px;
     align-items: center;
     justify-content: center;
-    background-color: #ffffff;
-    padding: 0 3rem;
-    min-width: 0;
+  }
 
-    .login-form {
-      width: 100%;
-      max-width: 420px;
-      animation: ani-fade-up 0.6s ease-out;
+  .login-stack {
+    margin-top: min(-3vh, -24px);
+  }
 
-      .login-title {
-        font-size: 32px;
-        font-weight: 700;
-        color: #000;
-        margin-bottom: 40px;
-        line-height: 1.2;
-      }
+  .headline-main {
+    font-size: clamp(28px, 2.4vw, 34px);
+    margin-bottom: 14px;
+  }
 
-      .form-group {
-        margin-bottom: 24px;
+  .subhead {
+    margin-bottom: 32px;
+    font-size: 15px;
+  }
+}
 
-        .form-label {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          font-size: 14px;
-          font-weight: 500;
-          color: #262626;
-          margin-bottom: 8px;
+/* 手机端：参考 Lobe 式层级 — 大标题偏上、副标略大、留白更松 */
+@media (max-width: 640px) {
+  .login-top {
+    padding: 16px 18px;
+  }
 
-          .label-icon {
-            font-size: 16px;
-            color: #1890ff;
-          }
-        }
+  .brand-logo {
+    width: 34px;
+    height: 34px;
+  }
 
-        .custom-input {
-          :deep(.el-input__wrapper) {
-            border-radius: 4px;
-            box-shadow: 0 0 0 1px #d9d9d9 inset;
+  .login-main {
+    flex: 1;
+    align-items: flex-start;
+    justify-content: flex-start;
+    padding: clamp(28px, 7vh, 48px) 20px 20px;
+  }
 
-            &:hover {
-              box-shadow: 0 0 0 1px #40a9ff inset;
-            }
+  .login-stack {
+    margin: 0 auto;
+    width: 100%;
+    max-width: 100%;
+  }
 
-            &.is-focus {
-              box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2) inset, 0 0 0 1px #1890ff inset;
-            }
-          }
-        }
-      }
+  .headline-main {
+    font-size: clamp(26px, 7.2vw, 30px);
+    font-weight: 700;
+    line-height: 1.22;
+    letter-spacing: -0.028em;
+    margin: 0 0 12px;
+  }
 
-      .form-options {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 24px;
+  .subhead {
+    font-size: 15px;
+    font-weight: 400;
+    line-height: 1.62;
+    color: var(--login-text-muted);
+    margin: 0 0 32px;
+  }
 
-        .forgot-password {
-          font-size: 14px;
-          color: #8c8c8c;
-          text-decoration: none;
-          transition: color 0.3s;
+  .section-label {
+    margin-bottom: 20px;
+    font-size: 12px;
+    gap: 12px;
+  }
 
-          &:hover {
-            color: #1890ff;
-          }
-        }
-      }
+  .field {
+    margin-bottom: 12px;
+  }
 
-      .login-btn {
-        width: 100%;
-        height: 40px;
-        font-size: 16px;
-        font-weight: 500;
-        border-radius: 4px;
-        background: #1890ff;
-        transition: all 0.3s ease;
-
-        span {
-          display: inline-block;
-          position: relative;
-          transition: padding 0.3s ease;
-
-          &::after {
-            content: '»';
-            position: absolute;
-            top: 0;
-            right: -15px;
-            opacity: 0;
-            transition: all 0.3s ease;
-          }
-        }
-
-        &:hover {
-          background: #40a9ff;
-          border-color: #40a9ff;
-          span {
-            padding-right: 18px;
-
-            &::after {
-              opacity: 1;
-              right: 0;
-            }
-          }
-        }
-        &:active {
-          background: #096dd9;
-          border-color: #096dd9;
-        }
-      }
-      .divider {
-        margin: 2rem 0;
-        border: none;
-        border-top: 1px solid #ddd;
-      }
-
-      .register-text {
-        text-align: center;
-        margin-bottom: 2rem;
-        color: #6b7280;
-
-        .register-link {
-          color: #1890ff;
-          font-weight: 600;
-          text-decoration: none;
-          &:hover {
-            text-decoration: underline;
-          }
-        }
-      }
-
-      .copyright {
-        text-align: center;
-        font-size: 0.8125rem;
-        color: #9ca3af;
-      }
-
-      .title-block {
-        opacity: 0;
-        transform: translateY(20px);
-        animation: ani-fade-up-spring 0.4s cubic-bezier(0.68, -0.55, 0.27, 1.55) forwards;
-        animation-delay: 0.05s;
-      }
-
-      .form-block {
-        opacity: 0;
-        transform: translateY(20px);
-        animation: ani-fade-up-spring 0.4s cubic-bezier(0.68, -0.55, 0.27, 1.55) forwards;
-        animation-delay: 0.2s;
-      }
-
-      .bottom-block {
-        opacity: 0;
-        transform: translateY(20px);
-        animation: ani-fade-up-spring 0.4s cubic-bezier(0.68, -0.55, 0.27, 1.55) forwards;
-        animation-delay: 0.35s;
-      }
+  .premium-input {
+    :deep(.el-input__wrapper) {
+      min-height: 50px;
     }
+
+    :deep(.el-input__inner) {
+      font-size: 16px;
+    }
+  }
+
+  .form-row {
+    margin: 4px 0 20px;
+  }
+
+  .submit-premium {
+    height: 48px;
+    font-size: 16px;
+  }
+
+  .extra-hint {
+    margin-top: 24px;
+    font-size: 14px;
+  }
+
+  .login-footer {
+    padding: 16px 16px max(20px, env(safe-area-inset-bottom, 0px));
   }
 }
 </style>

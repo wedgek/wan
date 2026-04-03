@@ -131,12 +131,12 @@
   }
 }
 
-// 容器类
+// 容器类（背景随主题，与 --el-bg-color / --app-surface 一致）
 .page-container {
   display: flex;
   flex-direction: column;
   padding: $content-padding;
-  background-color: $bg-white;
+  background-color: var(--app-surface);
   border-radius: $border-radius-lg;
   box-shadow: $shadow-sm;
   height: calc(100vh - #{$header-height} - #{$content-padding * 2});
@@ -178,9 +178,9 @@
     align-items: center;
     justify-content: space-between;
     padding: $content-mini-padding;
-    background-color: $bg-light;
+    background-color: var(--el-fill-color-light);
     border-radius: 4px 4px 0 0;
-    border: 1px solid $table-header-operate;
+    border: 1px solid var(--el-border-color-lighter);
     border-bottom: none;
     box-sizing: border-box;
   }
@@ -207,5 +207,19 @@
   color: #fff !important;
   border-color: $warning-color !important;
   background-color: $warning-color !important;
+}
+
+html.dark {
+  *:hover {
+    scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+  }
+
+  *:hover::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.12);
+  }
+
+  *:hover::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
+  }
 }
 

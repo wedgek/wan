@@ -2,116 +2,94 @@
   <nav class="nav-bar">
     <!-- Logo 区域 -->
     <div class="nav-brand" @click="goToHome">
-      <img src="@/assets/images/logo.png" class="brand-logo" alt="LOGO">
-      <span class="brand-name">万相中台</span>
+      <img src="@/assets/images/logo.svg" class="brand-logo" alt="LOGO">
+        <span class="brand-name">万相AI管理系统</span>
     </div>
 
-    <!-- 分隔线 -->
-    <div class="nav-divider"></div>
-
-    <!-- 导航菜单区域 -->
-    <div class="nav-menus">
-      <div 
-        class="nav-menu-item" 
-        :class="{ 'is-active': isHomeActive }" 
-        @click="goToHome"
-      >
-        <el-icon class="menu-icon"><HomeFilled /></el-icon>
-        <span class="menu-label">首页</span>
-      </div>
-      <div
-        v-for="menu in topMenus"
-        :key="menu.id"
-        class="nav-menu-item"
-        :class="{ 'is-active': isTopMenuActive(menu) }"
-        @click="handleTopMenuClick(menu)"
-      >
-        <el-icon v-if="menu.icon" class="menu-icon">
-          <component :is="menu.icon" />
-        </el-icon>
-        <span class="menu-label">{{ menu.name }}</span>
-      </div>
+    <div v-show="!isMobile" class="nav-center">
+      <NavMenuSearch />
     </div>
 
-    <!-- 右侧工具区域 -->
+    <!-- 桌面端：主题 / 全屏 / 消息 / 用户；移动端：仅菜单入口 -->
     <div class="nav-tools">
-      <!-- 快捷操作 -->
-      <div class="tool-actions">
-        <el-tooltip content="使用文档" placement="bottom" :show-after="300">
-          <div class="tool-btn" @click="handleDocumentClick">
+      <template v-if="!isMobile">
+        <ThemeSwitch />
+        <el-tooltip :content="isFullscreen ? '退出全屏' : '全屏'" placement="bottom" :show-after="300">
+          <div class="tool-btn" role="button" tabindex="0" @click="toggleFullscreen" @keydown.enter.prevent="toggleFullscreen">
             <el-icon><Notification /></el-icon>
           </div>
         </el-tooltip>
-        <el-tooltip content="消息通知" placement="bottom" :show-after="300">
-          <div class="tool-btn tool-bell" @click="handleMessageClick">
-            <el-icon><Bell /></el-icon>
-            <span class="tool-badge" v-if="unreadCount > 0">{{ unreadCount > 99 ? '99+' : unreadCount }}</span>
-          </div>
-        </el-tooltip>
-        
-        <!-- APP下载 -->
-        <ApkModal>
-          <div class="tool-btn">
-            <el-icon><Download /></el-icon>
-          </div>
-        </ApkModal>
-      </div>
+        <div class="tool-actions">
+          <el-tooltip content="消息通知" placement="bottom" :show-after="300">
+            <div class="tool-btn tool-bell" @click="handleMessageClick">
+              <el-icon><Bell /></el-icon>
+              <span class="tool-badge" v-if="unreadCount > 0">{{ unreadCount > 99 ? '99+' : unreadCount }}</span>
+            </div>
+          </el-tooltip>
+        </div>
 
-      <!-- 用户区域 -->
-      <el-popover
-        placement="bottom-end"
-        :width="225"
-        trigger="hover"
-        :show-arrow="false"
-        :offset="10"
-        popper-class="cz-user-card-popper"
-      >
-        <template #reference>
-          <div class="user-trigger">
-            <el-avatar :size="36" :src="userAvatar">
-              <el-icon :size="16"><UserFilled /></el-icon>
-            </el-avatar>
-          </div>
-        </template>
-        
-        <!-- 个人卡片内容 -->
-        <div class="user-card">
-          <!-- 头部：头像 + 用户信息 -->
-          <div class="card-header">
-            <div class="card-avatar" @click="avatarDialogVisible = true">
-              <el-avatar :size="50" :src="userAvatar">
-                <el-icon :size="20"><UserFilled /></el-icon>
+        <el-popover
+          placement="bottom-end"
+          :width="225"
+          trigger="hover"
+          :show-arrow="false"
+          :offset="10"
+          popper-class="cz-user-card-popper"
+        >
+          <template #reference>
+            <div class="user-trigger">
+              <el-avatar :size="36" :src="userAvatar">
+                <el-icon :size="16"><UserFilled /></el-icon>
               </el-avatar>
-              <div class="avatar-overlay">
-                <el-icon :size="14"><Camera /></el-icon>
+            </div>
+          </template>
+
+          <div class="user-card">
+            <div class="card-header">
+              <div class="card-avatar" @click="avatarDialogVisible = true">
+                <el-avatar :size="50" :src="userAvatar">
+                  <el-icon :size="20"><UserFilled /></el-icon>
+                </el-avatar>
+                <div class="avatar-overlay">
+                  <el-icon :size="14"><Camera /></el-icon>
+                </div>
+              </div>
+              <div class="card-info">
+                <div class="user-name">{{ userName }}</div>
+                <div class="info-sub">
+                  <span class="sub-account">{{ userAccount }}</span>
+                  <span v-for="role in userRoles" :key="role" class="role-tag">{{ role }}</span>
+                </div>
               </div>
             </div>
-            <div class="card-info">
-              <div class="user-name">{{ userName }}</div>
-              <div class="info-sub">
-                <span class="sub-account">{{ userAccount }}</span>
-                <span v-for="role in userRoles" :key="role" class="role-tag">{{ role }}</span>
-              </div>
-            </div>
-          </div>
-          
-          <!-- 操作菜单 -->
-          <div class="card-menu">
-            <div class="menu-item" @click="handleProfile">
-               <el-icon class="menu-icon">
+
+            <div class="card-menu">
+              <div class="menu-item" @click="handleProfile">
+                <el-icon class="menu-icon">
                   <component :is="$iconfont.User" />
                 </el-icon>
-              <span class="menu-text">个人中心</span>
-              <el-icon class="menu-arrow"><ArrowRight /></el-icon>
-            </div>
-            <div class="menu-item menu-logout" @click="handleLogout">
-              <el-icon class="menu-icon"><SwitchButton /></el-icon>
-              <span class="menu-text">退出登录</span>
-              <el-icon class="menu-arrow"><ArrowRight /></el-icon>
+                <span class="menu-text">个人中心</span>
+                <el-icon class="menu-arrow"><ArrowRight /></el-icon>
+              </div>
+              <div class="menu-item menu-logout" @click="handleLogout">
+                <el-icon class="menu-icon"><SwitchButton /></el-icon>
+                <span class="menu-text">退出登录</span>
+                <el-icon class="menu-arrow"><ArrowRight /></el-icon>
+              </div>
             </div>
           </div>
-        </div>
-      </el-popover>
+        </el-popover>
+      </template>
+
+      <button
+        v-else
+        type="button"
+        class="nav-mobile-menu-btn"
+        aria-label="打开菜单"
+        @click="openMobileNav"
+      >
+        <el-icon :size="22"><Menu /></el-icon>
+      </button>
     </div>
   </nav>
   
@@ -122,40 +100,26 @@
 <script setup>
 import { updateUserAvatarApi } from '@/api/system'
 import { useAuthStore } from "@/stores/auth"
-import { useMenuStore } from "@/stores/menu"
 import { ElMessage } from "element-plus"
+import { Menu } from "@element-plus/icons-vue"
 import CzImageCropperModal from "@/components/cz-image-cropper-modal/index.vue"
-import ApkModal from "./apk-modal.vue"
+import ThemeSwitch from "@/components/theme-switch/index.vue"
+import NavMenuSearch from "@/components/nav-menu-search/index.vue"
+import { isMobileViewport } from "@/composables/useIsMobile"
+import { useMenuStore } from "@/stores/menu"
 
 const router = useRouter()
-const route = useRoute()
 const authStore = useAuthStore()
 const menuStore = useMenuStore()
 
-const topMenus = computed(() => menuStore.topMenus)
-const activeTopMenu = computed(() => menuStore.activeTopMenu)
+const isMobile = isMobileViewport
 
-// 是否选中首页
-const isHomeActive = computed(() => route.path === '/home')
-
-// 选中其他导航
-const isTopMenuActive = (menu) => activeTopMenu.value?.id === menu.id
-
-const handleTopMenuClick = async (menu) => {
-  menuStore.setActiveTopMenu(menu)
-
-  // 使用 store 中的方法获取第一个可见菜单路径
-  const targetPath = menuStore.getFirstVisiblePath(menu)
-  
-  if (targetPath) {
-    return router.push(targetPath)
-  }
+const openMobileNav = () => {
+  menuStore.setSidebarCollapsed(false)
+  menuStore.setMobileDrawerOpen(true)
 }
 
-//////////////////////////////////////////////////////////////////////////////////////////////////////////
-
 const goToHome = () => {
-  menuStore.setActiveTopMenu(null)
   router.push('/home')
 }
 
@@ -167,10 +131,32 @@ const handleProfile = () => {
   router.push("/profile")
 }
 
-// 使用文档
-const handleDocumentClick = () => {
-  window.open('https://docs.qq.com/doc/DZUJmTXVDdkNQQ1Z1', '_blank')
+const isFullscreen = ref(false)
+
+const syncFullscreen = () => {
+  isFullscreen.value = !!document.fullscreenElement
 }
+
+const toggleFullscreen = async () => {
+  try {
+    if (!document.fullscreenElement) {
+      await document.documentElement.requestFullscreen()
+    } else {
+      await document.exitFullscreen()
+    }
+  } catch {
+    ElMessage.warning("当前浏览器或环境不支持全屏")
+  }
+}
+
+onMounted(() => {
+  document.addEventListener("fullscreenchange", syncFullscreen)
+  syncFullscreen()
+})
+
+onUnmounted(() => {
+  document.removeEventListener("fullscreenchange", syncFullscreen)
+})
 
 // 消息通知
 const handleMessageClick = () => {
@@ -182,7 +168,6 @@ const userName = computed(() => authStore.user?.nickname || "未知用户")
 const userAvatar = computed(() => authStore.user?.avatar || "")
 const userRoles = computed(() => authStore.roleNames || [])
 const userAccount = computed(() => authStore.user?.userName || "-")
-const userDept = computed(() => authStore.user?.deptName || "-")
 const unreadCount = ref(0)
 
 // 头像更新
@@ -209,13 +194,38 @@ const handleUploadSuccess = async (url) => {
 
 .nav-bar {
   height: $header-height;
-  background: $navbar-bg;
+  background: var(--app-surface);
   display: flex;
   align-items: center;
-  padding: 0 20px;
+  padding: 0 18px;
   position: relative;
   z-index: 1000;
-  border-bottom: 1px solid $border-light;
+  border-bottom: 1px solid var(--app-border);
+
+  @media (max-width: 767.98px) {
+    padding: 0 12px 0 14px;
+  }
+}
+
+.nav-mobile-menu-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--app-text);
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+
+  &:hover {
+    background: var(--nav-tool-hover-bg);
+    color: var(--nav-tool-icon-hover);
+  }
 }
 
 // Logo 区域
@@ -228,6 +238,7 @@ const handleUploadSuccess = async (url) => {
   padding: 8px 0;
   margin-right: 20px;
   margin-left: 4px;
+  margin-right: 12px;
   transition: opacity 0.2s;
 
   &:hover {
@@ -241,166 +252,125 @@ const handleUploadSuccess = async (url) => {
   }
 
   .brand-name {
-    font-size: 17px;
-    font-weight: 600;
-    color: $text-primary;
-    white-space: nowrap;
-    letter-spacing: 0.5px;
-  }
-}
-
-// 分隔线
-.nav-divider {
-  width: 1px;
-  height: 24px;
-  background: $border-light;
-  margin: 0 20px;
-  flex-shrink: 0;
-}
-
-// 导航菜单区域
-.nav-menus {
-  display: flex;
-  align-items: center;
-  height: 100%;
-  flex: 1;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none; // Firefox
-  -ms-overflow-style: none; // IE/Edge
-
-  &::-webkit-scrollbar {
-    display: none;
-  }
-
-  .nav-menu-item {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    height: 100%;
-    padding: 0 20px;
-    cursor: pointer;
-    white-space: nowrap;
-    color: $text-regular;
-    font-size: 14px;
+    font-family:
+      'DingTalk JinBuTi',
+      'PingFang SC',
+      'Microsoft YaHei',
+      ui-sans-serif,
+      system-ui,
+      sans-serif;
+    font-size: 18px;
     font-weight: 400;
-    transition: all 0.2s;
-    position: relative;
+    color: var(--app-text);
+    white-space: nowrap;
+    letter-spacing: 0.02em;
+  }
 
-    .menu-icon {
+  @media (max-width: 767.98px) {
+    margin-right: 8px;
+
+    .brand-name {
       font-size: 16px;
-      transition: color 0.2s;
+      max-width: 42vw;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
-    .menu-label {
-      transition: color 0.2s;
-    }
-
-    // 底部下划线（默认隐藏）
-    &::after {
-      content: '';
-      position: absolute;
-      bottom: -1px;
-      left: 50%;
-      width: 28px;
-      height: 3px;
-      background: $primary-color;
-      border-radius: 3px;
-      transform: translateX(-50%) scaleX(0);
-      transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-    }
-
-    &:hover {
-      color: $primary-color;
-      background: $bg-page;
-    }
-
-    &.is-active {
-      color: $primary-color;
-      font-weight: 500;
-      background: transparent;
-
-      .menu-icon {
-        color: $primary-color;
-      }
-
-      // 激活时下划线展开
-      &::after {
-        transform: translateX(-50%) scaleX(1);
-      }
+    .brand-logo {
+      width: 26px;
+      height: 26px;
     }
   }
 }
 
-// 右侧工具区域
+// 中央：菜单搜索（占据顶栏中间留白；略提高层级，减轻与相邻 flex 子项叠层时偶发点不到的情况）
+.nav-center {
+  position: relative;
+  z-index: 2;
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-width: 0;
+  padding: 0 8px;
+}
+
+// 右侧工具区域（全屏 / 主题 / 消息：同一套默认色与 hover 主色）
 .nav-tools {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-left: auto;
   flex-shrink: 0;
+  --theme-trigger-color: var(--app-muted);
+  --theme-trigger-hover-bg: var(--nav-tool-hover-bg);
+  --theme-trigger-hover-color: var(--nav-tool-icon-hover);
 }
 
-// 快捷操作按钮
+// 顶栏图标按钮（全屏、消息等）
+.nav-tools .tool-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--app-muted);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+
+  .el-icon {
+    font-size: 18px;
+    color: inherit;
+  }
+
+  :deep(.el-icon svg) {
+    opacity: 1;
+  }
+
+  &:hover {
+    color: var(--nav-tool-icon-hover);
+    background: var(--nav-tool-hover-bg);
+  }
+
+  &.tool-bell {
+    .el-icon {
+      transform-origin: top center;
+    }
+
+    &:hover .el-icon {
+      animation: ani-bell-ring 0.9s ease-in-out;
+    }
+
+    &:active {
+      transform: scale(0.85);
+    }
+  }
+
+  .tool-badge {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    background: $danger-color;
+    color: #fff;
+    border-radius: 8px;
+    font-size: 10px;
+    line-height: 16px;
+    text-align: center;
+    font-weight: 500;
+    border: 2px solid var(--app-surface);
+  }
+}
+
 .tool-actions {
   display: flex;
   align-items: center;
   gap: 4px;
   margin-right: 8px;
-
-  .tool-btn {
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 36px;
-    height: 36px;
-    border-radius: 6px;
-    cursor: pointer;
-    color: $text-secondary;
-    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-
-    .el-icon {
-      font-size: 18px;
-    }
-
-    &:hover {
-      color: $primary-color;
-      background: $bg-page;
-    }
-
-    // 铃铛摇晃效果
-    &.tool-bell {
-      .el-icon {
-        transform-origin: top center;
-      }
-
-      &:hover .el-icon {
-        animation: ani-bell-ring 0.9s ease-in-out;
-      }
-
-      &:active {
-        transform: scale(0.85);
-      }
-    }
-
-    .tool-badge {
-      position: absolute;
-      top: 4px;
-      right: 4px;
-      min-width: 16px;
-      height: 16px;
-      padding: 0 4px;
-      background: $danger-color;
-      color: #fff;
-      border-radius: 8px;
-      font-size: 10px;
-      line-height: 16px;
-      text-align: center;
-      font-weight: 500;
-      border: 2px solid $navbar-bg;
-    }
-  }
 }
 
 // 用户触发器（只显示头像）

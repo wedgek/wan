@@ -263,16 +263,16 @@ const handleUploadSuccess = async (url) => {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  background: $bg-white;
+  background: var(--el-bg-color-overlay);
   border-radius: 8px;
-  border: 1px solid $border-lighter;
+  border: 1px solid var(--app-border);
 }
 
 // 用户简介（固定顶部）
 .user-brief {
   padding: 24px 20px 20px;
   text-align: center;
-  border-bottom: 1px solid $border-lighter;
+  border-bottom: 1px solid var(--app-border);
   flex-shrink: 0;
 
   .avatar-box {
@@ -285,7 +285,9 @@ const handleUploadSuccess = async (url) => {
     overflow: hidden;
 
     .el-avatar {
-      display: block;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
     
     :deep(img) {
@@ -322,7 +324,7 @@ const handleUploadSuccess = async (url) => {
     margin: 0 0 8px;
     font-size: 16px;
     font-weight: 600;
-    color: $text-primary;
+    color: var(--app-text);
     line-height: 1.4;
   }
 
@@ -358,11 +360,11 @@ const handleUploadSuccess = async (url) => {
   }
 
   &::-webkit-scrollbar-thumb {
-    background: $border-color;
+    background: var(--app-border);
     border-radius: 3px;
 
     &:hover {
-      background: $text-placeholder;
+      background: var(--app-muted);
     }
   }
 }
@@ -381,7 +383,7 @@ const handleUploadSuccess = async (url) => {
     margin: 2px 8px;
     border-radius: 5px;
     font-size: 14px;
-    color: $text-regular;
+    color: var(--app-muted);
     cursor: pointer;
     transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
     position: relative;
@@ -406,7 +408,7 @@ const handleUploadSuccess = async (url) => {
 
     &:hover {
       color: $primary-color;
-      background: $bg-page;
+      background: var(--el-fill-color-light);
       transform: translateX(2px);
     }
 
@@ -426,7 +428,7 @@ const handleUploadSuccess = async (url) => {
 // 账号信息（固定底部）
 .account-info {
   padding: 14px 20px 16px;
-  border-top: 1px solid $border-lighter;
+  border-top: 1px solid var(--app-border);
   flex-shrink: 0;
 
   .info-row {
@@ -434,8 +436,8 @@ const handleUploadSuccess = async (url) => {
     align-items: center;
     padding: 12px 0;
     font-size: 13px;
-    color: $text-secondary;
-    border-bottom: 1px dashed $border-lighter;
+    color: var(--app-muted);
+    border-bottom: 1px dashed var(--app-border);
 
     &:last-child {
       border-bottom: none;
@@ -449,7 +451,7 @@ const handleUploadSuccess = async (url) => {
     .el-icon {
       font-size: 16px;
       margin-right: 8px;
-      color: $text-placeholder;
+      color: var(--app-muted);
     }
 
     .label {
@@ -459,7 +461,7 @@ const handleUploadSuccess = async (url) => {
     .value {
       flex: 1;
       text-align: right;
-      color: $text-primary;
+      color: var(--app-text);
     }
   }
 }
@@ -468,9 +470,9 @@ const handleUploadSuccess = async (url) => {
 .profile-content {
   flex: 1;
   min-width: 0;
-  background: $bg-white;
+  background: var(--el-bg-color-overlay);
   border-radius: 8px;
-  border: 1px solid $border-lighter;
+  border: 1px solid var(--app-border);
 }
 
 .content-section {
@@ -481,19 +483,19 @@ const handleUploadSuccess = async (url) => {
 
 .section-header {
   padding: 20px 24px;
-  border-bottom: 1px solid $border-lighter;
+  border-bottom: 1px solid var(--app-border);
 
   h2 {
     margin: 0 0 4px;
     font-size: 16px;
     font-weight: 600;
-    color: $text-primary;
+    color: var(--app-text);
   }
 
   p {
     margin: 0;
     font-size: 13px;
-    color: $text-secondary;
+    color: var(--app-muted);
   }
 }
 
@@ -514,7 +516,7 @@ const handleUploadSuccess = async (url) => {
       gap: 8px;
       font-size: 14px;
       font-weight: 500;
-      color: $text-primary;
+      color: var(--app-text);
 
       .el-icon {
         color: $primary-color;
@@ -524,7 +526,7 @@ const handleUploadSuccess = async (url) => {
     .block-desc {
       margin: 6px 0 0;
       font-size: 12px;
-      color: $text-secondary;
+      color: var(--app-muted);
       padding-left: 24px;
     }
   }
@@ -540,7 +542,7 @@ const handleUploadSuccess = async (url) => {
     .el-form-item__label {
       font-size: 13px;
       font-weight: 500;
-      color: $text-primary;
+      color: var(--app-text);
       padding-bottom: 6px;
     }
   }
@@ -594,7 +596,7 @@ const handleUploadSuccess = async (url) => {
   // 小屏幕下滚动区域不需要滚动
   .nav-scroll {
     overflow: visible;
-    border-top: 1px solid $border-lighter;
+    border-top: 1px solid var(--app-border);
   }
 
   // 手机端导航菜单 - 下划线风格

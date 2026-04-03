@@ -1,0 +1,171 @@
+// 全局明暗主题（html 挂 .dark + CSS 变量，与 Element Plus dark/css-vars 协同）
+
+:root {
+  --app-bg: #f5f7fa;
+  --app-text: #262626;
+  --app-border: #e8e8e8;
+  --app-surface: #ffffff;
+  --app-muted: #8c8c8c;
+  /* 顶栏图标按钮悬浮底（比页面 --app-bg 略深，避免在白色顶栏上发灰发白） */
+  --nav-tool-hover-bg: rgba(0, 0, 0, 0.055);
+  /* 顶栏图标悬浮色：比 --app-muted 略深，不用主题蓝 */
+  --nav-tool-icon-hover: #4d4d4d;
+  /* 与顶栏其它工具图标一致，避免主题按钮单独偏色 */
+  --theme-trigger-color: var(--app-muted);
+  --theme-trigger-hover-bg: rgba(0, 0, 0, 0.05);
+  --theme-trigger-hover-color: #111;
+  /* 主题切换浮层 */
+  --theme-panel-bg: #ffffff;
+  --theme-panel-border: rgba(0, 0, 0, 0.06);
+  --theme-panel-shadow: 0 4px 20px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.03);
+  --theme-panel-item-color: #262626;
+  --theme-panel-item-muted: #8c8c8c;
+  --theme-panel-item-hover-bg: rgba(0, 0, 0, 0.05);
+  /* 选中仅色值区分，不用品牌蓝 */
+  --theme-panel-item-active-color: #0a0a0a;
+  --theme-panel-radius: 12px;
+
+  /* 侧栏菜单（亮色与原先 variables 中侧栏语义一致） */
+  --sidebar-item-color: #262626;
+  --sidebar-item-hover-bg: #f5f7fa;
+  --sidebar-item-hover-color: var(--el-color-primary);
+  --sidebar-item-active-bg: var(--el-color-primary-light-9);
+  --sidebar-item-active-color: var(--el-color-primary);
+  --sidebar-accent-line: var(--el-color-primary);
+  --sidebar-sub-active-title-color: var(--el-color-primary);
+  --sidebar-collapse-icon: #8c8c8c;
+  --sidebar-collapse-hover-bg: #f5f7fa;
+  --sidebar-popup-bg: #ffffff;
+  --sidebar-popup-border: #f0f0f0;
+  --sidebar-popup-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+
+  /* 登录页 */
+  --login-frame-bg: #f3f3f4;
+  --login-page-bg: #ffffff;
+  --login-page-border: #e3e3e5;
+  --login-text-primary: #0a0a0a;
+  /* 与 Element 主色同源，保证登录标题与系统主题一致 */
+  --login-headline-brand: var(--el-color-primary);
+  --login-text-secondary: #111;
+  --login-text-muted: #9a9a9a;
+  --login-text-faint: #b0b0b0;
+  --login-divider: #eaeaea;
+  --login-icon-muted: #9ca3af;
+  --login-input-bg: #fafafa;
+  --login-input-bg-hover: #ffffff;
+  --login-input-border: #ebebeb;
+  --login-input-border-hover: #d4d4d4;
+  --login-input-focus: #111;
+  --login-input-text: #111;
+  --login-placeholder: #b4b4b4;
+  --login-focus-ring: rgba(17, 17, 17, 0.06);
+  --login-check-label: #737373;
+  --login-check-checked: #111;
+  --login-link-accent: #111;
+  --login-copyright: #c8c8c8;
+  --login-submit-bg: #111;
+  --login-submit-bg-hover: #2a2a2a;
+  --login-submit-bg-active: #000;
+  --login-submit-color: #fff;
+}
+
+html.dark {
+  color-scheme: dark;
+  --app-bg: #0a0a0a;
+  --app-text: rgba(255, 255, 255, 0.88);
+  --app-border: #303030;
+  --app-surface: #141414;
+  --app-muted: #a3a3a3;
+  --nav-tool-hover-bg: rgba(255, 255, 255, 0.08);
+  --nav-tool-icon-hover: #c8c8c8;
+  --theme-trigger-color: var(--app-muted);
+  --theme-trigger-hover-bg: rgba(255, 255, 255, 0.08);
+  --theme-trigger-hover-color: #fafafa;
+  /* 暗色浮层：细边 + 轻阴影（参考 Lobe 下拉，避免粗灰线） */
+  --theme-panel-bg: #1f1f1f;
+  --theme-panel-border: rgba(255, 255, 255, 0.075);
+  --theme-panel-shadow:
+    0 10px 36px rgba(0, 0, 0, 0.45),
+    0 0 0 1px rgba(255, 255, 255, 0.05);
+  --theme-panel-item-color: rgba(255, 255, 255, 0.92);
+  --theme-panel-item-muted: rgba(255, 255, 255, 0.45);
+  --theme-panel-item-hover-bg: rgba(255, 255, 255, 0.07);
+  --theme-panel-item-active-color: #ffffff;
+
+  /* 登录：近黑底 + 输入区略抬升；边框相对背景仅略亮一线（参考 LobeHub） */
+  --login-frame-bg: #0a0a0a;
+  --login-page-bg: #0a0a0a;
+  --login-page-border: rgba(255, 255, 255, 0.06);
+  --login-text-primary: #fafafa;
+  --login-headline-brand: var(--el-color-primary);
+  --login-text-secondary: #f5f5f5;
+  --login-text-muted: #a1a1a1;
+  --login-text-faint: #6b6b6b;
+  --login-divider: rgba(255, 255, 255, 0.08);
+  --login-icon-muted: #8a8a8a;
+  --login-input-bg: #1c1c1c;
+  --login-input-bg-hover: #222222;
+  --login-input-border: rgba(255, 255, 255, 0.09);
+  --login-input-border-hover: rgba(255, 255, 255, 0.14);
+  --login-input-focus: #6e6e6e;
+  --login-input-text: #f5f5f5;
+  --login-placeholder: #8a8a8a;
+  --login-focus-ring: rgba(255, 255, 255, 0.08);
+  --login-check-label: #a3a3a3;
+  --login-check-checked: #e5e5e5;
+  --login-link-accent: #e5e5e5;
+  --login-copyright: #666;
+  --login-submit-bg: #f5f5f5;
+  --login-submit-bg-hover: #ffffff;
+  --login-submit-bg-active: #e5e5e5;
+  --login-submit-color: #111;
+
+  /* 侧栏：暗色可读文字 + 低调选中底（避免白块 / 接近黑字看不见） */
+  --sidebar-item-color: rgba(255, 255, 255, 0.72);
+  --sidebar-item-hover-bg: rgba(255, 255, 255, 0.08);
+  --sidebar-item-hover-color: var(--el-color-primary);
+  --sidebar-item-active-bg: rgba(255, 255, 255, 0.1);
+  --sidebar-item-active-color: var(--el-color-primary);
+  --sidebar-accent-line: var(--el-color-primary);
+  --sidebar-sub-active-title-color: var(--el-color-primary);
+  --sidebar-collapse-icon: rgba(255, 255, 255, 0.55);
+  --sidebar-collapse-hover-bg: rgba(255, 255, 255, 0.1);
+  --sidebar-popup-bg: var(--el-bg-color-overlay);
+  --sidebar-popup-border: var(--el-border-color-lighter);
+  --sidebar-popup-shadow: var(--el-box-shadow);
+}
+
+html,
+body {
+  background-color: var(--app-bg);
+  color: var(--app-text);
+  transition:
+    background-color 0.22s ease,
+    color 0.18s ease;
+}
+
+#app {
+  min-height: 100vh;
+  background-color: var(--app-bg);
+}
+
+html.dark .layout-container {
+  background-color: var(--app-bg);
+}
+
+html.dark .layout-container .content-wrapper {
+  background-color: var(--app-bg);
+}
+
+html.dark .nav-bar {
+  background: var(--app-surface);
+  border-bottom-color: var(--app-border);
+}
+
+html.dark .nav-bar .brand-name {
+  color: var(--app-text);
+}
+
+html.dark .sidebar {
+  background-color: var(--app-surface);
+}

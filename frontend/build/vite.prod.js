@@ -4,7 +4,8 @@ import baseConfig from './vite.base'
 import { chunkRules } from '../config/chunk.config'
 import { cdnModules, cdnExternal, cdnGlobals, cdnExclude } from '../config/cdn.config'
 
-const env = loadEnv('prod', process.cwd(), '')
+// 与 `vite build --mode production` 一致，才会加载 .env.production
+const env = loadEnv('production', process.cwd(), '')
 const useCDN = env.VITE_USE_CDN === 'true'
 
 export default mergeConfig(baseConfig, {

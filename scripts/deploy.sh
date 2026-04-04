@@ -9,8 +9,17 @@ cd "$ROOT"
 
 echo "[deploy] 目录: $ROOT"
 
-echo "[deploy] git pull"
-git pull
+# 部署机上常因曾执行 npm install 导致 package-lock.json 被改写，git pull 会拒绝合并。
+# 以远端锁为准；下一步 npm ci 会严格按锁安装，与仓库一致。
+echo "[deploy] 还原本地 package-lock（若有未提交修改）"
+git checkout -- package-lock.json 2>/dev/null || true
+
+echo "[deploy] git pull（其余未提交改动会尝试 autostash，需 Git ≥ 2.14）"
+if git pull --autostash 2>/dev/null; then
+  :
+else
+  git pull
+fi
 
 echo "[deploy] 安装依赖（去掉 NODE_ENV=production，避免漏装 devDependencies）"
 env -u NODE_ENV npm ci || env -u NODE_ENV npm install

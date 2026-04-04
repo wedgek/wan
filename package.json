@@ -17,6 +17,7 @@
     "build:test": "npm run build:test -w frontend",
     "build:prod": "npm run build:prod -w frontend",
     "start:prod": "npm run start -w backend",
+    "db:patch": "npm run db:patch -w backend",
     "analyze": "npm run analyze -w frontend",
     "preview": "npm run preview -w frontend"
   },

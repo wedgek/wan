@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "node --watch index.js",
     "start": "node index.js",
+    "db:patch": "node scripts/db-apply-patches.cjs",
     "tos:check": "node scripts/tos-diagnose.cjs"
   },
   "dependencies": {

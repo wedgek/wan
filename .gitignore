@@ -4,6 +4,9 @@ backend/.dev-port
 # 本地密钥（从 backend/.env.example 复制）
 backend/.env
 
+# 前端本地覆盖（桶名/区域等可按环境不同，勿提交）
+frontend/.env
+
 # SQLite 数据（WAL/SHM 一并忽略）
 backend/data/*.db
 backend/data/*.db-wal

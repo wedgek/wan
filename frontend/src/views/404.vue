@@ -31,25 +31,35 @@ const goToHome = () => {
 
 <style lang="scss" scoped>
 .page-not-found {
-  position: relative;
-  height: 100vh;
+  flex: 1;
+  min-height: 0;
+  box-sizing: border-box;
   display: flex;
+  flex-direction: column;
+  align-items: center;
   justify-content: center;
-  padding: 20px;
+  gap: 28px;
+  padding: 24px 20px;
+  width: 100%;
   background: #ffffff;
-  animation: fadeIn 0.3s ease-out; 
+  animation: fadeIn 0.3s ease-out;
 }
 
 .error-image {
-  height: 85%;
-  animation: ani-fade-up 0.4s ease-out 0.1s both; 
+  display: block;
+  width: min(92vw, 440px);
+  max-height: min(46vh, 380px);
+  height: auto;
+  object-fit: contain;
+  flex-shrink: 0;
+  animation: ani-fade-up 0.4s ease-out 0.1s both;
 }
 
 .content {
   text-align: center;
   max-width: 600px;
-  position: absolute;
-  top: 66%;
+  width: 100%;
+  flex-shrink: 0;
 }
 
 .message {

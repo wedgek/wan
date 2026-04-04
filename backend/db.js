@@ -53,6 +53,16 @@ function applySchemaPatches(dbi) {
       );
     `)
     ensureAiPromptMenus(dbi)
+    ensureVideoSchema(dbi)
+    ensureVideoMenus(dbi)
+    ensureAiStudioPatch(dbi)
+    ensureVideoChatSchema(dbi)
+    ensureVideoChatMenu(dbi)
+    ensureAuthSessionsSchema(dbi)
+    ensureWorkflowMenuSync(dbi)
+    seedVideoModelsIfEmpty(dbi)
+    dedupeMenusByComponentName(dbi)
+    ensureSuperAdminAllMenuIds(dbi)
   } catch (e) {
     console.error('[db] applySchemaPatches failed', e.message)
   }
@@ -78,6 +88,326 @@ function ensureAiPromptMenus(dbi) {
   ir.run(1, childId)
   try {
     dbi.prepare('INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES (?, ?)').run('menus', childId)
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+/** 视频模型、方舟任务记录；热升级补表 */
+function ensureVideoSchema(dbi) {
+  dbi.exec(`
+    CREATE TABLE IF NOT EXISTS video_models (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      api_model_id TEXT NOT NULL,
+      sort INTEGER DEFAULT 0,
+      status INTEGER DEFAULT 0,
+      is_default INTEGER DEFAULT 0,
+      remark TEXT,
+      default_params TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT
+    );
+  `)
+  const tj = dbi.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='video_jobs'").get()
+  const bad = tj && String(tj.sql || '').includes('PRIMARY PRIMARY')
+  if (bad) {
+    dbi.exec('DROP TABLE IF EXISTS video_jobs')
+  }
+  dbi.exec(`
+    CREATE TABLE IF NOT EXISTS video_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      video_model_id INTEGER NOT NULL,
+      external_task_id TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      prompt TEXT NOT NULL,
+      request_payload TEXT,
+      result_url TEXT,
+      error_message TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT,
+      FOREIGN KEY (video_model_id) REFERENCES video_models(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_video_jobs_user ON video_jobs(user_id);
+    CREATE INDEX IF NOT EXISTS idx_video_jobs_external ON video_jobs(external_task_id);
+  `)
+  /** 能力开关：是否在对话/画布中允许「参考视频」；由后台视频模型配置维护 */
+  ensureColumn(dbi, 'video_models', 'supports_reference_video', 'INTEGER NOT NULL DEFAULT 0')
+}
+
+/** 视频创作 Hub：项目表 + 任务字段；幂等 */
+function ensureStudioSchema(dbi) {
+  dbi.exec(`
+    CREATE TABLE IF NOT EXISTS video_projects (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      name TEXT NOT NULL DEFAULT '未命名项目',
+      graph_json TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_video_projects_user ON video_projects(user_id);
+  `)
+  ensureColumn(dbi, 'video_jobs', 'project_id', 'INTEGER')
+  ensureColumn(dbi, 'video_jobs', 'mode', "TEXT DEFAULT 'text'")
+  ensureColumn(dbi, 'video_jobs', 'source_image_url', 'TEXT')
+  ensureColumn(dbi, 'video_jobs', 'source_video_urls', 'TEXT')
+}
+
+/** 对话式视频创作：会话与消息 */
+function ensureVideoChatSchema(dbi) {
+  dbi.exec(`
+    CREATE TABLE IF NOT EXISTS video_chat_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      title TEXT NOT NULL DEFAULT '新对话',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_vchat_sess_user ON video_chat_sessions(user_id);
+    CREATE TABLE IF NOT EXISTS video_chat_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      role TEXT NOT NULL,
+      text TEXT NOT NULL DEFAULT '',
+      attachments_json TEXT,
+      video_job_id INTEGER,
+      status TEXT,
+      result_url TEXT,
+      error_message TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (session_id) REFERENCES video_chat_sessions(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_vchat_msg_session ON video_chat_messages(session_id);
+    CREATE INDEX IF NOT EXISTS idx_vchat_msg_user ON video_chat_messages(user_id);
+    CREATE INDEX IF NOT EXISTS idx_vchat_msg_job ON video_chat_messages(video_job_id);
+  `)
+  /** 助手消息：当时的视频模型展示名（快照）；历史数据可由 JOIN video_jobs 回填 */
+  ensureColumn(dbi, 'video_chat_messages', 'video_model_name', 'TEXT')
+}
+
+/** 登录会话持久化（access / refresh），进程重启后仍有效 */
+function ensureAuthSessionsSchema(dbi) {
+  dbi.exec(`
+    CREATE TABLE IF NOT EXISTS auth_access_tokens (
+      token TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      exp_ms INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_auth_access_user ON auth_access_tokens(user_id);
+    CREATE INDEX IF NOT EXISTS idx_auth_access_exp ON auth_access_tokens(exp_ms);
+    CREATE TABLE IF NOT EXISTS auth_refresh_tokens (
+      token TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      exp_ms INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_auth_refresh_user ON auth_refresh_tokens(user_id);
+    CREATE INDEX IF NOT EXISTS idx_auth_refresh_exp ON auth_refresh_tokens(exp_ms);
+  `)
+}
+
+/**
+ * 工作流（Studio）：路由固定为 /ai/studio；历史库中误填 path=video / name=视频创作 时纠正。
+ * 若运营已在菜单管理改名，只要名称不是「视频创作」「创意画布」，则保留名称，仅校正 path。
+ */
+function ensureWorkflowMenuSync(dbi) {
+  try {
+    dbi.prepare(`UPDATE menus SET path = 'studio' WHERE component_name = 'aiVideoStudio'`).run()
+    dbi
+      .prepare(
+        `UPDATE menus SET name = '工作流', icon = 'Grid'
+         WHERE component_name = 'aiVideoStudio' AND name IN ('视频创作', '创意画布')`
+      )
+      .run()
+  } catch (e) {
+    console.error('[db] ensureWorkflowMenuSync', e.message)
+  }
+}
+
+function ensureVideoChatMenu(dbi) {
+  if (dbi.prepare('SELECT 1 FROM menus WHERE component_name = ? LIMIT 1').get('aiVideoChat')) return
+  const aiRow = dbi.prepare(`SELECT id FROM menus WHERE parent_id = 0 AND path = '/ai' LIMIT 1`).get()
+  if (!aiRow) return
+  const parentId = aiRow.id
+  const maxRow = dbi.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM menus').get()
+  const id = maxRow.m + 1
+  const ins = dbi.prepare(`
+    INSERT INTO menus (id, parent_id, type, name, path, component_name, icon, sort, permission, status, visible, keep_alive)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+  ins.run(id, parentId, 2, '对话创作', 'video-chat', 'aiVideoChat', 'ChatDotRound', 2, 'ai:canvas:access', 0, 1, 0)
+  dbi.prepare(`UPDATE menus SET sort = 3 WHERE component_name = 'aiPromptManage' AND parent_id = ?`).run(parentId)
+  const ir = dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (?, ?)')
+  ir.run(1, id)
+  try {
+    dbi.prepare('INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES (?, ?)').run('menus', id)
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+/**
+ * 菜单收敛：创意画布 → 工作流（Studio）；隐藏无实现占位项。
+ * 不在此重复覆盖 visible / sort（否则与菜单管理接口互相覆盖）。
+ */
+function ensureAiStudioPatch(dbi) {
+  ensureStudioSchema(dbi)
+  try {
+    const aiRow = dbi.prepare(`SELECT id FROM menus WHERE parent_id = 0 AND path = '/ai' LIMIT 1`).get()
+    const aiParentId = aiRow ? aiRow.id : null
+    if (aiParentId != null) {
+      const studioExists = dbi
+        .prepare(
+          `SELECT 1 FROM menus WHERE parent_id = ? AND component_name = 'aiVideoStudio' LIMIT 1`
+        )
+        .get(aiParentId)
+      if (studioExists) {
+        const canvasIds = dbi
+          .prepare(`SELECT id FROM menus WHERE parent_id = ? AND component_name = 'aiVideoCanvas'`)
+          .all(aiParentId)
+          .map((r) => r.id)
+        for (const cid of canvasIds) {
+          dbi.prepare('DELETE FROM role_menus WHERE menu_id = ?').run(cid)
+          dbi.prepare('DELETE FROM user_quick_entries WHERE menu_id = ?').run(cid)
+          dbi.prepare('DELETE FROM menus WHERE id = ?').run(cid)
+        }
+      } else {
+        dbi
+          .prepare(
+            `UPDATE menus SET component_name = 'aiVideoStudio', name = '工作流', path = 'studio', icon = 'Grid'
+             WHERE component_name = 'aiVideoCanvas'`
+          )
+          .run()
+      }
+    }
+    /* 不再每次请求强制隐藏「视频模型配置」；新库默认见 ensureVideoMenus 的 INSERT。 */
+    dbi
+      .prepare(
+        `UPDATE menus SET visible = 0
+         WHERE type = 2 AND name IN ('视频生成', '智能体')
+           AND (component_name IS NULL OR TRIM(component_name) = '')`
+      )
+      .run()
+    /* 不在此强制 sort：否则菜单管理里改的「显示排序」会在下一次 API 时被改回固定 1/2/3。
+       默认顺序仅在 ensureVideoMenus / ensureVideoChatMenu 首次插入时写入。 */
+  } catch (e) {
+    console.error('[db] ensureAiStudioPatch', e.message)
+  }
+}
+
+function seedVideoModelsIfEmpty(dbi) {
+  const c = dbi.prepare('SELECT COUNT(*) AS c FROM video_models').get().c
+  if (c > 0) return
+  const ins = dbi.prepare(
+    `INSERT INTO video_models (name, api_model_id, sort, status, is_default, remark, default_params, supports_reference_video)
+     VALUES (?, ?, ?, 0, ?, ?, ?, ?)`
+  )
+  ins.run(
+    'Seedance 2.0（默认）',
+    'ep-YOUR_SEEDANCE2_ENDPOINT_ID',
+    1,
+    1,
+    '在火山方舟控制台创建 Seedance 2.0 推理接入点，将 api_model_id 改为控制台复制的 ep- 开头 ID。多模态参考（文/图/参考视频）见 backend/services/seedanceClient.js 与官方「创建视频生成任务」文档。',
+    null,
+    1
+  )
+  ins.run(
+    'Seedance 1.0 Lite（示例）',
+    'doubao-seedance-1-0-lite-250528',
+    2,
+    0,
+    '旧版示例接入点；一般不支持同任务参考视频或与 2.0 相同的多模态组合。需要参考视频时请用 2.0 并打开该模型的「参考视频」开关。',
+    null,
+    0
+  )
+}
+
+/**
+ * 合并脏数据：同一父节点下相同 component_name 的多条菜单只保留 id 最小的一条，
+ * 并把 role_menus / user_quick_entries / 子菜单 parent_id 迁到保留项上。
+ */
+function dedupeMenusByComponentName(dbi) {
+  try {
+    const dups = dbi
+      .prepare(
+        `SELECT parent_id, component_name, MIN(id) AS keeper_id, COUNT(*) AS c
+         FROM menus
+         WHERE TRIM(COALESCE(component_name, '')) != ''
+         GROUP BY parent_id, component_name
+         HAVING c > 1`
+      )
+      .all()
+    if (!dups.length) return
+    const rmIns = dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (?, ?)')
+    const rmDel = dbi.prepare('DELETE FROM role_menus WHERE menu_id = ?')
+    const qeDel = dbi.prepare('DELETE FROM user_quick_entries WHERE menu_id = ?')
+    const orphans = dbi.prepare('UPDATE menus SET parent_id = ? WHERE parent_id = ?')
+    const delMenu = dbi.prepare('DELETE FROM menus WHERE id = ?')
+    for (const g of dups) {
+      const keeper = g.keeper_id
+      const dropRows = dbi
+        .prepare(
+          `SELECT id FROM menus
+           WHERE parent_id = ? AND component_name = ? AND id != ?`
+        )
+        .all(g.parent_id, g.component_name, keeper)
+      for (const { id } of dropRows) {
+        const roles = dbi.prepare('SELECT role_id FROM role_menus WHERE menu_id = ?').all(id)
+        for (const { role_id } of roles) rmIns.run(role_id, keeper)
+        rmDel.run(id)
+        qeDel.run(id)
+        orphans.run(keeper, id)
+        delMenu.run(id)
+      }
+    }
+    console.info('[db] dedupeMenusByComponentName: merged duplicate menu rows by (parent_id, component_name)')
+  } catch (e) {
+    console.error('[db] dedupeMenusByComponentName', e.message)
+  }
+}
+
+/** 超级管理员（role_id=1）补齐与当前 menus 表一致的授权，避免迁移/去重后漏配 */
+function ensureSuperAdminAllMenuIds(dbi) {
+  try {
+    const ins = dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (1, ?)')
+    const ids = dbi.prepare('SELECT id FROM menus').all()
+    for (const { id } of ids) ins.run(id)
+  } catch (e) {
+    console.error('[db] ensureSuperAdminAllMenuIds', e.message)
+  }
+}
+
+/** 补「工作流」「视频模型配置」菜单并授权超级管理员（模型默认侧栏隐藏，仅路由保留） */
+function ensureVideoMenus(dbi) {
+  const hit = dbi
+    .prepare(
+      `SELECT 1 FROM menus WHERE component_name IN ('aiVideoCanvas', 'aiVideoStudio') LIMIT 1`
+    )
+    .get()
+  if (hit) return
+  const parent = dbi
+    .prepare(`SELECT id FROM menus WHERE parent_id = 0 AND (path = '/ai' OR path = 'ai') LIMIT 1`)
+    .get()
+  const parentRow = parent || dbi.prepare(`SELECT id FROM menus WHERE name = ? AND parent_id = 0 LIMIT 1`).get('AI 应用')
+  if (!parentRow) return
+  const parentId = parentRow.id
+  const maxRow = dbi.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM menus').get()
+  const id1 = maxRow.m + 1
+  const id2 = maxRow.m + 2
+  const ins = dbi.prepare(`
+    INSERT INTO menus (id, parent_id, type, name, path, component_name, icon, sort, permission, status, visible, keep_alive)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+  ins.run(id1, parentId, 2, '工作流', 'studio', 'aiVideoStudio', 'Grid', 1, 'ai:canvas:access', 0, 1, 0)
+  ins.run(id2, parentId, 2, '视频模型配置', 'video-models', 'aiVideoModelManage', 'VideoCamera', 99, 'ai:video-model:list', 0, 0, 0)
+  dbi.prepare(`UPDATE menus SET sort = 2 WHERE component_name = 'aiPromptManage' AND parent_id = ?`).run(parentId)
+  const ir = dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (?, ?)')
+  ir.run(1, id1)
+  ir.run(1, id2)
+  try {
+    dbi.prepare('INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES (?, ?)').run('menus', id2)
   } catch (_) {
     /* ignore */
   }
@@ -255,6 +585,9 @@ function initDb() {
       /* sqlite_sequence 可能尚未创建 */
     }
   }
+
+  /* 菜单等种子数据写入后再跑一次补丁，保证新库也能挂上视频相关菜单 */
+  applySchemaPatches(dbInstance)
 
   return dbInstance
 }

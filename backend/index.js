@@ -1,5 +1,8 @@
 const path = require("path")
 const fs = require("fs")
+
+/** 本地可从 backend/.env 加载；已有环境变量不会被覆盖（dotenv 默认行为） */
+require("dotenv").config({ path: path.join(__dirname, ".env") })
 const http = require("http")
 const express = require("express")
 const db = require("./db")
@@ -75,6 +78,20 @@ server.on("listening", () => {
       console.log(
         "[wan-ai] API · 快捷入口: GET/PUT /admin-api/system/quick-entries（与 /admin-api/system/workbench/quick-entries）",
       )
+      try {
+        const tos = require("./services/tosClient")
+        if (tos.isConfigured()) {
+          const c = tos.getConfig()
+          console.log(
+            `[wan-ai] TOS 生效参数: bucket=${c.bucket || "(空)"} region=${c.region || "(空)"} endpoint=${c.endpoint || "(空)"}`,
+          )
+          console.log("[wan-ai] 若上传报 bucket 不存在，请在 backend 目录执行: npm run tos:check")
+        } else {
+          console.warn("[wan-ai] TOS 未配置完整，上传接口将返回 503")
+        }
+      } catch (e) {
+        console.warn("[wan-ai] TOS 配置检查:", e.message)
+      }
     }
   }
 })

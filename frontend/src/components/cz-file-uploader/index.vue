@@ -166,7 +166,7 @@ const upload = async (file) => {
   progress.value = 0
 
   try {
-    const url = await uploadWithProgress(file, {
+    const { url } = await uploadWithProgress(file, {
       dir: props.dir || undefined,
       onProgress: (p) => { progress.value = p }
     })

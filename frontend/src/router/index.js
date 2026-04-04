@@ -1,7 +1,7 @@
 import { createRouter, createWebHistory } from "vue-router"
 import { useAuthStore } from "@/stores/auth"
 import { useMenuStore } from "@/stores/menu"
-import { staticRoutes, routeComponents, notFoundRoute } from "./routes"
+import { staticRoutes, routeComponents, notFoundRoute, staticMenuRoutePaths } from "./routes"
 import { setupNProgress } from "@/utils/nprogress"
 
 const NProgress = setupNProgress()
@@ -58,8 +58,16 @@ export const addDynamicRoutes = (menus, { force = false } = {}) => {
     const fullPath = (menu.path.startsWith("/") ? menu.path : `${parentPath}/${menu.path}`)
       .replace(/\/+/g, "/").replace(/\/$/, "") || "/"
     const routeName = fullPath.replace(/\//g, "-").replace(/^-+|-+$/g, "") || `menu-${menu.id}`
-    const hasPermission = menu.status === 0
+    const hasPermission = Number(menu.status) === 0
     const load = menu.componentName ? routeComponents[menu.componentName] : null
+
+    if (staticMenuRoutePaths.has(fullPath)) {
+      if (menu.componentName && !load) {
+        console.warn(`[router] 菜单「${menu.name}」componentName 未映射:`, menu.componentName, fullPath)
+      }
+      menu.children?.forEach((child) => processMenu(child, fullPath))
+      return
+    }
 
     router.addRoute({
       path: fullPath,
@@ -76,6 +84,9 @@ export const addDynamicRoutes = (menus, { force = false } = {}) => {
         keepAlive: menu.keepAlive || false,
         visible: menu.visible,
         status: menu.status,
+        /** 对话创作：宽屏 meta 保留；无外层 content padding，与侧栏/顶栏直接接壤 */
+        wideContent: hasPermission && menu.componentName === "aiVideoChat",
+        noPadding: hasPermission && menu.componentName === "aiVideoChat",
       },
     })
     addedRouteNames.push(routeName)

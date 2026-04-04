@@ -1,6 +1,9 @@
 # 开发环境：后端当前监听端口（供 Vite 动态代理）
 backend/.dev-port
 
+# 本地密钥（从 backend/.env.example 复制）
+backend/.env
+
 # SQLite 数据（WAL/SHM 一并忽略）
 backend/data/*.db
 backend/data/*.db-wal

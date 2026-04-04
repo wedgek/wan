@@ -1,6 +1,21 @@
 import { defineStore } from "pinia"
 import { getStorage, setStorage, removeStorage } from "@/utils/storage"
 
+/** 统一 visible/status 类型，避免 localStorage 里 1 / "0" 导致侧栏过滤与动态路由不一致 */
+function normalizeMenuNode(menu) {
+  if (!menu || typeof menu !== "object") return menu
+  const st = Number(menu.status)
+  const next = {
+    ...menu,
+    visible: menu.visible === true || menu.visible === 1 || menu.visible === "1",
+    status: st === 0 ? 0 : st === 1 ? 1 : menu.status,
+  }
+  if (Array.isArray(menu.children) && menu.children.length) {
+    next.children = menu.children.map(normalizeMenuNode)
+  }
+  return next
+}
+
 export const useMenuStore = defineStore("menu", () => {
   const menus = ref([])
   const activeTopMenu = ref(null) 
@@ -12,8 +27,8 @@ export const useMenuStore = defineStore("menu", () => {
   // 初始化menus
   const initMenus = () => {
     const savedMenus = getStorage("menus")
-    if (savedMenus) {
-      menus.value = savedMenus
+    if (savedMenus && Array.isArray(savedMenus)) {
+      menus.value = savedMenus.map(normalizeMenuNode)
     }
     // 恢复侧边栏折叠状态
     const savedCollapsed = getStorage("sidebarCollapsed")
@@ -42,7 +57,7 @@ export const useMenuStore = defineStore("menu", () => {
   }
 
   const setMenus = (menuList) => {
-    const list = menuList || []
+    const list = (menuList || []).map(normalizeMenuNode)
     menus.value = list
     setStorage("menus", list)
     
@@ -80,7 +95,7 @@ export const useMenuStore = defineStore("menu", () => {
    * status === 0 表示有权限
    */
   const hasPermission = (menu) => {
-    return menu.status === 0
+    return Number(menu.status) === 0
   }
 
   /**
@@ -88,7 +103,7 @@ export const useMenuStore = defineStore("menu", () => {
    * status === 0 且 visible === true 时显示
    */
   const isMenuVisible = (menu) => {
-    return hasPermission(menu) && menu.visible === true
+    return hasPermission(menu) && !!menu.visible
   }
 
   /**

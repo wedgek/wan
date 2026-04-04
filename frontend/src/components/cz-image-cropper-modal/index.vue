@@ -249,7 +249,7 @@ const handleUpload = async () => {
 
   try {
     const file = new File([blob], buildFileName(), { type: props.outputType })
-    const url = await uploadImage(file)
+    const { url } = await uploadImage(file)
     emit('success', url)
     visible.value = false
   } catch (e) {

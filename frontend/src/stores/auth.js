@@ -7,6 +7,8 @@ import { useMenuStore } from "@/stores/menu.js"
 export const useAuthStore = defineStore("auth", () => {
   const user = ref(null)
   const token = ref("")
+  /** 与 access 一并刷新，仅用于调试；业务上从 localStorage 读即可 */
+  const refreshToken = ref("")
   const permissions = ref([])
   const roles = ref([])
   const roleNames = ref([])
@@ -14,12 +16,14 @@ export const useAuthStore = defineStore("auth", () => {
   /** 清会话与动态路由，不跳转（供路由未 install 时复用） */
   const clearSession = () => {
     token.value = ""
+    refreshToken.value = ""
     user.value = null
     permissions.value = []
     roles.value = []
     roleNames.value = []
 
     removeStorage("token")
+    removeStorage("refreshToken")
     removeStorage("user")
     removeStorage("permissions")
     removeStorage("roles")
@@ -43,6 +47,7 @@ export const useAuthStore = defineStore("auth", () => {
     if (savedToken) {
       menuStore.initMenus()
       token.value = savedToken
+      refreshToken.value = getStorage("refreshToken") || ""
       user.value = savedUser
       permissions.value = savedPermissions || []
       roles.value = savedRoles || []
@@ -57,9 +62,7 @@ export const useAuthStore = defineStore("auth", () => {
     try {
       const result = await loginApi(data)
       if (result?.code === 0) {
-        const accessToken = result.data.accessToken
-        token.value = accessToken
-        setStorage("token", accessToken)
+        setTokenPair(result.data)
         return result.data
       }else {
         throw new Error(result?.msg || '登录失败，请检查账号和密码')
@@ -100,6 +103,16 @@ export const useAuthStore = defineStore("auth", () => {
     }
   }
 
+  const setTokenPair = (data) => {
+    if (!data?.accessToken) return
+    token.value = data.accessToken
+    setStorage("token", data.accessToken)
+    if (data.refreshToken != null && data.refreshToken !== "") {
+      refreshToken.value = data.refreshToken
+      setStorage("refreshToken", data.refreshToken)
+    }
+  }
+
   // 登出
   const logout = () => {
     clearSession()
@@ -114,11 +127,13 @@ export const useAuthStore = defineStore("auth", () => {
   return {
     user,
     token,
+    refreshToken,
     permissions,
     roles,
     roleNames,
     initAuth,
     clearSession,
+    setTokenPair,
     login,
     logout,
     getUserInfo,

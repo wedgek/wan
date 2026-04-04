@@ -24,7 +24,6 @@ export const chunkRules = {
       return 'vendor-utils'
     }
 
-    if (nid.includes('/node_modules/ali-oss/')) return 'vendor-oss'
     if (nid.includes('/node_modules/@iconify/')) return 'vendor-icons'
     if (nid.includes('/node_modules/nprogress/')) return 'vendor-nprogress'
     if (nid.includes('/node_modules/cropperjs/')) return 'vendor-cropper'

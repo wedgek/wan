@@ -6,11 +6,11 @@
         :default-openeds="defaultOpeneds"
         :collapse="inDrawer ? false : isCollapsed"
         :unique-opened="true"
-        router
         class="sidebar-menu"
         popper-class="cz-sidebar-popup"
         @open="handleOpen"
         @close="handleClose"
+        @select="handleMenuSelect"
       >
         <el-sub-menu index="console">
           <template #title>
@@ -135,6 +135,18 @@ const handleClose = (index) => {}
 
 const toggleCollapse = () => {
   menuStore.toggleSidebarCollapsed()
+}
+
+/**
+ * 不用 el-menu 内置 router：折叠侧栏时子项在弹出层里，部分环境下内置跳转不可靠。
+ * 统一在此处 router.push，与普通展开态行为一致。
+ */
+const handleMenuSelect = (index) => {
+  if (index == null || index === "console") return
+  const path = String(index)
+  if (!path.startsWith("/")) return
+  if (path === route.path) return
+  router.push(path).catch(() => {})
 }
 </script>
 

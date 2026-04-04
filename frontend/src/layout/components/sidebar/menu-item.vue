@@ -24,6 +24,7 @@
   <el-menu-item
     v-else
     :index="fullPath"
+    @click="onMenuItemClick"
   >
     <el-icon v-if="menu.icon" :class="menuIconClass">
       <component :is="menu.icon" />
@@ -33,6 +34,9 @@
 </template>
 
 <script setup>
+import { useRouter } from "vue-router"
+
+const router = useRouter()
 
 const props = defineProps({
   menu: { type: Object, required: true },
@@ -58,14 +62,35 @@ const hasVisibleChildren = computed(() => {
   return visibleChildren.value.length > 0
 })
 
-// 完整路径，支持导航栏前缀
+// 完整路径：相对 path 与父级 basePath 拼接；兼容后台误填为「/prompts」一类未带 /ai 前缀的绝对路径
 const fullPath = computed(() => {
-  let path = props.menu.path || String(props.menu.id)
-  if (!path.startsWith('/')) {
-    path = `${props.basePath}/${path}`.replace(/\/+/g, '/')
+  const rawPath = props.menu.path != null && String(props.menu.path).trim() !== ""
+    ? String(props.menu.path).trim()
+    : ""
+  const fallback = String(props.menu.id ?? "")
+  let path = rawPath || fallback
+  if (!path.startsWith("/")) {
+    path = `${props.basePath}/${path}`.replace(/\/+/g, "/")
+  } else if (
+    props.basePath === "/ai" &&
+    path !== props.basePath &&
+    !path.startsWith(props.basePath + "/")
+  ) {
+    const segments = path.split("/").filter(Boolean)
+    if (segments.length === 1) {
+      path = `${props.basePath}/${segments[0]}`.replace(/\/+/g, "/")
+    }
   }
   return path
 })
+
+function onMenuItemClick() {
+  const path = fullPath.value
+  if (!path.startsWith("/")) return
+  router.push(path).catch((err) => {
+    if (err?.name !== "NavigationDuplicated") console.warn("[sidebar] 菜单跳转失败:", path, err)
+  })
+}
 
 </script>
 

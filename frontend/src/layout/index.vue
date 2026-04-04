@@ -128,8 +128,8 @@ const keepAlivePages = computed(() => {
           background-color: transparent;
         }
 
-        /* 工作台：四边略小于常规页；仅底部内边距略收紧，不动内部布局 */
-        &.content-wrapper--wide {
+        /* 工作台等：四边略小于常规页。与 no-padding 并存时以贴边为准（避免 wide 覆盖掉 0 内边距） */
+        &.content-wrapper--wide:not(.no-padding) {
           padding: clamp(12px, 1.35vw, 22px);
           padding-bottom: clamp(8px, 1vw, 16px);
         }

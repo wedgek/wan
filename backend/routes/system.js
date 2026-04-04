@@ -127,6 +127,13 @@ function n(v, d = 0) {
   return Number.isNaN(x) ? d : x
 }
 
+/** 菜单 visible / keepAlive：兼容布尔与 1/0、'true'/'false'，便于后台与接口稳定写入 */
+function boolToSqliteInt(v) {
+  if (v === true || v === 1 || v === '1' || v === 'true') return 1
+  if (v === false || v === 0 || v === '0' || v === 'false') return 0
+  return 0
+}
+
 function formatTime(v) {
   if (!v) return ''
   return String(v).replace('T', ' ').slice(0, 19)
@@ -166,8 +173,8 @@ router.get('/menu/get', (req, res) => {
 
 router.post('/menu/create', (req, res) => {
   const b = req.body || {}
-  const visible = b.visible === true || b.visible === 'true' ? 1 : 0
-  const keepAlive = b.keepAlive === true || b.keepAlive === 'true' ? 1 : 0
+  const visible = boolToSqliteInt(b.visible)
+  const keepAlive = boolToSqliteInt(b.keepAlive)
   const info = database()
     .prepare(
       `INSERT INTO menus (parent_id, type, name, path, component_name, icon, sort, permission, status, visible, keep_alive)
@@ -193,8 +200,8 @@ router.put('/menu/update', (req, res) => {
   const b = req.body || {}
   const id = Number(b.id)
   if (!id) return res.json(fail(400, '缺少 id'))
-  const visible = b.visible === true || b.visible === 'true' ? 1 : 0
-  const keepAlive = b.keepAlive === true || b.keepAlive === 'true' ? 1 : 0
+  const visible = boolToSqliteInt(b.visible)
+  const keepAlive = boolToSqliteInt(b.keepAlive)
   database()
     .prepare(
       `UPDATE menus SET parent_id = ?, type = ?, name = ?, path = ?, component_name = ?, icon = ?, sort = ?, permission = ?, status = ?, visible = ?, keep_alive = ?
@@ -780,6 +787,173 @@ router.delete('/ai-prompt/delete', (req, res) => {
   const id = Number(req.query.id)
   if (!id) return res.json(fail(400, '缺少 id'))
   database().prepare('DELETE FROM ai_prompts WHERE id = ?').run(id)
+  res.json(ok(true))
+})
+
+/* ---------- 视频模型（Seedance / 方舟接入点配置） ---------- */
+function rowToVideoModel(r) {
+  if (!r) return null
+  let defaultParams = null
+  if (r.default_params && String(r.default_params).trim()) {
+    try {
+      defaultParams = JSON.parse(r.default_params)
+    } catch (_) {
+      defaultParams = r.default_params
+    }
+  }
+  return {
+    id: r.id,
+    name: r.name || '',
+    apiModelId: r.api_model_id || '',
+    sort: r.sort ?? 0,
+    status: r.status ?? 0,
+    isDefault: r.is_default === 1,
+    remark: r.remark || '',
+    supportsReferenceVideo: r.supports_reference_video === 1,
+    defaultParams,
+    createTime: formatTime(r.create_time),
+    updateTime: formatTime(r.update_time),
+  }
+}
+
+function clearOtherDefaults(dbi, keepId) {
+  dbi.prepare('UPDATE video_models SET is_default = 0 WHERE id != ?').run(keepId)
+}
+
+router.get('/video-model/page', (req, res) => {
+  const pageNo = Math.max(1, parseInt(req.query.pageNo, 10) || 1)
+  const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 20))
+  const name = (req.query.name || '').trim()
+  const status = req.query.status
+  const conds = ['1=1']
+  const params = []
+  if (name) {
+    conds.push('(name LIKE ? OR api_model_id LIKE ?)')
+    params.push(`%${name}%`, `%${name}%`)
+  }
+  if (status !== undefined && status !== '') {
+    conds.push('status = ?')
+    params.push(Number(status))
+  }
+  const where = conds.join(' AND ')
+  const d = database()
+  const total = d.prepare(`SELECT COUNT(*) AS c FROM video_models WHERE ${where}`).get(...params).c
+  const offset = (pageNo - 1) * pageSize
+  const rows = d
+    .prepare(
+      `SELECT id, name, api_model_id, sort, status, is_default, remark, default_params,
+              supports_reference_video,
+              datetime(created_at) AS create_time, datetime(updated_at) AS update_time
+       FROM video_models WHERE ${where} ORDER BY sort ASC, id DESC LIMIT ? OFFSET ?`
+    )
+    .all(...params, pageSize, offset)
+  res.json(ok({ list: rows.map(rowToVideoModel), total }))
+})
+
+router.get('/video-model/get', (req, res) => {
+  const id = Number(req.query.id)
+  if (!id) return res.json(fail(400, '缺少 id'))
+  const row = database()
+    .prepare(
+      `SELECT id, name, api_model_id, sort, status, is_default, remark, default_params,
+              supports_reference_video,
+              datetime(created_at) AS create_time, datetime(updated_at) AS update_time
+       FROM video_models WHERE id = ?`
+    )
+    .get(id)
+  if (!row) return res.json(fail(404, '记录不存在'))
+  res.json(ok(rowToVideoModel(row)))
+})
+
+router.post('/video-model/create', (req, res) => {
+  const b = req.body || {}
+  if (!String(b.name || '').trim()) return res.json(fail(400, '请填写名称'))
+  if (!String(b.apiModelId || '').trim()) return res.json(fail(400, '请填写方舟模型 ID（apiModelId）'))
+  let defaultParamsJson = null
+  if (b.defaultParams != null && b.defaultParams !== '') {
+    try {
+      defaultParamsJson =
+        typeof b.defaultParams === 'string' ? b.defaultParams : JSON.stringify(b.defaultParams)
+      JSON.parse(defaultParamsJson)
+    } catch (_) {
+      return res.json(fail(400, 'defaultParams 须为合法 JSON'))
+    }
+  }
+  const isDef = b.isDefault === true || b.isDefault === 1 ? 1 : 0
+  const refVid = b.supportsReferenceVideo === true || b.supportsReferenceVideo === 1 ? 1 : 0
+  const d = database()
+  const newId = d.transaction(() => {
+    const info = d
+      .prepare(
+        `INSERT INTO video_models (name, api_model_id, sort, status, is_default, remark, default_params, supports_reference_video)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        String(b.name).trim(),
+        String(b.apiModelId).trim(),
+        Number(b.sort) || 0,
+        n(b.status, 0),
+        isDef,
+        String(b.remark || '').trim() || null,
+        defaultParamsJson,
+        refVid
+      )
+    const id = Number(info.lastInsertRowid)
+    if (isDef) {
+      clearOtherDefaults(d, id)
+      d.prepare('UPDATE video_models SET is_default = 1 WHERE id = ?').run(id)
+    }
+    return id
+  })()
+  res.json(ok({ id: newId }))
+})
+
+router.put('/video-model/update', (req, res) => {
+  const b = req.body || {}
+  const id = Number(b.id)
+  if (!id) return res.json(fail(400, '缺少 id'))
+  if (!String(b.name || '').trim()) return res.json(fail(400, '请填写名称'))
+  if (!String(b.apiModelId || '').trim()) return res.json(fail(400, '请填写方舟模型 ID（apiModelId）'))
+  let defaultParamsJson = null
+  if (b.defaultParams != null && b.defaultParams !== '') {
+    try {
+      defaultParamsJson =
+        typeof b.defaultParams === 'string' ? b.defaultParams : JSON.stringify(b.defaultParams)
+      JSON.parse(defaultParamsJson)
+    } catch (_) {
+      return res.json(fail(400, 'defaultParams 须为合法 JSON'))
+    }
+  }
+  const isDef = b.isDefault === true || b.isDefault === 1 ? 1 : 0
+  const refVid = b.supportsReferenceVideo === true || b.supportsReferenceVideo === 1 ? 1 : 0
+  const d = database()
+  d.transaction(() => {
+    d.prepare(
+      `UPDATE video_models SET name = ?, api_model_id = ?, sort = ?, status = ?, is_default = ?, remark = ?,
+       default_params = ?, supports_reference_video = ?, updated_at = datetime('now') WHERE id = ?`
+    ).run(
+      String(b.name).trim(),
+      String(b.apiModelId).trim(),
+      Number(b.sort) || 0,
+      n(b.status, 0),
+      isDef,
+      String(b.remark || '').trim() || null,
+      defaultParamsJson,
+      refVid,
+      id
+    )
+    if (isDef) {
+      clearOtherDefaults(d, id)
+      d.prepare('UPDATE video_models SET is_default = 1 WHERE id = ?').run(id)
+    }
+  })()
+  res.json(ok(true))
+})
+
+router.delete('/video-model/delete', (req, res) => {
+  const id = Number(req.query.id)
+  if (!id) return res.json(fail(400, '缺少 id'))
+  database().prepare('DELETE FROM video_models WHERE id = ?').run(id)
   res.json(ok(true))
 })
 

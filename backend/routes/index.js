@@ -1,6 +1,8 @@
 const express = require('express')
 const authRouter = require('./auth')
 const systemRouter = require('./system')
+const videoRouter = require('./video')
+const storageRouter = require('./storage')
 const { requireAuth } = require('./auth')
 
 const router = express.Router()
@@ -17,14 +19,20 @@ router.get('/health', (req, res) => {
 
 router.use('/system/auth', authRouter)
 router.use('/system', systemRouter)
+router.use('/video', videoRouter)
+router.use('/storage', storageRouter)
 
-/** 占位：企微 SDK / 阿里云 OSS，接入真实能力前返回空或明确错误 */
+/** 占位：企微 SDK */
 router.get('/qiwei/app-sdk/page', requireAuth, (req, res) => {
   res.json({ code: 0, data: { list: [], total: 0 } })
 })
 
+/** 已废弃：上传请使用 POST /admin-api/storage/upload（火山 TOS 服务端上传） */
 router.post('/ali/getStsToken', requireAuth, (req, res) => {
-  res.json({ code: 503, msg: '未配置阿里云 STS：请在服务端实现 getStsToken 或关闭 OSS 上传' })
+  res.status(410).json({
+    code: 410,
+    msg: '已废弃：请使用服务端 TOS 上传 POST /admin-api/storage/upload，不再下发阿里云 STS',
+  })
 })
 
 module.exports = router

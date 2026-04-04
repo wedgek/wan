@@ -10,6 +10,51 @@ const database = () => db.getDb()
 /** 与新建会话默认标题一致时，列表展示首条用户消息第一行文字预览 */
 const DEFAULT_SESSION_TITLES = new Set(['', '新对话'])
 
+/** 对话页传入的生成参数；时长范围与火山 Seedance 文档常见区间一致（可用环境变量放宽） */
+const CHAT_VIDEO_DURATION_MIN = Math.max(2, Number(process.env.ARK_CHAT_DURATION_MIN || 4))
+const CHAT_VIDEO_DURATION_MAX = Math.min(60, Number(process.env.ARK_CHAT_DURATION_MAX || 15))
+const CHAT_ASPECT_RATIOS = new Set(['9:16', '16:9', '1:1'])
+
+function clonePlainOptions(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  try {
+    return JSON.parse(JSON.stringify(raw))
+  } catch (_) {
+    return { ...raw }
+  }
+}
+
+/**
+ * 合并 options，写入方舟创建任务体顶层（与 model、content 并列），如 aspect_ratio、duration
+ */
+function normalizeChatVideoOptions(body) {
+  const base = clonePlainOptions(body?.options)
+  const ar = String(body?.aspectRatio ?? body?.aspect_ratio ?? base.aspect_ratio ?? '').trim()
+  if (CHAT_ASPECT_RATIOS.has(ar)) base.aspect_ratio = ar
+  const durRaw = body?.duration ?? base.duration
+  if (durRaw != null && durRaw !== '') {
+    const n = parseInt(String(durRaw), 10)
+    if (Number.isFinite(n)) {
+      base.duration = Math.min(CHAT_VIDEO_DURATION_MAX, Math.max(CHAT_VIDEO_DURATION_MIN, n))
+    }
+  }
+  return base
+}
+
+/**
+ * SQLite 存的是 UTC 无时区字符串（datetime('now')）；下发 ISO 带 Z，前端才能按用户本地时区显示。
+ */
+function sqliteUtcTextToIso(ts) {
+  if (ts == null || ts === '') return ''
+  const s = String(ts).replace('T', ' ').trim().slice(0, 19)
+  if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s)) {
+    return String(ts).replace('T', ' ').slice(0, 19)
+  }
+  const ms = Date.parse(`${s.replace(' ', 'T')}Z`)
+  if (!Number.isFinite(ms)) return s
+  return new Date(ms).toISOString()
+}
+
 /** 第一行非空文字，折叠空白，截断 max 字符（仅文本） */
 function previewFromUserPrompt(text, max = 32) {
   const raw = String(text || '')
@@ -38,8 +83,8 @@ function rowToSession(r) {
   return {
     id: r.id,
     title,
-    createTime: r.create_time ? String(r.create_time).replace('T', ' ').slice(0, 19) : '',
-    updateTime: r.update_time ? String(r.update_time).replace('T', ' ').slice(0, 19) : '',
+    createTime: sqliteUtcTextToIso(r.create_time),
+    updateTime: sqliteUtcTextToIso(r.update_time),
   }
 }
 
@@ -70,7 +115,9 @@ function rowToMessage(r) {
     resultUrl: r.result_url || '',
     errorMessage: r.error_message || '',
     videoModelName: r.video_model_name != null ? String(r.video_model_name).trim() : '',
-    createTime: r.create_time ? String(r.create_time).replace('T', ' ').slice(0, 19) : '',
+    createTime: sqliteUtcTextToIso(r.create_time),
+    /** 关联任务的最近更新时间（生成成功/失败时同步），用于展示「生成完成」时间 */
+    completedTime: sqliteUtcTextToIso(r.job_update_time),
   }
 }
 
@@ -247,18 +294,21 @@ router.get('/messages/page', async (req, res) => {
     const offset = (pageNo - 1) * pageSize
     const d = database()
     const total = d.prepare('SELECT COUNT(*) AS c FROM video_chat_messages WHERE session_id = ?').get(sessionId).c
+    // 须取「最新」一页：ASC + LIMIT 只会拿到最旧 N 条，超过 pageSize 的会话会丢最新一轮（表现为提示词/生成中卡片突然没了，刷新或下一页又出现）
     const rows = d
       .prepare(
         `SELECT m.id, m.session_id, m.user_id, m.role, m.text, m.attachments_json, m.video_job_id, m.status, m.result_url, m.error_message,
                 datetime(m.created_at) as create_time,
+                datetime(COALESCE(NULLIF(j.updated_at, ''), j.created_at)) as job_update_time,
                 TRIM(COALESCE(NULLIF(TRIM(m.video_model_name), ''), vm.name, '')) as video_model_name
          FROM video_chat_messages m
          LEFT JOIN video_jobs j ON j.id = m.video_job_id
          LEFT JOIN video_models vm ON vm.id = j.video_model_id
-         WHERE m.session_id = ? ORDER BY m.id ASC LIMIT ? OFFSET ?`
+         WHERE m.session_id = ? ORDER BY m.id DESC LIMIT ? OFFSET ?`
       )
       .all(sessionId, pageSize, offset)
-    res.json(ok({ list: rows.map(rowToMessage), total }))
+    const chronological = rows.slice().reverse()
+    res.json(ok({ list: chronological.map(rowToMessage), total }))
   } catch (e) {
     console.error('[videoChat] messages/page', e.message)
     res.json(fail(500, '读取消息失败'))
@@ -310,7 +360,7 @@ router.post('/send', async (req, res) => {
     sourceVideoUrls: attachments.videos,
     videoModelId: req.body?.videoModelId,
     projectId: req.body?.projectId,
-    options: req.body?.options,
+    options: normalizeChatVideoOptions(req.body),
   })
 
   if (!result.ok) {

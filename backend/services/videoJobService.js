@@ -126,7 +126,7 @@ async function createVideoJob(dbi, opts) {
 
   const modelRow = resolveModelRow(dbi, opts.videoModelId)
   if (!modelRow) {
-    return { ok: false, code: 400, message: '没有可用的视频模型，请先在「视频模型配置」中添加并启用' }
+    return { ok: false, code: 400, message: '没有可用的视频模型，请先在「模型管理」中添加并启用' }
   }
 
   const modelAllowsRefVideo = modelRow.supports_reference_video === 1
@@ -134,7 +134,7 @@ async function createVideoJob(dbi, opts) {
     return {
       ok: false,
       code: 400,
-      message: '当前视频模型未开启「参考视频」，请在「视频模型配置」中打开该开关，或移除参考视频后重试',
+      message: '当前视频模型未开启「参考视频」，请在「模型管理」中打开该开关，或移除参考视频后重试',
     }
   }
 

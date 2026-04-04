@@ -140,6 +140,7 @@ function buildCreateTaskBody({ model, prompt, extra, imageUrls, videoUrls }) {
   // 必须先展开业务扩展字段，最后再强制写入 model / content。
   // default_params / options 里若带有 content（或含 role 的示例片段），会覆盖上面构造的多模态正文，
   // 导致方舟报 first/last frame 与 reference media 混用。
+  // restExtra 常见项（与官方「创建视频生成任务」一致）：aspect_ratio（如 9:16、16:9、1:1）、duration（秒，整数）等。
   const { model: _m, content: _c, ...restExtra } = safeExtra
   return {
     ...restExtra,

@@ -43,7 +43,7 @@
       </header>
 
       <div v-if="!sessionReady" class="video-chat__boot" v-loading="true" element-loading-text="加载会话…" />
-      <template v-else-if="activeSessionId">
+      <template v-else-if="sessionReady">
         <div class="video-chat__stream-slot">
           <el-scrollbar ref="msgScrollRef" class="msg-scroll">
             <div class="msg-stream" :class="{ 'msg-stream--has-msgs': messages.length }">
@@ -54,29 +54,49 @@
               >
                 <div v-for="m in round" :key="m.id" class="msg-row" :class="'msg-row--' + m.role">
               <div class="msg-feed-head">
-                <span class="msg-feed-role">{{ feedRoleLabel(m) }}</span>
+                <div class="msg-feed-head__line">
+                  <span class="msg-feed-role">{{ feedRoleLabel(m) }}</span>
+                  <template v-if="messageFeedTimePart(m)">
+                    <span class="msg-feed-head__sep" aria-hidden="true">·</span>
+                    <span class="msg-feed-time">{{ messageFeedTimePart(m) }}</span>
+                  </template>
+                </div>
               </div>
               <div class="msg-bubble msg-feed__body" :class="{ 'msg-bubble--has-media': messageHasMedia(m) }">
                 <div v-if="messageHasMedia(m)" class="msg-media-row">
                   <template v-if="m.attachments?.images?.length">
-                    <img
+                    <div
                       v-for="(u, i) in m.attachments.images"
                       :key="'mi' + i"
-                      :src="u"
-                      alt=""
-                      class="att-img att-img--inline"
-                    />
+                      class="msg-media-slot msg-media-slot--image"
+                    >
+                      <el-image
+                        :src="u"
+                        fit="cover"
+                        class="msg-media-elimage"
+                        :preview-src-list="chatAttachmentImageUrls(m)"
+                        :initial-index="i"
+                        preview-teleported
+                        hide-on-click-modal
+                      />
+                    </div>
                   </template>
                   <template v-for="(u, i) in m.attachments?.videos || []" :key="'mv' + i">
-                    <video
+                    <div
                       v-if="!failedVideoUrls.has(u)"
-                      :src="u"
-                      controls
-                      class="att-vid att-vid--inline"
-                      preload="none"
-                      @error="markVideoFailed(u)"
-                    />
-                    <div v-else class="att-vid att-vid--inline att-vid--err" role="img" aria-label="视频无法加载">
+                      class="msg-media-slot msg-media-slot--video"
+                    >
+                      <video
+                        :src="u"
+                        controls
+                        playsinline
+                        class="msg-vid-el"
+                        preload="metadata"
+                        @loadedmetadata="nudgeVideoFirstFrame"
+                        @error="markVideoFailed(u)"
+                      />
+                    </div>
+                    <div v-else class="msg-media-slot msg-media-slot--video msg-media-slot--err" role="img" aria-label="视频无法加载">
                       无法加载
                     </div>
                   </template>
@@ -89,43 +109,38 @@
                   >
                     {{ m.text }}
                   </div>
-                  <div v-if="msgTextOverflow[String(m.id)]" class="msg-text-toggle-wrap">
-                    <button type="button" class="msg-text-toggle" @click="toggleMsgTextExpand(m.id)">
-                      {{ isMsgTextExpanded(m.id) ? "收起全文" : "展开全文" }}
-                    </button>
-                  </div>
                 </div>
                 <template v-if="m.role === 'assistant'">
                   <div v-if="assistantShowAssistBlock(m)" class="msg-assist-foot">
-                    <div v-if="assistantIsRunning(m)" class="msg-assist-card msg-assist-card--loading">
-                      <el-icon class="msg-assist-card__spin" :size="22">
-                        <component :is="$icons.Loading" />
-                      </el-icon>
-                      <div class="msg-assist-card__body">
-                        <div class="msg-assist-card__title">正在生成视频</div>
-                        <div class="msg-assist-card__sub">任务进行中，可随时离开页面，稍后回来查看结果</div>
+                    <div v-if="assistantIsRunning(m)" class="msg-assist-loading">
+                      <span class="msg-assist-loading__ring" aria-hidden="true" />
+                      <div class="msg-assist-loading__copy">
+                        <span class="msg-assist-loading__title">正在生成视频</span>
+                        <span class="msg-assist-loading__sub">任务进行中，可随时离开页面，稍后回来查看结果</span>
                       </div>
                     </div>
                     <template v-else-if="assistantIsSuccess(m)">
-                      <div class="msg-assist-card msg-assist-card--success">
-                        <el-icon class="msg-assist-card__ico" :size="22">
-                          <component :is="$icons.CircleCheckFilled" />
-                        </el-icon>
-                        <div class="msg-assist-card__body">
-                          <div class="msg-assist-card__title">生成成功</div>
-                          <div class="msg-assist-card__sub">已出片，可在线预览或新窗口打开</div>
+                      <div v-if="m.resultUrl" class="msg-result-vid-wrap">
+                        <div
+                          v-if="!failedVideoUrls.has(m.resultUrl)"
+                          class="msg-media-slot msg-media-slot--video"
+                        >
+                          <video
+                            :key="'result-' + m.id"
+                            class="msg-vid-el"
+                            :src="m.resultUrl"
+                            :poster="resultVideoPosters[String(m.id)] || undefined"
+                            controls
+                            playsinline
+                            preload="auto"
+                            @loadedmetadata="onAssistantResultVideoMeta($event, m)"
+                            @error="markVideoFailed(m.resultUrl)"
+                          />
+                        </div>
+                        <div v-else class="msg-media-fail-banner" role="status">
+                          成片无法在此解码，请检查链接或重新生成
                         </div>
                       </div>
-                      <a
-                        v-if="m.resultUrl"
-                        class="msg-link"
-                        :href="m.resultUrl"
-                        target="_blank"
-                        rel="noopener"
-                      >
-                        <el-icon class="msg-link__icon"><component :is="$icons.VideoPlay" /></el-icon>
-                        查看成片
-                      </a>
                     </template>
                     <div v-else-if="assistantIsFailed(m)" class="msg-assist-card msg-assist-card--fail">
                       <el-icon class="msg-assist-card__ico" :size="22">
@@ -145,35 +160,66 @@
                 </template>
               </div>
               <div
-                v-if="m.role === 'user' || !deleteMessageDisabled(m)"
+                v-if="
+                  m.role === 'user' ||
+                  !deleteMessageDisabled(m) ||
+                  (m.text && msgTextOverflow[String(m.id)]) ||
+                  assistantCanDownloadResult(m)
+                "
                 class="msg-feed-actions msg-feed-actions--below"
               >
-                <template v-if="m.role === 'user'">
-                  <el-tooltip content="重新编辑" placement="top" :show-after="400">
-                    <button type="button" class="msg-act-btn" @click="reEditMessage(m)">
-                      <el-icon :size="16"><component :is="$icons.EditPen" /></el-icon>
-                    </button>
-                  </el-tooltip>
-                  <el-tooltip content="再次生成" placement="top" :show-after="400">
-                    <button
-                      type="button"
-                      class="msg-act-btn"
-                      :disabled="sending"
-                      @click="regenerateMessage(m)"
-                    >
-                      <el-icon :size="16"><component :is="$icons.RefreshRight" /></el-icon>
-                    </button>
-                  </el-tooltip>
-                </template>
-                <template v-if="!deleteMessageDisabled(m)">
-                  <el-tooltip content="删除" placement="top" :show-after="400">
-                    <span class="msg-act-tooltip-span">
-                      <button type="button" class="msg-act-btn msg-act-btn--danger" @click="deleteMessage(m)">
-                        <el-icon :size="16"><component :is="$icons.Delete" /></el-icon>
+                <div
+                  v-if="
+                    m.role === 'user' || assistantCanDownloadResult(m) || !deleteMessageDisabled(m)
+                  "
+                  class="msg-feed-actions__left"
+                >
+                  <template v-if="m.role === 'user'">
+                    <el-tooltip content="重新编辑" placement="top" :show-after="400">
+                      <button type="button" class="msg-act-btn" @click="reEditMessage(m)">
+                        <el-icon :size="16"><component :is="$icons.EditPen" /></el-icon>
                       </button>
-                    </span>
-                  </el-tooltip>
-                </template>
+                    </el-tooltip>
+                    <el-tooltip content="再次生成" placement="top" :show-after="400">
+                      <button
+                        type="button"
+                        class="msg-act-btn"
+                        :disabled="sending"
+                        @click="regenerateMessage(m)"
+                      >
+                        <el-icon :size="16"><component :is="$icons.RefreshRight" /></el-icon>
+                      </button>
+                    </el-tooltip>
+                  </template>
+                  <template v-if="assistantCanDownloadResult(m)">
+                    <el-tooltip content="下载成片" placement="top" :show-after="400">
+                      <span class="msg-act-tooltip-span">
+                        <button
+                          type="button"
+                          class="msg-act-btn"
+                          :disabled="!!assistantDownloadBusy[String(m.id)]"
+                          @click="downloadAssistantResult(m)"
+                        >
+                          <el-icon :size="16"><component :is="$icons.Download" /></el-icon>
+                        </button>
+                      </span>
+                    </el-tooltip>
+                  </template>
+                  <template v-if="!deleteMessageDisabled(m)">
+                    <el-tooltip content="删除" placement="top" :show-after="400">
+                      <span class="msg-act-tooltip-span">
+                        <button type="button" class="msg-act-btn msg-act-btn--danger" @click="deleteMessage(m)">
+                          <el-icon :size="16"><component :is="$icons.Delete" /></el-icon>
+                        </button>
+                      </span>
+                    </el-tooltip>
+                  </template>
+                </div>
+                <div v-if="m.text && msgTextOverflow[String(m.id)]" class="msg-feed-actions__tail">
+                  <button type="button" class="msg-text-toggle" @click="toggleMsgTextExpand(m.id)">
+                    {{ isMsgTextExpanded(m.id) ? "收起" : "展开" }}
+                  </button>
+                </div>
               </div>
             </div>
               </div>
@@ -224,44 +270,89 @@
                     class="composer-icon-btn composer-icon-btn--rail"
                     :class="{ 'composer-icon-btn--disabled': !referenceVideoAllowed }"
                     :disabled="uploadBusy || !referenceVideoAllowed"
-                    :title="referenceVideoAllowed ? '参考视频（智能参考）' : '未开启参考视频，见后台视频模型配置'"
+                    :title="referenceVideoAllowed ? '参考视频（智能参考）' : '未开启参考视频，见后台「模型管理」'"
                     circle
                   >
                     <el-icon :size="20"><component :is="$icons.VideoCamera" /></el-icon>
                   </el-button>
                 </el-upload>
+                <el-button
+                  class="composer-icon-btn composer-icon-btn--rail"
+                  circle
+                  title="选择提示词（与「提示词管理」数据同步）"
+                  @click="openPromptPicker"
+                >
+                  <el-icon :size="20"><component :is="$icons.Collection" /></el-icon>
+                </el-button>
               </div>
-              <div class="composer-head__spacer" />
-              <el-button
-                class="composer-icon-btn composer-icon-btn--rail"
-                circle
-                title="选择提示词（与「提示词管理」数据同步）"
-                @click="openPromptPicker"
-              >
-                <el-icon :size="20"><component :is="$icons.Collection" /></el-icon>
-              </el-button>
+              <div class="composer-head__gen toolbar-gen-opts">
+                <el-select
+                  v-model="videoAspectRatio"
+                  class="toolbar-gen-select"
+                  size="small"
+                  placement="top"
+                  teleported
+                  popper-class="vc-toolbar-gen-popper"
+                >
+                  <el-option label="9:16" value="9:16" />
+                  <el-option label="16:9" value="16:9" />
+                  <el-option label="1:1" value="1:1" />
+                </el-select>
+                <el-select
+                  v-model="videoDurationSec"
+                  class="toolbar-gen-select toolbar-gen-select--dur"
+                  size="small"
+                  placement="top"
+                  teleported
+                  popper-class="vc-toolbar-gen-popper"
+                >
+                  <el-option v-for="sec in videoDurationChoices" :key="sec" :label="`${sec}s`" :value="sec" />
+                </el-select>
+              </div>
             </div>
 
             <div class="composer-body">
               <div v-if="pendingImages.length || pendingVideos.length" class="pending-strip">
-                <div v-for="(u, i) in pendingImages" :key="'pi' + i" class="pending-tile">
-                  <button type="button" class="pending-tile__x" title="移除" @click="removePendingImage(i)">
+                <div v-for="(u, i) in pendingImages" :key="'pi' + i" class="pending-tile pending-tile--img">
+                  <button type="button" class="pending-tile__x" title="移除" @click.stop="removePendingImage(i)">
                     <el-icon><component :is="$icons.Close" /></el-icon>
                   </button>
-                  <img :src="u" alt="" class="pending-tile-media" />
+                  <span class="pending-tile__badge pending-tile__badge--img">图片</span>
+                  <el-image
+                    :src="u"
+                    fit="cover"
+                    class="pending-tile-elimg"
+                    :preview-src-list="[u]"
+                    preview-teleported
+                    hide-on-click-modal
+                  />
                 </div>
 
-                <div v-for="(u, i) in pendingVideos" :key="'pv' + i" class="pending-tile pending-tile--vid">
-                  <button type="button" class="pending-tile__x" title="移除" @click="removePendingVideo(i)">
+                <div
+                  v-for="(u, i) in pendingVideos"
+                  :key="'pv' + i"
+                  class="pending-tile pending-tile--vid"
+                  role="button"
+                  tabindex="0"
+                  title="点击播放预览"
+                  @click="openPendingVideoPreview(u)"
+                  @keydown.enter.prevent="openPendingVideoPreview(u)"
+                >
+                  <span class="pending-tile__badge pending-tile__badge--vid">视频</span>
+                  <span class="pending-tile__play" aria-hidden="true">
+                    <el-icon :size="26"><component :is="$icons.VideoPlay" /></el-icon>
+                  </span>
+                  <button type="button" class="pending-tile__x" title="移除" @click.stop="removePendingVideo(i)">
                     <el-icon><component :is="$icons.Close" /></el-icon>
                   </button>
                   <video
                     v-if="!failedVideoUrls.has(u)"
                     :src="u"
-                    class="pv"
+                    class="pv pending-tile__vid-dec"
                     muted
                     playsinline
-                    preload="none"
+                    preload="auto"
+                    @loadedmetadata="nudgeVideoFirstFrame"
                     @error="markVideoFailed(u)"
                   />
                   <div v-else class="pv pv--err">无法预览</div>
@@ -283,7 +374,7 @@
               <span class="composer-hint">Ctrl + Enter 发送</span>
               <div class="composer-foot__right">
                 <span class="composer-count">{{ inputText.length }} / {{ INPUT_MAX_LENGTH }}</span>
-                <el-button type="primary" round :loading="sending" :disabled="!canSend" @click="send">
+                <el-button type="primary" round :disabled="!canSend || sending" @click="send">
                   发送
                 </el-button>
               </div>
@@ -291,12 +382,6 @@
           </div>
         </div>
       </template>
-      <div v-else-if="sessionReady" class="main-empty">
-        <div class="main-empty__card">
-          <p class="main-empty__title">开始一段视频创作对话</p>
-          <p class="main-empty__sub">{{ mainEmptySub }}</p>
-        </div>
-      </div>
     </main>
 
     <el-dialog
@@ -373,36 +458,155 @@
         </el-scrollbar>
       </div>
     </el-drawer>
+
+    <el-dialog
+      v-model="pendingVideoDialogVisible"
+      title="视频预览"
+      width="min(720px, 94vw)"
+      append-to-body
+      align-center
+      destroy-on-close
+      class="vc-pending-vid-dialog"
+      @closed="pendingVideoPreviewUrl = ''"
+    >
+      <video
+        v-if="pendingVideoPreviewUrl"
+        :key="pendingVideoPreviewUrl"
+        class="vc-pending-vid-dialog__video"
+        :src="pendingVideoPreviewUrl"
+        controls
+        playsinline
+        preload="metadata"
+      />
+    </el-dialog>
   </div>
 </template>
 
 <script setup name="aiVideoChat">
 import { nextTick, onMounted, onUnmounted, ref, watch, computed } from "vue"
-import { ElMessageBox } from "element-plus"
+import { ElMessage, ElMessageBox } from "element-plus"
 import dayjs from "dayjs"
+import utc from "dayjs/plugin/utc"
+import timezone from "dayjs/plugin/timezone"
 import request from "@/request"
+
+dayjs.extend(utc)
+dayjs.extend(timezone)
+
+/** 对话时间统一按国内常用时区展示（含夏令时历史由 IANA 数据自行处理） */
+const TZ_CN = "Asia/Shanghai"
 import { uploadImage, uploadVideo, getFileExt } from "@/request/oss"
 import logoMark from "@/assets/images/logo.svg"
 
 const VC_WIDE_STORAGE_KEY = "wan-ai-video-chat-wide"
 /** 对话页所选视频模型，刷新后恢复（须仍在当前启用列表中） */
 const VC_MODEL_ID_STORAGE_KEY = "wan-ai-video-chat-model-id"
+const VC_ASPECT_STORAGE_KEY = "wan-ai-video-chat-aspect"
+const VC_DURATION_STORAGE_KEY = "wan-ai-video-chat-duration"
 
+/** 与后端 videoChat normalize 及方舟 Seedance 文档常见区间对齐 */
+const VIDEO_GEN_DURATION_MIN = 4
+const VIDEO_GEN_DURATION_MAX = 15
+
+const videoAspectRatio = ref("9:16")
+const videoDurationSec = ref(5)
+const videoDurationChoices = computed(() => {
+  const list = []
+  for (let s = VIDEO_GEN_DURATION_MIN; s <= VIDEO_GEN_DURATION_MAX; s++) list.push(s)
+  return list
+})
+
+const pendingVideoDialogVisible = ref(false)
+const pendingVideoPreviewUrl = ref("")
+
+function openPendingVideoPreview(u) {
+  const s = String(u || "").trim()
+  if (!s) return
+  pendingVideoPreviewUrl.value = s
+  pendingVideoDialogVisible.value = true
+}
+
+function readStoredAspectRatio() {
+  try {
+    const r = sessionStorage.getItem(VC_ASPECT_STORAGE_KEY)
+    if (r && ["9:16", "16:9", "1:1"].includes(r)) return r
+  } catch (_) {
+    /* ignore */
+  }
+  return null
+}
+
+function readStoredDurationSec() {
+  try {
+    const r = sessionStorage.getItem(VC_DURATION_STORAGE_KEY)
+    const n = parseInt(String(r || ""), 10)
+    if (Number.isFinite(n) && n >= VIDEO_GEN_DURATION_MIN && n <= VIDEO_GEN_DURATION_MAX) return n
+  } catch (_) {
+    /* ignore */
+  }
+  return null
+}
+
+watch(videoAspectRatio, (v) => {
+  try {
+    sessionStorage.setItem(VC_ASPECT_STORAGE_KEY, v)
+  } catch (_) {
+    /* ignore */
+  }
+})
+
+watch(videoDurationSec, (v) => {
+  try {
+    sessionStorage.setItem(VC_DURATION_STORAGE_KEY, String(v))
+  } catch (_) {
+    /* ignore */
+  }
+})
+
+/**
+ * 解析为 UTC 时刻：后端 ISO（Z）或 SQLite 旧串（无时区空格格式）均按 UTC 理解，
+ * 再由 formatSessionTime 转到 Asia/Shanghai 展示。
+ */
+function parseMessageInstant(d) {
+  if (d == null || d === "") return null
+  const s = String(d).trim()
+  if (!s) return null
+  if (/^\d{4}-\d{2}-\d{2}T/.test(s) || /[zZ]$/.test(s) || /[+-]\d{2}:?\d{2}$/.test(s)) {
+    const t = dayjs.utc(s)
+    return t.isValid() ? t : null
+  }
+  const norm = s.replace("T", " ").slice(0, 19)
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(norm)) {
+    const t = dayjs.utc(norm.replace(" ", "T"))
+    return t.isValid() ? t : null
+  }
+  const t = dayjs(s)
+  return t.isValid() ? t : null
+}
+
+/** 会话列表、消息头等：国内（上海），时间精确到秒 */
 function formatSessionTime(d) {
-  if (d == null || d === "") return ""
-  const t = dayjs(d)
-  if (!t.isValid()) return String(d)
-  const now = dayjs()
-  if (t.isSame(now, "day")) return `今天 ${t.format("HH:mm")}`
-  if (t.isSame(now.subtract(1, "day"), "day")) return `昨天 ${t.format("HH:mm")}`
-  if (t.isSame(now, "year")) return t.format("M月D日 HH:mm")
-  return t.format("YYYY-MM-DD HH:mm")
+  const t = parseMessageInstant(d)
+  if (!t || !t.isValid()) return d == null || d === "" ? "" : String(d)
+  const cn = t.tz(TZ_CN)
+  const now = dayjs().tz(TZ_CN)
+  if (cn.isSame(now, "day")) return `今天 ${cn.format("HH:mm:ss")}`
+  if (cn.isSame(now.subtract(1, "day"), "day")) return `昨天 ${cn.format("HH:mm:ss")}`
+  if (cn.isSame(now, "year")) return cn.format("M月D日 HH:mm:ss")
+  return cn.format("YYYY-MM-DD HH:mm:ss")
 }
 
 function messageHasMedia(m) {
   const nImg = m?.attachments?.images?.length ?? 0
   const nVid = m?.attachments?.videos?.length ?? 0
   return nImg + nVid > 0
+}
+
+/** 当前消息图片 URL 列表（供 el-image 预览组图） */
+function chatAttachmentImageUrls(m) {
+  const raw = m?.attachments?.images
+  if (!Array.isArray(raw) || !raw.length) return []
+  return raw.map((u) => String(u || "").trim()).filter(Boolean)
 }
 
 const IMAGE_EXTS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"])
@@ -417,16 +621,18 @@ function truncatePromptPreview(raw, maxLen = 96) {
   return `${s.slice(0, maxLen)}…`
 }
 
-/** 参考视频是否允许：以「视频模型配置」中「支持参考视频」开关为准（见 /admin-api/video/model/list-enabled） */
+/** 参考视频是否允许：以「模型管理」中「支持参考视频」开关为准（见 /admin-api/video/model/list-enabled） */
 function modelAllowsReferenceVideo(m) {
   return !!(m && m.supportsReferenceVideo)
 }
 
 const sessions = ref([])
-/** 会话列表是否已从接口拉回：避免刷新时短暂 activeSessionId 为空而误显 main-empty */
+/** 会话列表是否已从接口拉回 */
 const sessionReady = ref(false)
 const activeSessionId = ref(null)
 const messages = ref([])
+/** 防止多条 loadMessages 并发时后发先至，用旧列表覆盖新数据导致界面闪回 */
+let loadMessagesSeq = 0
 const models = ref([])
 const selectedModelId = ref(null)
 const inputText = ref("")
@@ -453,12 +659,82 @@ let pollTimer = null
 /** 视频地址加载失败（如 404）时记入此处，移除 video 元素，避免浏览器对同一 URL 反复请求 */
 const failedVideoUrls = ref(new Set())
 
+/** 助手成片 inline video 的 poster（无跨域 CORS 时 canvas 无法导出，多数情况无封面但仍可播放） */
+const resultVideoPosters = ref(/** @type {Record<string, string>} */ ({}))
+
 function markVideoFailed(url) {
   const u = String(url || "")
   if (!u) return
   const next = new Set(failedVideoUrls.value)
   next.add(u)
   failedVideoUrls.value = next
+}
+
+/** 小尺寸内联 video：仅用 preload=none 时往往不拉数据，画面一直是灰块；在拿到时长后略 seek 触发首帧解码 */
+function nudgeVideoFirstFrame(ev) {
+  const v = ev.target
+  if (!(v instanceof HTMLVideoElement)) return
+  try {
+    const d = v.duration
+    if (!Number.isFinite(d) || d <= 0) return
+    const t = Math.min(0.2, Math.max(0.05, d * 0.02))
+    if (Math.abs(v.currentTime - t) > 0.01) v.currentTime = t
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+function onAssistantResultVideoMeta(ev, m) {
+  const v = ev.target
+  if (!(v instanceof HTMLVideoElement) || !m?.resultUrl) return
+  const key = String(m.id)
+  if (resultVideoPosters.value[key]) return
+
+  const savePoster = () => {
+    if (resultVideoPosters.value[key]) return
+    try {
+      const w = v.videoWidth
+      const h = v.videoHeight
+      if (!w || !h) return
+      const canvas = document.createElement("canvas")
+      canvas.width = w
+      canvas.height = h
+      const ctx = canvas.getContext("2d")
+      if (!ctx) return
+      ctx.drawImage(v, 0, 0, w, h)
+      resultVideoPosters.value = {
+        ...resultVideoPosters.value,
+        [key]: canvas.toDataURL("image/jpeg", 0.82),
+      }
+    } catch (_) {
+      /* 无 CORS 时 canvas 受污染，无法导出；保留无 poster 的可播放 video */
+    }
+  }
+
+  const onSeeked = () => {
+    v.removeEventListener("seeked", onSeeked)
+    window.clearTimeout(fallbackTimer)
+    savePoster()
+  }
+
+  const fallbackTimer = window.setTimeout(() => {
+    v.removeEventListener("seeked", onSeeked)
+    savePoster()
+  }, 1200)
+
+  v.addEventListener("seeked", onSeeked, { once: true })
+  try {
+    const dur = v.duration
+    const t =
+      Number.isFinite(dur) && dur > 0
+        ? Math.min(0.35, Math.max(0.05, dur * 0.02))
+        : 0.1
+    v.currentTime = t
+  } catch (_) {
+    v.removeEventListener("seeked", onSeeked)
+    window.clearTimeout(fallbackTimer)
+    savePoster()
+  }
 }
 
 function assistantStillRunning(m) {
@@ -493,6 +769,93 @@ function assistantIsFailed(m) {
 function assistantShowAssistBlock(m) {
   if (m.role !== "assistant") return false
   return !!(m.status || m.resultUrl || m.errorMessage)
+}
+
+/** 助手成片可下载：成功且 URL 可用、当前未标记为解码失败 */
+function assistantCanDownloadResult(m) {
+  if (m.role !== "assistant") return false
+  if (!assistantIsSuccess(m)) return false
+  const u = String(m.resultUrl || "").trim()
+  if (!u || !u.startsWith("http")) return false
+  if (failedVideoUrls.value.has(u)) return false
+  return true
+}
+
+/** 助手消息下载中（防重复点击） */
+const assistantDownloadBusy = ref(/** @type {Record<string, boolean>} */ ({}))
+
+function resultVideoFilename(url, messageId) {
+  try {
+    const u = new URL(url)
+    const seg = decodeURIComponent(u.pathname.split("/").pop() || "")
+    const base = seg.split("?")[0]
+    if (base && /\.(mp4|webm|mov|mkv)(\?.*)?$/i.test(base)) return base
+  } catch (_) {
+    /* ignore */
+  }
+  return `wan-ai-video-${messageId}.mp4`
+}
+
+/**
+ * 下载成片：优先 fetch+CORS 拿 Blob 触发本地下载（可走磁盘直写、HTTP 缓存复用）；
+ * 跨域无 CORS 时回退新标签打开，由用户另存为。
+ */
+async function downloadAssistantResult(m) {
+  if (m.role !== "assistant") return
+  const url = String(m.resultUrl || "").trim()
+  if (!url || !url.startsWith("http")) {
+    ElMessage.warning("无可下载链接")
+    return
+  }
+  const key = String(m.id)
+  if (assistantDownloadBusy.value[key]) return
+  assistantDownloadBusy.value = { ...assistantDownloadBusy.value, [key]: true }
+  const filename = resultVideoFilename(url, m.id)
+  try {
+    const ac = new AbortController()
+    const timer = window.setTimeout(() => ac.abort(), 180000)
+    const res = await fetch(url, {
+      mode: "cors",
+      credentials: "omit",
+      signal: ac.signal,
+      cache: "default",
+    })
+    window.clearTimeout(timer)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const blob = await res.blob()
+    const objUrl = URL.createObjectURL(blob)
+    try {
+      const a = document.createElement("a")
+      a.href = objUrl
+      a.download = filename
+      a.rel = "noopener"
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+    } finally {
+      URL.revokeObjectURL(objUrl)
+    }
+    ElMessage.success("下载已开始")
+  } catch (e) {
+    console.warn("[video-chat] download fallback", e)
+    try {
+      const a = document.createElement("a")
+      a.href = url
+      a.target = "_blank"
+      a.rel = "noopener noreferrer"
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+    } catch (_) {
+      window.open(url, "_blank", "noopener,noreferrer")
+    }
+    ElMessage.info("若未自动保存，请在新标签的视频上右键「另存为」")
+  } finally {
+    const next = { ...assistantDownloadBusy.value }
+    delete next[key]
+    assistantDownloadBusy.value = next
+  }
 }
 
 /** 将消息按「一轮 = 用户 + （可选）助手」分组，分隔线画在轮与轮之间 */
@@ -541,6 +904,29 @@ function feedRoleLabel(m) {
   return n || "生成任务"
 }
 
+/** 与角色名同一行：「创作指令 · 今天 12:00」（不写「发送/生成」前缀） */
+function messageFeedTimePart(m) {
+  if (!m) return ""
+  if (m.role === "user") {
+    if (!m.createTime) return ""
+    return formatSessionTime(m.createTime)
+  }
+  if (m.role === "assistant") {
+    if (assistantIsRunning(m)) return "生成中…"
+    const doneRaw = m.completedTime != null && String(m.completedTime).trim() ? String(m.completedTime).trim() : ""
+    if (assistantIsSuccess(m)) {
+      const show = doneRaw || (m.createTime ? String(m.createTime).trim() : "")
+      return show ? formatSessionTime(show) : ""
+    }
+    if (assistantIsFailed(m)) {
+      const show = doneRaw || (m.createTime ? String(m.createTime).trim() : "")
+      return show ? formatSessionTime(show) : ""
+    }
+    if (m.createTime) return formatSessionTime(m.createTime)
+  }
+  return ""
+}
+
 const uploadBusy = computed(() => uploadCount.value > 0)
 
 const selectedModel = computed(() => models.value.find((x) => x.id === selectedModelId.value) || null)
@@ -549,12 +935,6 @@ const referenceVideoAllowed = computed(() => modelAllowsReferenceVideo(selectedM
 
 const dragDropHint = computed(() =>
   referenceVideoAllowed.value ? "松开以上传图片或参考视频" : "松开以上传图片（当前模型未开启参考视频）",
-)
-
-const mainEmptySub = computed(() =>
-  referenceVideoAllowed.value
-    ? "点击顶部「新建对话」开始；历史会话在「对话记录」中切换。支持参考图与参考视频。"
-    : "点击顶部「新建对话」开始。参考视频由后台「视频模型配置」控制；历史在「对话记录」中。",
 )
 
 const sessionsDrawerSize = computed(() =>
@@ -629,6 +1009,8 @@ async function postChatSendPayload(payload) {
       sessionId: activeSessionId.value,
       videoModelId: selectedModelId.value,
       ...payload,
+      aspectRatio: videoAspectRatio.value,
+      duration: videoDurationSec.value,
     },
   })
 }
@@ -731,7 +1113,7 @@ function openPromptPicker() {
 }
 
 const canSend = computed(() => {
-  if (!activeSessionId.value || !selectedModelId.value) return false
+  if (!selectedModelId.value) return false
   if (uploadBusy.value) return false
   const t = inputText.value.trim()
   return !!(t || pendingImages.value.length || pendingVideos.value.length)
@@ -769,7 +1151,7 @@ async function addUploadedImageFile(file) {
 
 async function addUploadedVideoFile(file) {
   if (!referenceVideoAllowed.value) {
-    ElMessage.warning("当前模型未开启参考视频，请在「视频模型配置」中打开该能力或切换模型")
+    ElMessage.warning("当前模型未开启参考视频，请在「模型管理」中打开该能力或切换模型")
     return
   }
   const raw = rawUploadFile(file)
@@ -898,7 +1280,8 @@ async function loadSessions() {
   }
 }
 
-async function createSession() {
+/** 创建并切换到新会话（无会话时首次发送也会走此逻辑） */
+async function activateNewChatSession() {
   const res = await request({
     url: "/admin-api/video/chat/sessions",
     method: "POST",
@@ -906,13 +1289,18 @@ async function createSession() {
   })
   if (res.code !== 0) {
     ElMessage.error(res.msg || "创建失败")
-    return
+    return false
   }
   sessions.value.unshift(res.data)
   activeSessionId.value = res.data.id
   messages.value = []
   stopPoll()
-  sessionsDrawer.value = false
+  return true
+}
+
+async function createSession() {
+  const ok = await activateNewChatSession()
+  if (ok) sessionsDrawer.value = false
 }
 
 async function selectSession(id) {
@@ -927,12 +1315,16 @@ async function selectSession(id) {
  */
 async function loadMessages(opts = {}) {
   const scrollToBottom = !!opts.scrollToBottom
-  if (!activeSessionId.value) return
+  const sessionSnap = activeSessionId.value
+  if (!sessionSnap) return
+  const seq = ++loadMessagesSeq
   const res = await request({
     url: "/admin-api/video/chat/messages/page",
     method: "GET",
-    params: { sessionId: activeSessionId.value, pageNo: 1, pageSize: 200 },
+    params: { sessionId: sessionSnap, pageNo: 1, pageSize: 200 },
   })
+  if (seq !== loadMessagesSeq) return
+  if (activeSessionId.value !== sessionSnap) return
   if (res.code !== 0) return
   messages.value = res.data?.list || []
   if (scrollToBottom) nextTick(() => scrollBottom())
@@ -952,27 +1344,91 @@ function onPickVideo({ file }) {
   return addUploadedVideoFile(file)
 }
 
+function rollbackOptimisticSend(optimisticUserId, optimisticAssistId, capturedText, capturedImages, capturedVideos) {
+  messages.value = messages.value.filter((m) => m.id !== optimisticUserId && m.id !== optimisticAssistId)
+  inputText.value = capturedText
+  pendingImages.value = capturedImages
+  pendingVideos.value = capturedVideos
+}
+
+function pushOptimisticSendRound(capturedText, capturedImages, capturedVideos) {
+  const modelName = String(selectedModel.value?.name || "").trim()
+  const optimisticUserId = -Date.now()
+  const optimisticAssistId = optimisticUserId - 1
+  const sessionId = activeSessionId.value
+  const nowStr = new Date().toISOString()
+  messages.value = [
+    ...messages.value,
+    {
+      id: optimisticUserId,
+      sessionId,
+      role: "user",
+      text: capturedText,
+      attachments: { images: [...capturedImages], videos: [...capturedVideos] },
+      createTime: nowStr,
+      completedTime: "",
+    },
+    {
+      id: optimisticAssistId,
+      sessionId,
+      role: "assistant",
+      text: "",
+      attachments: { images: [], videos: [] },
+      videoJobId: null,
+      status: "processing",
+      resultUrl: "",
+      errorMessage: "",
+      videoModelName: modelName,
+      createTime: "",
+      completedTime: "",
+    },
+  ]
+  return { optimisticUserId, optimisticAssistId }
+}
+
 async function send() {
   if (!canSend.value || sending.value) return
+  if (!activeSessionId.value) {
+    const ok = await activateNewChatSession()
+    if (!ok) return
+  }
+
+  const capturedText = inputText.value.trim()
+  const capturedImages = [...pendingImages.value]
+  const capturedVideos = [...pendingVideos.value]
+
+  inputText.value = ""
+  pendingImages.value = []
+  pendingVideos.value = []
+
+  const { optimisticUserId, optimisticAssistId } = pushOptimisticSendRound(
+    capturedText,
+    capturedImages,
+    capturedVideos,
+  )
+  nextTick(() => {
+    scrollBottom()
+    setupPoll()
+  })
+
   sending.value = true
   try {
     const res = await postChatSendPayload({
-      text: inputText.value.trim(),
-      imageUrls: [...pendingImages.value],
-      videoUrls: [...pendingVideos.value],
+      text: capturedText,
+      imageUrls: capturedImages,
+      videoUrls: capturedVideos,
     })
     if (res.code !== 0) {
       ElMessage.error(res.msg || "发送失败")
+      rollbackOptimisticSend(optimisticUserId, optimisticAssistId, capturedText, capturedImages, capturedVideos)
       return
     }
-    inputText.value = ""
-    pendingImages.value = []
-    pendingVideos.value = []
     await loadMessages({ scrollToBottom: true })
     await loadSessions()
   } catch (e) {
     console.error(e)
     ElMessage.error("发送失败")
+    rollbackOptimisticSend(optimisticUserId, optimisticAssistId, capturedText, capturedImages, capturedVideos)
   } finally {
     sending.value = false
   }
@@ -1046,18 +1502,125 @@ watch(referenceVideoAllowed, (allowed) => {
   }
 })
 
+/** 全屏结束时需清掉的内联样式（覆盖内联预览的 min/max + cover，否则全屏仍会被裁切） */
+const VC_FS_STYLE_PROPS = [
+  "object-fit",
+  "object-position",
+  "width",
+  "height",
+  "max-width",
+  "max-height",
+  "min-width",
+  "min-height",
+  "flex",
+  "display",
+  "position",
+  "top",
+  "left",
+  "right",
+  "bottom",
+  "inset",
+  "margin",
+  "transform",
+  "box-sizing",
+  "border-radius",
+  "background",
+]
+
+/** @type {HTMLVideoElement | null} */
+let vcFullscreenStyledVideo = null
+
+function resolveChatVideoInFullscreenRoot(fs) {
+  if (!fs) return null
+  if (fs instanceof HTMLVideoElement) {
+    if (fs.classList.contains("msg-vid-el") || fs.classList.contains("vc-pending-vid-dialog__video")) return fs
+    return null
+  }
+  if (typeof fs.querySelector === "function") {
+    const v = fs.querySelector("video.msg-vid-el, video.vc-pending-vid-dialog__video")
+    return v instanceof HTMLVideoElement ? v : null
+  }
+  return null
+}
+
+function clearChatVideoFullscreenOverrides() {
+  const v = vcFullscreenStyledVideo
+  vcFullscreenStyledVideo = null
+  if (!v) return
+  for (const k of VC_FS_STYLE_PROPS) {
+    try {
+      v.style.removeProperty(k)
+    } catch (_) {
+      /* ignore */
+    }
+  }
+}
+
+function syncChatVideoFullscreenLayout() {
+  const fs = document.fullscreenElement || /** @type {Document & { webkitFullscreenElement?: Element }} */ (document).webkitFullscreenElement
+  if (!fs) {
+    clearChatVideoFullscreenOverrides()
+    return
+  }
+  const vid = resolveChatVideoInFullscreenRoot(fs)
+  if (!vid) {
+    clearChatVideoFullscreenOverrides()
+    return
+  }
+  if (vcFullscreenStyledVideo && vcFullscreenStyledVideo !== vid) clearChatVideoFullscreenOverrides()
+  vcFullscreenStyledVideo = vid
+  /*
+   * 勿用 100vw×100vh 把 video 先拉成整屏再 contain：竖屏素材在部分 Chromium 上会仍像被裁切。
+   * 用 auto + max + 居中，让画布按视频固有比例落在视口内＝完整画面。
+   */
+  vid.style.setProperty("box-sizing", "border-box", "important")
+  vid.style.setProperty("display", "block", "important")
+  vid.style.setProperty("flex", "none", "important")
+  vid.style.setProperty("min-width", "0", "important")
+  vid.style.setProperty("min-height", "0", "important")
+  vid.style.setProperty("position", "fixed", "important")
+  vid.style.removeProperty("inset")
+  vid.style.removeProperty("right")
+  vid.style.removeProperty("bottom")
+  vid.style.setProperty("left", "50%", "important")
+  vid.style.setProperty("top", "50%", "important")
+  vid.style.setProperty("transform", "translate(-50%, -50%)", "important")
+  vid.style.setProperty("width", "auto", "important")
+  vid.style.setProperty("height", "auto", "important")
+  vid.style.setProperty("max-width", "100vw", "important")
+  vid.style.setProperty("max-height", "100vh", "important")
+  vid.style.setProperty("margin", "0", "important")
+  vid.style.setProperty("object-fit", "contain", "important")
+  vid.style.setProperty("object-position", "center center", "important")
+  vid.style.setProperty("background", "#000", "important")
+  vid.style.setProperty("border-radius", "0", "important")
+}
+
+function onDocumentFullscreenChange() {
+  requestAnimationFrame(() => syncChatVideoFullscreenLayout())
+}
+
 onMounted(async () => {
   try {
     isWideMode.value = sessionStorage.getItem(VC_WIDE_STORAGE_KEY) === "1"
   } catch (_) {
     /* ignore */
   }
+  const ar = readStoredAspectRatio()
+  if (ar) videoAspectRatio.value = ar
+  const ds = readStoredDurationSec()
+  if (ds != null) videoDurationSec.value = ds
+  document.addEventListener("fullscreenchange", onDocumentFullscreenChange)
+  document.addEventListener("webkitfullscreenchange", onDocumentFullscreenChange)
   await loadModels()
   await loadSessions()
   await loadManagedPrompts()
 })
 
 onUnmounted(() => {
+  document.removeEventListener("fullscreenchange", onDocumentFullscreenChange)
+  document.removeEventListener("webkitfullscreenchange", onDocumentFullscreenChange)
+  clearChatVideoFullscreenOverrides()
   stopPoll()
   for (const ro of msgTextObservers.values()) ro.disconnect()
   msgTextObservers.clear()
@@ -1310,8 +1873,9 @@ onUnmounted(() => {
   margin-bottom: 0;
   border-bottom: none;
 
+  /* 创作指令与用户块、其下 AI 回答之间略留空 */
   &:not(:last-child) {
-    margin-bottom: 20px;
+    margin-bottom: 28px;
   }
 }
 
@@ -1319,16 +1883,46 @@ onUnmounted(() => {
   margin-bottom: 10px;
 }
 
+.msg-feed-head__line {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+.msg-feed-head__sep {
+  color: var(--el-text-color-placeholder);
+  opacity: 0.55;
+  font-weight: 500;
+  user-select: none;
+}
+
 .msg-feed-actions {
+  flex-shrink: 0;
+}
+
+.msg-feed-actions--below {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  width: 100%;
+  max-width: 100%;
+  margin-top: 6px;
+  padding-top: 0;
+}
+
+.msg-feed-actions__left {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
 }
 
-.msg-feed-actions--below {
-  margin-top: 12px;
-  padding-top: 2px;
+.msg-feed-actions__tail {
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .msg-act-tooltip-span {
@@ -1376,6 +1970,15 @@ onUnmounted(() => {
   color: var(--el-text-color-placeholder);
 }
 
+.msg-feed-time {
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  color: var(--el-text-color-secondary);
+  opacity: 0.88;
+  text-transform: none;
+}
+
 .msg-bubble {
   padding: 0;
   font-size: 14px;
@@ -1396,7 +1999,7 @@ onUnmounted(() => {
 .msg-bubble--has-media {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .msg-media-row {
@@ -1407,19 +2010,18 @@ onUnmounted(() => {
   gap: 10px;
   overflow-x: auto;
   padding: 0 0 4px;
-  margin: 0 0 12px;
+  margin: 0;
   border-radius: 0;
   scrollbar-width: thin;
   background: transparent;
   border: none;
 }
 
-/* 正文 + 展开：纵向成组，链接贴在省略段落下方靠右，与截断处同一视觉块 */
 .msg-text-stack {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 6px;
+  gap: 0;
   width: 100%;
   max-width: 100%;
 }
@@ -1429,12 +2031,6 @@ onUnmounted(() => {
   min-width: 0;
   white-space: pre-wrap;
   word-break: break-word;
-}
-
-.msg-text-toggle-wrap {
-  display: flex;
-  justify-content: flex-end;
-  width: 100%;
 }
 
 .msg-text--clamped-2 {
@@ -1465,40 +2061,189 @@ onUnmounted(() => {
   }
 }
 
-.att-img--inline {
+/* 聊天记录内图/视频：统一 9:16 竖槽；cover 铺满避免大字黑边；尺寸略小更整齐 */
+.msg-media-slot {
+  /* 略小于此前一档，聊天记录里图/视频竖槽仍保持 9:16 */
+  --msg-chat-media-w: 132px;
+
   flex-shrink: 0;
-  max-width: 200px;
-  max-height: 150px;
+  width: var(--msg-chat-media-w);
+  max-width: min(var(--msg-chat-media-w), 34vw);
+  aspect-ratio: 9 / 16;
   margin: 0;
-  border-radius: 12px;
-  object-fit: cover;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.06);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--el-fill-color-darker, #0c0c0d);
+  border: none;
+  box-shadow: 0 2px 14px rgba(15, 23, 42, 0.06);
+  box-sizing: border-box;
+  line-height: 0;
 }
 
-.att-vid--inline {
-  flex-shrink: 0;
-  width: 100%;
-  max-width: min(520px, 100%);
-  max-height: 292px;
-  border-radius: 12px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  background: #0f0f10;
-  box-shadow: 0 6px 28px rgba(15, 23, 42, 0.08);
+.msg-media-slot--image {
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+  background: var(--el-fill-color-darker, #0c0c0d);
+}
 
-  &.att-vid--err {
+.msg-media-slot--video {
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+}
+
+.msg-media-elimage {
+  display: block;
+  flex: 1;
+  width: 100%;
+  min-width: 100%;
+  min-height: 100%;
+  cursor: zoom-in;
+
+  :deep(.el-image__wrapper) {
+    width: 100% !important;
+    height: 100% !important;
+  }
+
+  :deep(.el-image__inner) {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center;
+  }
+
+  :deep(.el-image__placeholder) {
     display: flex;
     align-items: center;
     justify-content: center;
-    min-width: 120px;
-    min-height: 72px;
-    padding: 8px;
-    font-size: 11px;
-    color: var(--el-color-danger);
-    background: var(--el-fill-color-lighter);
-    border: 1px dashed var(--el-border-color);
-    box-sizing: border-box;
+    background: transparent;
   }
+
+  :deep(.el-image__error) {
+    background: var(--el-fill-color-light);
+    font-size: 11px;
+  }
+}
+
+.msg-media-slot--err {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: center;
+  color: var(--el-color-danger);
+  background: var(--el-fill-color-lighter);
+  border: 1px dashed var(--el-border-color);
+  box-shadow: none;
+}
+
+.msg-media-fail-banner {
+  width: 100%;
+  max-width: min(320px, 100%);
+  min-height: 88px;
+  padding: 14px 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--el-text-color-secondary);
+  background: var(--el-fill-color-lighter);
+  border: 1px dashed var(--el-border-color);
+  border-radius: 12px;
+  box-sizing: border-box;
+}
+
+.msg-vid-el {
+  display: block;
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-width: 100%;
+  min-height: 100%;
+  object-fit: cover;
+  object-position: center;
+}
+
+/* 与同文件全局样式一致：全屏必须用更高优先级压住上面 cover/min 尺寸，否则会继续裁切 */
+.msg-vid-el:fullscreen,
+.msg-vid-el:-webkit-full-screen,
+.msg-vid-el:-moz-full-screen {
+  flex: none !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  width: auto !important;
+  height: auto !important;
+  max-width: 100vw !important;
+  max-width: min(100vw, 100dvw) !important;
+  max-height: 100vh !important;
+  max-height: min(100vh, 100dvh) !important;
+  margin: 0 !important;
+  position: fixed !important;
+  left: 50% !important;
+  top: 50% !important;
+  transform: translate(-50%, -50%) !important;
+  box-sizing: border-box !important;
+  object-fit: contain !important;
+  object-position: center center !important;
+  background: #000 !important;
+  border-radius: 0 !important;
+}
+
+.msg-assist-loading {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-top: 2px;
+  padding: 0;
+  max-width: min(520px, 100%);
+}
+
+.msg-assist-loading__ring {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  border: 2px solid color-mix(in srgb, var(--el-text-color-regular) 18%, transparent);
+  border-top-color: color-mix(in srgb, var(--el-text-color-primary) 55%, var(--el-text-color-regular));
+  border-radius: 50%;
+  animation: vc-loading-ring 0.7s linear infinite;
+}
+
+@keyframes vc-loading-ring {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.msg-assist-loading__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.msg-assist-loading__title {
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--el-text-color-primary);
+  line-height: 1.35;
+}
+
+.msg-assist-loading__sub {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--el-text-color-secondary);
+}
+
+.msg-result-vid-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  max-width: 100%;
 }
 
 .msg-assist-foot {
@@ -1551,38 +2296,8 @@ onUnmounted(() => {
   color: var(--el-color-danger);
 }
 
-.msg-assist-card__spin {
-  flex-shrink: 0;
-  color: var(--el-color-primary);
-  animation: vc-spin 0.9s linear infinite;
-}
-
-@keyframes vc-spin {
-  from {
-    transform: rotate(0deg);
-  }
-
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 .msg-assist-card__ico {
   flex-shrink: 0;
-}
-
-.msg-assist-card--loading {
-  background: color-mix(in srgb, var(--el-color-primary) 6%, var(--el-bg-color));
-  border-color: color-mix(in srgb, var(--el-color-primary) 22%, transparent);
-}
-
-.msg-assist-card--success {
-  background: color-mix(in srgb, var(--el-color-success) 8%, var(--el-bg-color));
-  border-color: color-mix(in srgb, var(--el-color-success) 28%, transparent);
-}
-
-.msg-assist-card--success .msg-assist-card__ico {
-  color: var(--el-color-success);
 }
 
 .msg-assist-card--fail {
@@ -1652,44 +2367,6 @@ onUnmounted(() => {
 
 .msg-link__icon {
   font-size: 16px;
-}
-
-.main-empty {
-  position: relative;
-  z-index: 1;
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 36px 24px;
-}
-
-.main-empty__card {
-  max-width: 400px;
-  padding: 36px 32px;
-  text-align: center;
-  border-radius: 20px;
-  background: color-mix(in srgb, var(--el-bg-color) 86%, transparent);
-  border: 1px solid rgba(15, 23, 42, 0.07);
-  box-shadow:
-    0 8px 32px rgba(15, 23, 42, 0.07),
-    0 0 0 1px rgba(255, 255, 255, 0.7) inset;
-  backdrop-filter: blur(12px);
-}
-
-.main-empty__title {
-  margin: 0 0 12px;
-  font-size: 18px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  color: var(--el-text-color-primary);
-}
-
-.main-empty__sub {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.65;
-  color: var(--el-text-color-secondary);
 }
 
 .vc-drawer-head {
@@ -1875,21 +2552,24 @@ onUnmounted(() => {
 
 .composer-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: space-between;
   padding-bottom: 10px;
   margin-bottom: 0;
-  gap: 8px;
+  gap: 8px 12px;
 }
 
 .composer-head__uploads {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-shrink: 0;
 }
 
-.composer-head__spacer {
-  flex: 1;
-  min-width: 8px;
+.composer-head__gen {
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .composer-body {
@@ -2001,6 +2681,75 @@ onUnmounted(() => {
   background: var(--el-fill-color-lighter);
   box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
 
+  &.pending-tile--vid {
+    cursor: pointer;
+    padding: 0;
+    margin: 0;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+
+    &:focus-visible {
+      outline: 2px solid color-mix(in srgb, var(--el-color-primary) 55%, transparent);
+      outline-offset: 2px;
+    }
+  }
+
+  .pending-tile__badge {
+    position: absolute;
+    left: 6px;
+    top: 6px;
+    z-index: 2;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: 0.02em;
+    pointer-events: none;
+  }
+
+  .pending-tile__badge--img {
+    color: var(--el-color-primary);
+    background: color-mix(in srgb, var(--el-bg-color) 88%, transparent);
+    border: 1px solid color-mix(in srgb, var(--el-color-primary) 22%, transparent);
+  }
+
+  .pending-tile__badge--vid {
+    color: #fff;
+    background: rgba(15, 23, 42, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+  }
+
+  .pending-tile__play {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(255, 255, 255, 0.95);
+    filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.4));
+    pointer-events: none;
+    background: linear-gradient(180deg, transparent 40%, rgba(0, 0, 0, 0.15) 100%);
+  }
+
+  .pending-tile__vid-dec {
+    pointer-events: none;
+  }
+
+  .pending-tile-elimg {
+    width: 100%;
+    height: 100%;
+    display: block;
+
+    :deep(.el-image__inner) {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+  }
+
   .pending-tile-media,
   .pv {
     width: 100%;
@@ -2025,7 +2774,7 @@ onUnmounted(() => {
   position: absolute;
   top: 4px;
   right: 4px;
-  z-index: 1;
+  z-index: 4;
   width: 22px;
   height: 22px;
   padding: 0;
@@ -2061,6 +2810,54 @@ onUnmounted(() => {
       box-shadow: none;
     }
   }
+}
+
+.toolbar-gen-opts {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+:deep(.toolbar-gen-select.el-select) {
+  --el-select-border-color-hover: transparent;
+  --el-select-input-focus-border-color: transparent;
+
+  width: auto !important;
+  vertical-align: middle;
+
+  .el-select__wrapper {
+    min-height: 32px;
+    min-width: 4.25rem;
+    padding: 4px 8px;
+    box-shadow: none !important;
+    border: none !important;
+    background: transparent !important;
+    color: var(--el-text-color-primary);
+  }
+
+  .el-select__placeholder {
+    color: var(--el-text-color-secondary);
+  }
+
+  .el-select__selected-item {
+    color: var(--el-text-color-primary);
+  }
+
+  .el-select__caret {
+    color: var(--el-text-color-secondary);
+    flex-shrink: 0;
+  }
+
+  .el-select__wrapper.is-hovering,
+  .el-select__wrapper.is-focused {
+    box-shadow: none !important;
+    border: none !important;
+    background: transparent !important;
+  }
+}
+
+:deep(.toolbar-gen-select--dur.el-select .el-select__wrapper) {
+  min-width: 3.75rem;
 }
 
 .composer-foot {
@@ -2151,10 +2948,6 @@ onUnmounted(() => {
     padding-right: 12px;
     padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px));
   }
-
-  .main-empty {
-    padding: 28px 16px;
-  }
 }
 </style>
 
@@ -2177,5 +2970,65 @@ onUnmounted(() => {
 
 .vc-prompt-dialog .el-dialog__body {
   padding-top: 8px;
+}
+
+.vc-pending-vid-dialog .el-dialog__body {
+  padding-top: 8px;
+}
+
+.vc-pending-vid-dialog__video {
+  display: block;
+  width: 100%;
+  max-height: min(70vh, 560px);
+  border-radius: 10px;
+  background: #0f0f10;
+}
+
+/*
+ * 全局再声明一遍：避免仅 data-v 选择器在部分环境下挂不上。
+ * 不要用 100vw×100vh 先拉满再 contain，竖屏片在 Chromium 全屏里会像被放大裁切。
+ * auto + max + 居中 = 整段画面落在视口内（可有黑边）。
+ */
+video.msg-vid-el:fullscreen,
+video.msg-vid-el:-webkit-full-screen,
+video.msg-vid-el:-moz-full-screen,
+.vc-pending-vid-dialog__video:fullscreen,
+.vc-pending-vid-dialog__video:-webkit-full-screen,
+.vc-pending-vid-dialog__video:-moz-full-screen {
+  max-width: 100vw !important;
+  max-width: min(100vw, 100dvw) !important;
+  max-height: 100vh !important;
+  max-height: min(100vh, 100dvh) !important;
+  width: auto !important;
+  height: auto !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  flex: none !important;
+  box-sizing: border-box !important;
+  position: fixed !important;
+  left: 50% !important;
+  top: 50% !important;
+  transform: translate(-50%, -50%) !important;
+  object-fit: contain !important;
+  object-position: center center !important;
+  background: #000 !important;
+  border-radius: 0 !important;
+}
+
+video.msg-vid-el:fullscreen::backdrop,
+.vc-pending-vid-dialog__video:fullscreen::backdrop {
+  background: #000;
+}
+
+/* 比例/时长下拉挂载到 body */
+.vc-toolbar-gen-popper {
+  .el-select-dropdown__item.is-selected {
+    background: transparent !important;
+    color: var(--el-color-primary);
+    font-weight: 600;
+  }
 }
 </style>

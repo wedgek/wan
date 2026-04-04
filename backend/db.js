@@ -58,6 +58,7 @@ function applySchemaPatches(dbi) {
     ensureAiStudioPatch(dbi)
     ensureVideoChatSchema(dbi)
     ensureVideoChatMenu(dbi)
+    ensureAiVideoModelMenuInSidebar(dbi)
     ensureAuthSessionsSchema(dbi)
     ensureWorkflowMenuSync(dbi)
     seedVideoModelsIfEmpty(dbi)
@@ -249,6 +250,43 @@ function ensureVideoChatMenu(dbi) {
 }
 
 /**
+ * 侧栏展示「模型管理」（`/ai/video-models`）；历史库曾默认 visible=0。
+ * 缺行时补插入并授权超级管理员。
+ */
+function ensureAiVideoModelMenuInSidebar(dbi) {
+  try {
+    const row = dbi.prepare(`SELECT id FROM menus WHERE component_name = ?`).get('aiVideoModelManage')
+    if (!row) {
+      const aiRow = dbi.prepare(`SELECT id FROM menus WHERE parent_id = 0 AND path = '/ai' LIMIT 1`).get()
+      if (!aiRow) return
+      const parentId = aiRow.id
+      const maxRow = dbi.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM menus').get()
+      const id = maxRow.m + 1
+      const ins = dbi.prepare(`
+        INSERT INTO menus (id, parent_id, type, name, path, component_name, icon, sort, permission, status, visible, keep_alive)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      ins.run(id, parentId, 2, '模型管理', 'video-models', 'aiVideoModelManage', 'VideoCamera', 99, 'ai:video-model:list', 0, 1, 0)
+      dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (1, ?)').run(id)
+      try {
+        dbi.prepare('INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES (?, ?)').run('menus', id)
+      } catch (_) {
+        /* ignore */
+      }
+      return
+    }
+    dbi.prepare(`UPDATE menus SET visible = 1 WHERE component_name = 'aiVideoModelManage'`).run()
+    dbi
+      .prepare(
+        `UPDATE menus SET name = '模型管理' WHERE component_name = 'aiVideoModelManage' AND name IN ('视频模型配置', '视频模型')`,
+      )
+      .run()
+  } catch (e) {
+    console.error('[db] ensureAiVideoModelMenuInSidebar', e.message)
+  }
+}
+
+/**
  * 菜单收敛：创意画布 → 工作流（Studio）；隐藏无实现占位项。
  * 不在此重复覆盖 visible / sort（否则与菜单管理接口互相覆盖）。
  */
@@ -282,7 +320,7 @@ function ensureAiStudioPatch(dbi) {
           .run()
       }
     }
-    /* 不再每次请求强制隐藏「视频模型配置」；新库默认见 ensureVideoMenus 的 INSERT。 */
+    /* 「模型管理」侧栏可见性由 ensureAiVideoModelMenuInSidebar 维护。 */
     dbi
       .prepare(
         `UPDATE menus SET visible = 0
@@ -379,7 +417,7 @@ function ensureSuperAdminAllMenuIds(dbi) {
   }
 }
 
-/** 补「工作流」「视频模型配置」菜单并授权超级管理员（模型默认侧栏隐藏，仅路由保留） */
+/** 补「工作流」「模型管理」菜单并授权超级管理员 */
 function ensureVideoMenus(dbi) {
   const hit = dbi
     .prepare(
@@ -401,7 +439,7 @@ function ensureVideoMenus(dbi) {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
   ins.run(id1, parentId, 2, '工作流', 'studio', 'aiVideoStudio', 'Grid', 1, 'ai:canvas:access', 0, 1, 0)
-  ins.run(id2, parentId, 2, '视频模型配置', 'video-models', 'aiVideoModelManage', 'VideoCamera', 99, 'ai:video-model:list', 0, 0, 0)
+  ins.run(id2, parentId, 2, '模型管理', 'video-models', 'aiVideoModelManage', 'VideoCamera', 99, 'ai:video-model:list', 0, 1, 0)
   dbi.prepare(`UPDATE menus SET sort = 2 WHERE component_name = 'aiPromptManage' AND parent_id = ?`).run(parentId)
   const ir = dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (?, ?)')
   ir.run(1, id1)

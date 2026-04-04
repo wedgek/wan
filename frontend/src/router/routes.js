@@ -108,7 +108,7 @@ export const staticRoutes = [
       requiresAuth: true,
       showNavbar: true,
       showSidebar: true,
-      title: "视频模型配置",
+      title: "模型管理",
     },
   },
 ]

@@ -59,6 +59,12 @@ const MIME_BY_EXT = {
   svg: 'image/svg+xml',
   mp4: 'video/mp4',
   webm: 'video/webm',
+  /** 与 ALLOWED_EXT 一致：写入 TOS 的 Content-Type，避免默认为 octet-stream 导致浏览器内 video 不解码 */
+  mov: 'video/quicktime',
+  avi: 'video/x-msvideo',
+  mkv: 'video/x-matroska',
+  wmv: 'video/x-ms-wmv',
+  flv: 'video/x-flv',
   pdf: 'application/pdf',
   json: 'application/json',
   txt: 'text/plain',

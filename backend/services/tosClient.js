@@ -23,8 +23,12 @@ function stripEndpointHost(raw) {
 }
 
 function getConfig() {
-  const accessKeyId = process.env.TOS_ACCESS_KEY || process.env.TOS_ACCESS_KEY_ID || ''
-  const accessKeySecret = process.env.TOS_SECRET_KEY || process.env.TOS_ACCESS_KEY_SECRET || ''
+  const accessKeyId = String(
+    process.env.TOS_ACCESS_KEY || process.env.TOS_ACCESS_KEY_ID || '',
+  ).trim()
+  const accessKeySecret = String(
+    process.env.TOS_SECRET_KEY || process.env.TOS_ACCESS_KEY_SECRET || '',
+  ).trim()
   const region = (process.env.TOS_REGION || '').trim()
   const endpointRaw = (process.env.TOS_ENDPOINT || '').trim()
   const endpoint = stripEndpointHost(endpointRaw)

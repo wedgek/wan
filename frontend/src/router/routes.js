@@ -10,6 +10,8 @@ export const routeComponents = {
   aiVideoStudio: () => import("@/views/ai/studio/index.vue"),
   aiVideoChat: () => import("@/views/ai/video-chat/index.vue"),
   aiVideoModelManage: () => import("@/views/ai/video-models/index.vue"),
+  aiVideoManage: () => import("@/views/ai/video-manage/index.vue"),
+  aiProductLibrary: () => import("@/views/ai/product-library/index.vue"),
 }
 
 
@@ -111,6 +113,28 @@ export const staticRoutes = [
       title: "模型管理",
     },
   },
+  {
+    path: "/ai/product-library",
+    name: "menuAiProductLibrary",
+    component: () => import("@/views/ai/product-library/index.vue"),
+    meta: {
+      requiresAuth: true,
+      showNavbar: true,
+      showSidebar: true,
+      title: "产品库",
+    },
+  },
+  {
+    path: "/ai/video-manage",
+    name: "menuAiVideoManage",
+    component: () => import("@/views/ai/video-manage/index.vue"),
+    meta: {
+      requiresAuth: true,
+      showNavbar: true,
+      showSidebar: true,
+      title: "创作日志",
+    },
+  },
 ]
 
 /** 已由 staticRoutes 注册的路径，addDynamicRoutes 中不再 addRoute，防止重复记录 */
@@ -119,6 +143,8 @@ export const staticMenuRoutePaths = new Set([
   "/ai/video-chat",
   "/ai/studio",
   "/ai/video-models",
+  "/ai/product-library",
+  "/ai/video-manage",
 ])
 
 

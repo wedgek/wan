@@ -2,6 +2,7 @@ const express = require('express')
 const { ok, fail } = require('../utils/response')
 const db = require('../db')
 const seedance = require('../services/seedanceClient')
+const { pullArkJobStateAndStableResultUrl } = require('../services/videoJobArkSync')
 const { createVideoJob, allowVideoJobRate } = require('../services/videoJobService')
 
 const router = express.Router()
@@ -164,8 +165,10 @@ async function syncJobsForSession(dbi, userId, sessionIds) {
     .all(userId, ...sessionIds)
   for (const j of jobs) {
     try {
-      const remote = await seedance.getContentsGenerationTask(j.external_task_id)
-      const { status, resultUrl, errorMessage } = seedance.mapRemoteToJobUpdate(remote)
+      const { status, resultUrl, errorMessage } = await pullArkJobStateAndStableResultUrl(
+        j.external_task_id,
+        j.id,
+      )
       if (status !== j.status || resultUrl || errorMessage) {
         dbi
           .prepare(

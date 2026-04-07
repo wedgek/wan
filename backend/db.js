@@ -58,6 +58,10 @@ function applySchemaPatches(dbi) {
     ensureAiStudioPatch(dbi)
     ensureVideoChatSchema(dbi)
     ensureVideoChatMenu(dbi)
+    ensureAiVideoManageMenu(dbi)
+    syncAiVideoManageMenuTitle(dbi)
+    ensureProductLibrarySchema(dbi)
+    ensureProductLibraryMenu(dbi)
     ensureAiVideoModelMenuInSidebar(dbi)
     ensureAuthSessionsSchema(dbi)
     ensureWorkflowMenuSync(dbi)
@@ -240,6 +244,86 @@ function ensureVideoChatMenu(dbi) {
   `)
   ins.run(id, parentId, 2, '对话创作', 'video-chat', 'aiVideoChat', 'ChatDotRound', 2, 'ai:canvas:access', 0, 1, 0)
   dbi.prepare(`UPDATE menus SET sort = 3 WHERE component_name = 'aiPromptManage' AND parent_id = ?`).run(parentId)
+  const ir = dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (?, ?)')
+  ir.run(1, id)
+  try {
+    dbi.prepare('INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES (?, ?)').run('menus', id)
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+/** AI 应用 · 创作日志（原「视频管理」）：跨用户查看生成任务（权限 ai:video-manage:list） */
+function ensureAiVideoManageMenu(dbi) {
+  if (dbi.prepare('SELECT 1 FROM menus WHERE component_name = ? LIMIT 1').get('aiVideoManage')) return
+  const aiRow = dbi.prepare(`SELECT id FROM menus WHERE parent_id = 0 AND path = '/ai' LIMIT 1`).get()
+  if (!aiRow) return
+  const parentId = aiRow.id
+  const maxRow = dbi.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM menus').get()
+  const id = maxRow.m + 1
+  const ins = dbi.prepare(`
+    INSERT INTO menus (id, parent_id, type, name, path, component_name, icon, sort, permission, status, visible, keep_alive)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+  ins.run(id, parentId, 2, '创作日志', 'video-manage', 'aiVideoManage', 'Film', 4, 'ai:video-manage:list', 0, 1, 0)
+  const ir = dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (?, ?)')
+  ir.run(1, id)
+  try {
+    dbi.prepare('INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES (?, ?)').run('menus', id)
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+/** 已存在的库：侧栏名称从「视频管理」等处统一为「创作日志」 */
+function syncAiVideoManageMenuTitle(dbi) {
+  try {
+    dbi.prepare(`UPDATE menus SET name = ? WHERE component_name = ?`).run('创作日志', 'aiVideoManage')
+  } catch (e) {
+    console.error('[db] syncAiVideoManageMenuTitle', e.message)
+  }
+}
+
+/** 对话等产品图：按用户隔离的产品库条目（多图 URL 存 JSON 数组） */
+function ensureProductLibrarySchema(dbi) {
+  try {
+    dbi.exec(`
+      CREATE TABLE IF NOT EXISTS product_library_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        remark TEXT,
+        image_urls TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_product_library_user ON product_library_items(user_id);
+    `)
+  } catch (e) {
+    console.error('[db] ensureProductLibrarySchema', e.message)
+  }
+}
+
+/** AI 应用 · 产品库：个人产品多图，排序在创作日志之上（权限 ai:product-library:list） */
+function ensureProductLibraryMenu(dbi) {
+  if (dbi.prepare('SELECT 1 FROM menus WHERE component_name = ? LIMIT 1').get('aiProductLibrary')) return
+  const aiRow = dbi.prepare(`SELECT id FROM menus WHERE parent_id = 0 AND path = '/ai' LIMIT 1`).get()
+  if (!aiRow) return
+  const parentId = aiRow.id
+  try {
+    dbi
+      .prepare(`UPDATE menus SET sort = 5 WHERE component_name = 'aiVideoManage' AND parent_id = ?`)
+      .run(parentId)
+  } catch (e) {
+    console.error('[db] ensureProductLibraryMenu bump video-manage sort', e.message)
+  }
+  const maxRow = dbi.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM menus').get()
+  const id = maxRow.m + 1
+  const ins = dbi.prepare(`
+    INSERT INTO menus (id, parent_id, type, name, path, component_name, icon, sort, permission, status, visible, keep_alive)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+  ins.run(id, parentId, 2, '产品库', 'product-library', 'aiProductLibrary', 'Goods', 4, 'ai:product-library:list', 0, 1, 0)
   const ir = dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (?, ?)')
   ir.run(1, id)
   try {

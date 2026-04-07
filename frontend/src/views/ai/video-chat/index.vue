@@ -244,46 +244,70 @@
             </div>
             <div class="composer-head">
               <div class="composer-head__uploads">
-                <el-upload
-                  :show-file-list="false"
-                  accept="image/*"
-                  multiple
-                  :disabled="uploadBusy"
-                  :http-request="onPickImages"
-                >
-                  <el-button
-                    class="composer-icon-btn composer-icon-btn--rail"
-                    :disabled="uploadBusy"
-                    title="添加图片"
-                    circle
-                  >
-                    <el-icon :size="20"><component :is="$icons.Picture" /></el-icon>
-                  </el-button>
-                </el-upload>
-                <el-upload
-                  :show-file-list="false"
-                  accept=".mp4,.mov,video/mp4,video/quicktime"
-                  :disabled="uploadBusy || !referenceVideoAllowed"
-                  :http-request="onPickVideo"
-                >
-                  <el-button
-                    class="composer-icon-btn composer-icon-btn--rail"
-                    :class="{ 'composer-icon-btn--disabled': !referenceVideoAllowed }"
-                    :disabled="uploadBusy || !referenceVideoAllowed"
-                    :title="referenceVideoAllowed ? '参考视频（智能参考）' : '未开启参考视频，见后台「模型管理」'"
-                    circle
-                  >
-                    <el-icon :size="20"><component :is="$icons.VideoCamera" /></el-icon>
-                  </el-button>
-                </el-upload>
-                <el-button
-                  class="composer-icon-btn composer-icon-btn--rail"
-                  circle
-                  title="选择提示词（与「提示词管理」数据同步）"
-                  @click="openPromptPicker"
-                >
-                  <el-icon :size="20"><component :is="$icons.Collection" /></el-icon>
-                </el-button>
+                <el-tooltip content="参考图片" placement="top" :show-after="280">
+                  <span class="composer-rail-item">
+                    <el-upload
+                      :show-file-list="false"
+                      accept="image/*"
+                      multiple
+                      :disabled="uploadBusy"
+                      :http-request="onPickImages"
+                    >
+                      <el-button
+                        class="composer-icon-btn composer-icon-btn--rail"
+                        :disabled="uploadBusy"
+                        title="参考图片"
+                        circle
+                      >
+                        <el-icon :size="20"><component :is="$icons.Picture" /></el-icon>
+                      </el-button>
+                    </el-upload>
+                  </span>
+                </el-tooltip>
+                <el-tooltip content="参考视频" placement="top" :show-after="280">
+                  <span class="composer-rail-item">
+                    <el-upload
+                      :show-file-list="false"
+                      accept=".mp4,.mov,video/mp4,video/quicktime"
+                      :disabled="uploadBusy || !referenceVideoAllowed"
+                      :http-request="onPickVideo"
+                    >
+                      <el-button
+                        class="composer-icon-btn composer-icon-btn--rail"
+                        :class="{ 'composer-icon-btn--disabled': !referenceVideoAllowed }"
+                        :disabled="uploadBusy || !referenceVideoAllowed"
+                        title="参考视频"
+                        circle
+                      >
+                        <el-icon :size="20"><component :is="$icons.VideoCamera" /></el-icon>
+                      </el-button>
+                    </el-upload>
+                  </span>
+                </el-tooltip>
+                <el-tooltip content="提示词库" placement="top" :show-after="280">
+                  <span class="composer-rail-item">
+                    <el-button
+                      class="composer-icon-btn composer-icon-btn--rail"
+                      circle
+                      title="提示词库"
+                      @click="openPromptPicker"
+                    >
+                      <el-icon :size="20"><component :is="$icons.Collection" /></el-icon>
+                    </el-button>
+                  </span>
+                </el-tooltip>
+                <el-tooltip content="产品库" placement="top" :show-after="280">
+                  <span class="composer-rail-item">
+                    <el-button
+                      class="composer-icon-btn composer-icon-btn--rail"
+                      circle
+                      title="产品库"
+                      @click="openProductLibraryPicker"
+                    >
+                      <el-icon :size="20"><component :is="$icons.Goods" /></el-icon>
+                    </el-button>
+                  </span>
+                </el-tooltip>
               </div>
               <div class="composer-head__gen toolbar-gen-opts">
                 <el-select
@@ -413,6 +437,8 @@
       </div>
     </el-dialog>
 
+    <ProductLibraryPickerDialog v-model="productLibraryDialogVisible" @picked="mergeProductLibraryImages" />
+
     <el-drawer
       v-model="sessionsDrawer"
       direction="rtl"
@@ -497,6 +523,7 @@ dayjs.extend(timezone)
 const TZ_CN = "Asia/Shanghai"
 import { uploadImage, uploadVideo, getFileExt } from "@/request/oss"
 import logoMark from "@/assets/images/logo.svg"
+import ProductLibraryPickerDialog from "./ProductLibraryPickerDialog.vue"
 
 const VC_WIDE_STORAGE_KEY = "wan-ai-video-chat-wide"
 /** 对话页所选视频模型，刷新后恢复（须仍在当前启用列表中） */
@@ -629,6 +656,12 @@ const REF_VIDEO_PIXELS_MAX = 927_408
 /** 输入框字数上限（与 Element 计数器一致） */
 const INPUT_MAX_LENGTH = 20000
 
+/**
+ * 存在「生成中」助手消息时的列表轮询间隔（毫秒）。
+ * 固定 4s 对 1～3 分钟级视频偏密，徒增请求与日志；8～12s 对完成态延迟通常可接受，可按业务微调。
+ */
+const VIDEO_CHAT_POLL_INTERVAL_MS = 8000
+
 function truncatePromptPreview(raw, maxLen = 96) {
   const s = String(raw || "").replace(/\s+/g, " ").trim()
   if (s.length <= maxLen) return s || "（无内容）"
@@ -666,6 +699,7 @@ const msgTextOverflow = ref(/** @type {Record<string, boolean>} */ ({}))
 const msgTextObservers = new Map()
 const isDragOver = ref(false)
 const promptDialogVisible = ref(false)
+const productLibraryDialogVisible = ref(false)
 const promptLibLoading = ref(false)
 /** @type {import('vue').Ref<Array<{ id: number; name?: string; content?: string }>>} */
 const managedPrompts = ref([])
@@ -1141,6 +1175,57 @@ function openPromptPicker() {
   promptDialogVisible.value = true
 }
 
+function openProductLibraryPicker() {
+  productLibraryDialogVisible.value = true
+}
+
+/**
+ * 将产品库图片并入待发参考图；总数受 REF_ATTACHMENT_MAX_TOTAL 与当前视频条数约束，超出则从队列头部剔除较早图片。
+ */
+function mergeProductLibraryImages(urls) {
+  const cap = REF_ATTACHMENT_MAX_TOTAL - pendingVideos.value.length
+  if (cap <= 0) {
+    ElMessage.warning(
+      `参考文件（图+视+音）最多 ${REF_ATTACHMENT_MAX_TOTAL} 个，请先移除部分参考视频或图片`,
+    )
+    return
+  }
+  const raw = (urls || [])
+    .filter((u) => u && String(u).trim().startsWith("http"))
+    .map((u) => String(u).trim())
+  const pendingSet = new Set(pendingImages.value)
+  const toAdd = []
+  const seenNew = new Set()
+  for (const u of raw) {
+    if (pendingSet.has(u) || seenNew.has(u)) continue
+    seenNew.add(u)
+    pendingSet.add(u)
+    toAdd.push(u)
+  }
+  if (!toAdd.length) {
+    ElMessage.info("所选产品的图片已全部在待发列表中")
+    return
+  }
+  let merged = [...pendingImages.value]
+  let evicted = 0
+  for (const url of toAdd) {
+    if (merged.includes(url)) continue
+    merged.push(url)
+    while (merged.length > cap) {
+      merged.shift()
+      evicted++
+    }
+  }
+  pendingImages.value = merged
+  if (evicted > 0) {
+    ElMessage.info(
+      `参考图已达上限（当前最多 ${cap} 张图片，与视频合计不超过 ${REF_ATTACHMENT_MAX_TOTAL} 个），已自动移除较早的图片`,
+    )
+  } else {
+    ElMessage.success("已从产品库添加参考图")
+  }
+}
+
 const canSend = computed(() => {
   if (!selectedModelId.value) return false
   if (uploadBusy.value) return false
@@ -1263,6 +1348,15 @@ function probeRemoteVideoUrl(url) {
 async function fetchUrlContentLength(url) {
   const u = String(url || "").trim()
   if (!u || !u.startsWith("http")) return null
+  // 跨域对象存储对浏览器 HEAD 多无 CORS，会报错且拿不到 Content-Length；直接跳过，避免控制台噪音与无效请求
+  try {
+    if (typeof window !== "undefined") {
+      const o = new URL(u)
+      if (o.origin !== window.location.origin) return null
+    }
+  } catch (_) {
+    return null
+  }
   try {
     const res = await fetch(u, { method: "HEAD" })
     const cl = res.headers.get("content-length")
@@ -1338,12 +1432,9 @@ async function resolveAndValidateVideoUrlsForSend(videoUrls, metaList) {
         const cl = await fetchUrlContentLength(urls[i])
         size = cl != null ? cl : 0
       }
-      if (!size) {
-        ElMessage.warning(
-          `无法验证第 ${i + 1} 个参考视频文件大小（请重新上传本地文件，或确保链接支持访问校验）`,
-        )
-        return false
-      }
+      // 已能读到时长/分辨率说明链接可用；多数对象存储对浏览器 HEAD 不返回 Content-Length，
+      // 无法在此校验体积。复用历史消息里的已上传地址时不应拦截（本地上传仍在上传流程里校验大小）。
+      if (!size) size = 0
       m = { size, duration: dim.duration, width: dim.width, height: dim.height }
     }
     resolved.push(m)
@@ -1638,6 +1729,13 @@ async function loadMessages(opts = {}) {
   if (seq !== loadMessagesSeq) return
   if (activeSessionId.value !== sessionSnap) return
   if (res.code !== 0) return
+  // 发送请求进行中时，轮询仍可能先于 /send 返回；服务端列表尚无本轮「生成中」行，整表替换会抹掉乐观更新
+  if (!scrollToBottom && sending.value) {
+    const keepOptimistic = messages.value.some(
+      (m) => m.id < 0 && m.role === "assistant" && assistantStillRunning(m),
+    )
+    if (keepOptimistic) return
+  }
   messages.value = res.data?.list || []
   if (scrollToBottom) nextTick(() => scrollBottom())
   setupPoll()
@@ -1820,7 +1918,7 @@ function setupPoll() {
   if (!need || !activeSessionId.value) return
   pollTimer = window.setInterval(() => {
     loadMessages({ scrollToBottom: false })
-  }, 4000)
+  }, VIDEO_CHAT_POLL_INTERVAL_MS)
 }
 
 function stopPoll() {
@@ -2907,6 +3005,23 @@ onUnmounted(() => {
   align-items: center;
   gap: 10px;
   flex-shrink: 0;
+}
+
+/* 四个图标统一间距：抵消 el-upload 默认 inline 间隙，每格等宽占位 */
+.composer-rail-item {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0;
+  line-height: 0;
+}
+
+.composer-rail-item :deep(.el-upload) {
+  display: inline-flex;
+  margin: 0;
+  line-height: 0;
 }
 
 .composer-head__gen {

@@ -101,10 +101,38 @@ async function putFileFromPath(opts) {
   return { key: opts.objectKey, url: publicUrlForKey(opts.objectKey) }
 }
 
+/**
+ * 将内存中的对象写入 TOS（如服务端拉取外链视频后落盘）。
+ * @param {object} opts
+ * @param {string} opts.objectKey
+ * @param {Buffer} opts.body
+ * @param {string} [opts.contentType]
+ */
+async function putBuffer(opts) {
+  const { bucket } = getConfig()
+  if (!bucket) throw new Error('TOS_BUCKET 未配置')
+  const client = getClient()
+  const input = {
+    bucket,
+    key: opts.objectKey,
+    body: opts.body,
+  }
+  if (opts.contentType) input.contentType = opts.contentType
+  await client.putObject(input)
+  return { key: opts.objectKey, url: publicUrlForKey(opts.objectKey) }
+}
+
+/** 当前桶对外访问根（与直链拼接规则一致），用于判断是否已是本平台对象地址 */
+function getPublicBaseUrl() {
+  return defaultPublicBase()
+}
+
 module.exports = {
   getConfig,
   isConfigured,
   getClient,
   publicUrlForKey,
+  getPublicBaseUrl,
   putFileFromPath,
+  putBuffer,
 }

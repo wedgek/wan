@@ -4,8 +4,10 @@ const { requireAuth } = auth
 const { ok, fail } = require('../utils/response')
 const db = require('../db')
 const seedance = require('../services/seedanceClient')
+const { pullArkJobStateAndStableResultUrl } = require('../services/videoJobArkSync')
 const { createVideoJob, allowVideoJobRate } = require('../services/videoJobService')
 const videoChatRouter = require('./videoChat')
+const videoAdminRouter = require('./videoAdmin')
 
 const router = express.Router()
 router.use(requireAuth)
@@ -167,8 +169,10 @@ router.get('/jobs/get', async (req, res) => {
   const syncable = row.external_task_id && ['pending', 'processing'].includes(row.status)
   if (syncable && seedance.isConfigured()) {
     try {
-      const remote = await seedance.getContentsGenerationTask(row.external_task_id)
-      const { status, resultUrl, errorMessage } = seedance.mapRemoteToJobUpdate(remote)
+      const { status, resultUrl, errorMessage } = await pullArkJobStateAndStableResultUrl(
+        row.external_task_id,
+        row.id,
+      )
       if (status !== row.status || resultUrl || errorMessage) {
         database()
           .prepare(
@@ -331,5 +335,6 @@ router.put('/projects/save', (req, res) => {
 })
 
 router.use('/chat', videoChatRouter)
+router.use('/admin', videoAdminRouter)
 
 module.exports = router

@@ -2,6 +2,7 @@ const express = require('express')
 const authRouter = require('./auth')
 const systemRouter = require('./system')
 const videoRouter = require('./video')
+const productLibraryRouter = require('./productLibrary')
 const storageRouter = require('./storage')
 const { requireAuth } = require('./auth')
 
@@ -20,6 +21,7 @@ router.get('/health', (req, res) => {
 router.use('/system/auth', authRouter)
 router.use('/system', systemRouter)
 router.use('/video', videoRouter)
+router.use('/product-library', productLibraryRouter)
 router.use('/storage', storageRouter)
 
 /** 占位：企微 SDK */

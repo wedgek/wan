@@ -262,7 +262,7 @@
                 </el-upload>
                 <el-upload
                   :show-file-list="false"
-                  accept="video/*"
+                  accept=".mp4,.mov,video/mp4,video/quicktime"
                   :disabled="uploadBusy || !referenceVideoAllowed"
                   :http-request="onPickVideo"
                 >
@@ -610,7 +610,21 @@ function chatAttachmentImageUrls(m) {
 }
 
 const IMAGE_EXTS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"])
-const VIDEO_EXTS = new Set(["mp4", "avi", "mov", "mkv", "wmv", "flv", "webm"])
+/** 参考视频：仅 MP4 / MOV（扩展名或小写 MIME） */
+const REFERENCE_VIDEO_EXTS = new Set(["mp4", "mov"])
+
+/** 参考附件总数上限：图 + 视 + 音（当前仅图/视，音留作同上限计数） */
+const REF_ATTACHMENT_MAX_TOTAL = 12
+/** 参考视频条数上限 */
+const REF_VIDEO_MAX_COUNT = 3
+/** 参考视频总时长（秒）：所有参考视频时长之和 */
+const REF_VIDEO_DURATION_SUM_MIN = 2
+const REF_VIDEO_DURATION_SUM_MAX = 15
+/** 参考视频体积：单文件与总和均须 < 此值（字节） */
+const REF_VIDEO_MAX_BYTES = 50 * 1024 * 1024
+/** 单路参考视频像素数（宽×高） */
+const REF_VIDEO_PIXELS_MIN = 409_600
+const REF_VIDEO_PIXELS_MAX = 927_408
 
 /** 输入框字数上限（与 Element 计数器一致） */
 const INPUT_MAX_LENGTH = 20000
@@ -638,6 +652,8 @@ const selectedModelId = ref(null)
 const inputText = ref("")
 const pendingImages = ref([])
 const pendingVideos = ref([])
+/** 与 pendingVideos 下标对齐：本地/已探测到的元数据；reEdit 导入未探测时为 null */
+const pendingVideosMeta = ref(/** @type {Array<{ size: number, duration: number, width: number, height: number } | null>} */ ([]))
 const uploadCount = ref(0)
 const sending = ref(false)
 const msgScrollRef = ref(null)
@@ -997,6 +1013,7 @@ function reEditMessage(m) {
   inputText.value = m.text || ""
   pendingImages.value = [...(m.attachments?.images || [])]
   pendingVideos.value = [...(m.attachments?.videos || [])]
+  pendingVideosMeta.value = pendingVideos.value.map(() => null)
   ElMessage.success("已导入到输入框，可修改后发送")
 }
 
@@ -1031,6 +1048,18 @@ async function regenerateMessage(m) {
   if (videoUrls.length && !referenceVideoAllowed.value) {
     ElMessage.warning("当前模型不支持参考视频，无法按原参考视频再次生成")
     return
+  }
+  if (imageUrls.length + videoUrls.length > REF_ATTACHMENT_MAX_TOTAL) {
+    ElMessage.warning(`参考文件（图+视+音）最多 ${REF_ATTACHMENT_MAX_TOTAL} 个`)
+    return
+  }
+  if (videoUrls.length > REF_VIDEO_MAX_COUNT) {
+    ElMessage.warning(`参考视频最多 ${REF_VIDEO_MAX_COUNT} 个`)
+    return
+  }
+  if (videoUrls.length) {
+    const vOk = await resolveAndValidateVideoUrlsForSend(videoUrls, videoUrls.map(() => null))
+    if (!vOk) return
   }
   if (sending.value) return
   sending.value = true
@@ -1125,18 +1154,236 @@ function rawUploadFile(file) {
   return file
 }
 
+function isAllowedReferenceVideoFile(file) {
+  if (!(file instanceof File)) return false
+  const ext = getFileExt(file)
+  if (REFERENCE_VIDEO_EXTS.has(ext)) return true
+  const t = String(file.type || "").toLowerCase()
+  return t === "video/mp4" || t === "video/quicktime"
+}
+
+function refAttachmentTotalCount() {
+  return pendingImages.value.length + pendingVideos.value.length
+}
+
+/**
+ * 本地文件：读取时长与分辨率
+ * @returns {Promise<{ duration: number, width: number, height: number }>}
+ */
+function probeLocalVideoFile(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const v = document.createElement("video")
+    v.preload = "metadata"
+    v.muted = true
+    const done = (fn) => {
+      try {
+        URL.revokeObjectURL(url)
+      } catch (_) {
+        /* ignore */
+      }
+      try {
+        v.removeAttribute("src")
+        v.load()
+      } catch (_) {
+        /* ignore */
+      }
+      v.remove()
+      fn()
+    }
+    v.onerror = () => done(() => reject(new Error("无法读取视频信息")))
+    v.onloadedmetadata = () => {
+      const duration = v.duration
+      const width = v.videoWidth
+      const height = v.videoHeight
+      done(() => {
+        if (!Number.isFinite(duration) || duration <= 0 || !width || !height) {
+          reject(new Error("无法读取视频时长或分辨率"))
+          return
+        }
+        resolve({ duration, width, height })
+      })
+    }
+    v.src = url
+  })
+}
+
+/**
+ * 已上传 URL：尽力读取元数据（依赖 CDN CORS）
+ * @returns {Promise<{ duration: number, width: number, height: number }>}
+ */
+function probeRemoteVideoUrl(url) {
+  const u = String(url || "").trim()
+  return new Promise((resolve, reject) => {
+    if (!u) {
+      reject(new Error("视频地址无效"))
+      return
+    }
+    const v = document.createElement("video")
+    v.preload = "metadata"
+    const timer = window.setTimeout(() => {
+      try {
+        v.removeAttribute("src")
+        v.load()
+      } catch (_) {
+        /* ignore */
+      }
+      v.remove()
+      reject(new Error("读取视频信息超时"))
+    }, 20_000)
+    const finish = (fn) => {
+      window.clearTimeout(timer)
+      try {
+        v.removeAttribute("src")
+        v.load()
+      } catch (_) {
+        /* ignore */
+      }
+      v.remove()
+      fn()
+    }
+    v.onerror = () => finish(() => reject(new Error("无法读取视频信息")))
+    v.onloadedmetadata = () => {
+      const duration = v.duration
+      const width = v.videoWidth
+      const height = v.videoHeight
+      finish(() => {
+        if (!Number.isFinite(duration) || duration <= 0 || !width || !height) {
+          reject(new Error("无法读取视频时长或分辨率"))
+          return
+        }
+        resolve({ duration, width, height })
+      })
+    }
+    v.src = u
+  })
+}
+
+/** @returns {Promise<number | null>} Content-Length 字节数，失败为 null */
+async function fetchUrlContentLength(url) {
+  const u = String(url || "").trim()
+  if (!u || !u.startsWith("http")) return null
+  try {
+    const res = await fetch(u, { method: "HEAD" })
+    const cl = res.headers.get("content-length")
+    if (cl == null || cl === "") return null
+    const n = parseInt(String(cl), 10)
+    return Number.isFinite(n) && n > 0 ? n : null
+  } catch (_) {
+    return null
+  }
+}
+
+/**
+ * @param {Array<{ size: number, duration: number, width: number, height: number }>} items
+ */
+function validateReferenceVideoRules(items, { prefixError }) {
+  const pre = prefixError ? `${prefixError}` : ""
+  if (items.length > REF_VIDEO_MAX_COUNT) {
+    ElMessage.warning(`${pre}参考视频最多 ${REF_VIDEO_MAX_COUNT} 个`)
+    return false
+  }
+  let sumDur = 0
+  let sumSize = 0
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i]
+    const pixels = it.width * it.height
+    if (pixels < REF_VIDEO_PIXELS_MIN || pixels > REF_VIDEO_PIXELS_MAX) {
+      ElMessage.warning(
+        `${pre}第 ${i + 1} 个参考视频分辨率不合要求：总像素须在 ${REF_VIDEO_PIXELS_MIN.toLocaleString()}～${REF_VIDEO_PIXELS_MAX.toLocaleString()} 之间（约 480p～720p）`,
+      )
+      return false
+    }
+    if (it.size >= REF_VIDEO_MAX_BYTES) {
+      ElMessage.warning(`${pre}第 ${i + 1} 个参考视频须小于 50 MB`)
+      return false
+    }
+    sumDur += it.duration
+    sumSize += it.size
+  }
+  if (sumDur < REF_VIDEO_DURATION_SUM_MIN - 1e-3 || sumDur > REF_VIDEO_DURATION_SUM_MAX + 1e-3) {
+    ElMessage.warning(
+      `${pre}参考视频总时长须在 ${REF_VIDEO_DURATION_SUM_MIN}～${REF_VIDEO_DURATION_SUM_MAX} 秒之间（当前合计 ${sumDur.toFixed(1)} 秒）`,
+    )
+    return false
+  }
+  if (sumSize >= REF_VIDEO_MAX_BYTES) {
+    ElMessage.warning(`${pre}参考视频总大小须小于 50 MB`)
+    return false
+  }
+  return true
+}
+
+/**
+ * 发送前：将 videoUrls 与 meta 列表（与之一一对应，可为 null）补全并校验
+ * @param {string[]} videoUrls
+ * @param {Array<{ size: number, duration: number, width: number, height: number } | null | undefined>} metaList
+ */
+async function resolveAndValidateVideoUrlsForSend(videoUrls, metaList) {
+  const urls = Array.isArray(videoUrls) ? videoUrls.map((u) => String(u || "").trim()).filter(Boolean) : []
+  if (urls.length === 0) return true
+  if (urls.length > REF_VIDEO_MAX_COUNT) {
+    ElMessage.warning(`参考视频最多 ${REF_VIDEO_MAX_COUNT} 个`)
+    return false
+  }
+  const meta = Array.isArray(metaList) ? [...metaList] : []
+  while (meta.length < urls.length) meta.push(null)
+  const resolved = /** @type {Array<{ size: number, duration: number, width: number, height: number }>} */ ([])
+  for (let i = 0; i < urls.length; i++) {
+    let m = meta[i] || null
+    if (!m || m.size == null || !Number.isFinite(m.duration)) {
+      const dim = await probeRemoteVideoUrl(urls[i])
+      let size = m && Number.isFinite(m.size) ? m.size : 0
+      if (!size) {
+        const cl = await fetchUrlContentLength(urls[i])
+        size = cl != null ? cl : 0
+      }
+      if (!size) {
+        ElMessage.warning(
+          `无法验证第 ${i + 1} 个参考视频文件大小（请重新上传本地文件，或确保链接支持访问校验）`,
+        )
+        return false
+      }
+      m = { size, duration: dim.duration, width: dim.width, height: dim.height }
+    }
+    resolved.push(m)
+  }
+  return validateReferenceVideoRules(resolved, { prefixError: "" })
+}
+
+async function validateComposerAttachmentsForSend() {
+  const ni = pendingImages.value.length
+  const nv = pendingVideos.value.length
+  if (ni + nv > REF_ATTACHMENT_MAX_TOTAL) {
+    ElMessage.warning(`参考文件（图+视+音）最多 ${REF_ATTACHMENT_MAX_TOTAL} 个`)
+    return false
+  }
+  if (nv > REF_VIDEO_MAX_COUNT) {
+    ElMessage.warning(`参考视频最多 ${REF_VIDEO_MAX_COUNT} 个`)
+    return false
+  }
+  if (nv === 0) return true
+  return resolveAndValidateVideoUrlsForSend([...pendingVideos.value], [...pendingVideosMeta.value])
+}
+
 function classifyDroppedFile(file) {
   if (!(file instanceof File)) return null
   const t = file.type || ""
   if (t.startsWith("image/")) return "image"
-  if (t.startsWith("video/")) return "video"
+  if (t.startsWith("video/")) {
+    return isAllowedReferenceVideoFile(file) ? "video" : "bad_video"
+  }
   const ext = getFileExt(file)
   if (IMAGE_EXTS.has(ext)) return "image"
-  if (VIDEO_EXTS.has(ext)) return "video"
+  if (REFERENCE_VIDEO_EXTS.has(ext)) return "video"
   return null
 }
 
 async function addUploadedImageFile(file) {
+  if (refAttachmentTotalCount() >= REF_ATTACHMENT_MAX_TOTAL) {
+    ElMessage.warning(`参考文件（图+视+音）最多 ${REF_ATTACHMENT_MAX_TOTAL} 个`)
+    return
+  }
   const raw = rawUploadFile(file)
   uploadCount.value++
   try {
@@ -1155,10 +1402,69 @@ async function addUploadedVideoFile(file) {
     return
   }
   const raw = rawUploadFile(file)
+  if (!(raw instanceof File)) return
+  if (!isAllowedReferenceVideoFile(raw)) {
+    ElMessage.warning("参考视频仅支持 MP4、MOV 格式")
+    return
+  }
+  if (pendingVideos.value.length >= REF_VIDEO_MAX_COUNT) {
+    ElMessage.warning(`参考视频最多 ${REF_VIDEO_MAX_COUNT} 个`)
+    return
+  }
+  if (refAttachmentTotalCount() >= REF_ATTACHMENT_MAX_TOTAL) {
+    ElMessage.warning(`参考文件（图+视+音）最多 ${REF_ATTACHMENT_MAX_TOTAL} 个`)
+    return
+  }
+  if (raw.size >= REF_VIDEO_MAX_BYTES) {
+    ElMessage.warning("单个参考视频须小于 50 MB")
+    return
+  }
+  const sumSizeKnown =
+    pendingVideosMeta.value.reduce((acc, x) => acc + (x && Number.isFinite(x.size) ? x.size : 0), 0) + raw.size
+  if (sumSizeKnown >= REF_VIDEO_MAX_BYTES) {
+    ElMessage.warning("参考视频总大小须小于 50 MB")
+    return
+  }
+
+  let dim
+  try {
+    dim = await probeLocalVideoFile(raw)
+  } catch (e) {
+    ElMessage.warning(e?.message || "无法读取视频信息")
+    return
+  }
+
+  const pixels = dim.width * dim.height
+  if (pixels < REF_VIDEO_PIXELS_MIN || pixels > REF_VIDEO_PIXELS_MAX) {
+    ElMessage.warning(
+      `参考视频分辨率不合要求：总像素须在 ${REF_VIDEO_PIXELS_MIN.toLocaleString()}～${REF_VIDEO_PIXELS_MAX.toLocaleString()} 之间（约 480p～720p）`,
+    )
+    return
+  }
+
+  const sumDur =
+    pendingVideosMeta.value.reduce((acc, x) => acc + (x && Number.isFinite(x.duration) ? x.duration : 0), 0) +
+    dim.duration
+  if (
+    sumDur < REF_VIDEO_DURATION_SUM_MIN - 1e-3 ||
+    sumDur > REF_VIDEO_DURATION_SUM_MAX + 1e-3
+  ) {
+    ElMessage.warning(
+      `参考视频总时长须在 ${REF_VIDEO_DURATION_SUM_MIN}～${REF_VIDEO_DURATION_SUM_MAX} 秒之间（当前合计 ${sumDur.toFixed(1)} 秒）`,
+    )
+    return
+  }
+
   uploadCount.value++
   try {
     const { url } = await uploadVideo(raw)
     pendingVideos.value.push(url)
+    pendingVideosMeta.value.push({
+      size: raw.size,
+      duration: dim.duration,
+      width: dim.width,
+      height: dim.height,
+    })
   } catch (e) {
     ElMessage.error(e?.message || "视频上传失败")
   } finally {
@@ -1202,9 +1508,14 @@ async function onComposerDrop(e) {
         continue
       }
       await addUploadedVideoFile(f)
+    } else if (kind === "bad_video") {
+      if (!warned) {
+        warned = true
+        ElMessage.warning("参考视频仅支持 MP4、MOV")
+      }
     } else if (!warned) {
       warned = true
-      ElMessage.warning("只支持图片或常见视频格式")
+      ElMessage.warning("只支持图片或 MP4 / MOV 视频")
     }
   }
 }
@@ -1215,6 +1526,7 @@ function removePendingImage(i) {
 
 function removePendingVideo(i) {
   pendingVideos.value.splice(i, 1)
+  pendingVideosMeta.value.splice(i, 1)
 }
 
 function readStoredModelId() {
@@ -1344,11 +1656,21 @@ function onPickVideo({ file }) {
   return addUploadedVideoFile(file)
 }
 
-function rollbackOptimisticSend(optimisticUserId, optimisticAssistId, capturedText, capturedImages, capturedVideos) {
+function rollbackOptimisticSend(
+  optimisticUserId,
+  optimisticAssistId,
+  capturedText,
+  capturedImages,
+  capturedVideos,
+  capturedVideosMeta,
+) {
   messages.value = messages.value.filter((m) => m.id !== optimisticUserId && m.id !== optimisticAssistId)
   inputText.value = capturedText
   pendingImages.value = capturedImages
   pendingVideos.value = capturedVideos
+  pendingVideosMeta.value = Array.isArray(capturedVideosMeta)
+    ? [...capturedVideosMeta]
+    : capturedVideos.map(() => null)
 }
 
 function pushOptimisticSendRound(capturedText, capturedImages, capturedVideos) {
@@ -1393,13 +1715,18 @@ async function send() {
     if (!ok) return
   }
 
+  const rulesOk = await validateComposerAttachmentsForSend()
+  if (!rulesOk) return
+
   const capturedText = inputText.value.trim()
   const capturedImages = [...pendingImages.value]
   const capturedVideos = [...pendingVideos.value]
+  const capturedVideosMeta = [...pendingVideosMeta.value]
 
   inputText.value = ""
   pendingImages.value = []
   pendingVideos.value = []
+  pendingVideosMeta.value = []
 
   const { optimisticUserId, optimisticAssistId } = pushOptimisticSendRound(
     capturedText,
@@ -1420,7 +1747,14 @@ async function send() {
     })
     if (res.code !== 0) {
       ElMessage.error(res.msg || "发送失败")
-      rollbackOptimisticSend(optimisticUserId, optimisticAssistId, capturedText, capturedImages, capturedVideos)
+      rollbackOptimisticSend(
+        optimisticUserId,
+        optimisticAssistId,
+        capturedText,
+        capturedImages,
+        capturedVideos,
+        capturedVideosMeta,
+      )
       return
     }
     await loadMessages({ scrollToBottom: true })
@@ -1428,7 +1762,14 @@ async function send() {
   } catch (e) {
     console.error(e)
     ElMessage.error("发送失败")
-    rollbackOptimisticSend(optimisticUserId, optimisticAssistId, capturedText, capturedImages, capturedVideos)
+    rollbackOptimisticSend(
+      optimisticUserId,
+      optimisticAssistId,
+      capturedText,
+      capturedImages,
+      capturedVideos,
+      capturedVideosMeta,
+    )
   } finally {
     sending.value = false
   }
@@ -1498,6 +1839,7 @@ watch(messages, () => {
 watch(referenceVideoAllowed, (allowed) => {
   if (!allowed && pendingVideos.value.length) {
     pendingVideos.value = []
+    pendingVideosMeta.value = []
     ElMessage.info("已切换到不支持参考视频的模型，待发送视频已清除")
   }
 })

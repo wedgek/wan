@@ -15,6 +15,10 @@ const CHAT_VIDEO_DURATION_MIN = Math.max(2, Number(process.env.ARK_CHAT_DURATION
 const CHAT_VIDEO_DURATION_MAX = Math.min(60, Number(process.env.ARK_CHAT_DURATION_MAX || 15))
 const CHAT_ASPECT_RATIOS = new Set(['9:16', '16:9', '1:1'])
 
+/** 对话参考附件上限（图+视+音，与前端 Seedance 规则一致） */
+const CHAT_REF_ATTACHMENT_MAX = 12
+const CHAT_REF_VIDEO_MAX = 3
+
 function clonePlainOptions(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
   try {
@@ -331,6 +335,7 @@ router.post('/send', async (req, res) => {
   const text = String(req.body?.text || '').trim()
   const imageUrls = Array.isArray(req.body?.imageUrls) ? req.body.imageUrls : []
   const videoUrls = Array.isArray(req.body?.videoUrls) ? req.body.videoUrls : []
+  const audioUrls = Array.isArray(req.body?.audioUrls) ? req.body.audioUrls : []
 
   if (!text && imageUrls.length === 0 && videoUrls.length === 0) {
     return res.json(fail(400, '请填写内容或上传参考图/视频'))
@@ -339,6 +344,15 @@ router.post('/send', async (req, res) => {
   const attachments = {
     images: imageUrls.filter((u) => u && String(u).startsWith('http')).map((u) => String(u).trim()),
     videos: videoUrls.filter((u) => u && String(u).startsWith('http')).map((u) => String(u).trim()),
+  }
+  const audioClean = audioUrls.filter((u) => u && String(u).startsWith('http')).map((u) => String(u).trim())
+  if (attachments.videos.length > CHAT_REF_VIDEO_MAX) {
+    return res.json(fail(400, `参考视频最多 ${CHAT_REF_VIDEO_MAX} 个`))
+  }
+  if (attachments.images.length + attachments.videos.length + audioClean.length > CHAT_REF_ATTACHMENT_MAX) {
+    return res.json(
+      fail(400, `参考文件（图+视+音）最多 ${CHAT_REF_ATTACHMENT_MAX} 个`),
+    )
   }
   const attachmentsJson = JSON.stringify(attachments)
 

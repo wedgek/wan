@@ -53,7 +53,6 @@
                 class="msg-round"
                 :data-round-idx="roundIdx"
               >
-                <template v-if="isRoundVisible(roundIdx)">
                   <div v-for="m in round" :key="m.id" class="msg-row" :class="'msg-row--' + m.role">
                     <div class="msg-feed-head">
                       <div class="msg-feed-head__line">
@@ -213,10 +212,6 @@
                       </div>
                     </div>
                   </div>
-                </template>
-                <div v-else class="msg-round-placeholder" :style="{ minHeight: getRoundPlaceholderHeight(roundIdx) + 'px' }">
-                  <span class="msg-round-placeholder__text">第 {{ roundIdx + 1 }} 轮对话</span>
-                </div>
               </div>
             </div>
           </el-scrollbar>
@@ -227,17 +222,15 @@
             <button
               type="button"
               class="round-nav__btn"
-              :disabled="!canGoPrevRound"
-              @click="goPrevRound"
+              @click="scrollToTop"
             >
               <el-icon :size="18"><component :is="$icons.ArrowUp" /></el-icon>
             </button>
-            <span class="round-nav__indicator">{{ displayRoundIndex }}/{{ messageRounds.length }}</span>
+            <span class="round-nav__indicator">{{ currentVisibleRound }}/{{ messageRounds.length }}</span>
             <button
               type="button"
               class="round-nav__btn"
-              :disabled="!canGoNextRound"
-              @click="goNextRound"
+              @click="scrollToEnd"
             >
               <el-icon :size="18"><component :is="$icons.ArrowDown" /></el-icon>
             </button>
@@ -351,50 +344,69 @@
 
             <div class="composer-body">
               <div v-if="pendingImages.length || pendingVideos.length" class="pending-strip">
-                <div v-for="(u, i) in pendingImages" :key="'pi' + i" class="pending-tile pending-tile--img">
-                  <button type="button" class="pending-tile__x" title="移除" @click.stop="removePendingImage(i)">
-                    <el-icon><component :is="$icons.Close" /></el-icon>
-                  </button>
-                  <span class="pending-tile__badge pending-tile__badge--img">图片{{ i + 1 }}</span>
-                  <el-image
-                    :src="u"
-                    fit="cover"
-                    class="pending-tile-elimg"
-                    :preview-src-list="[u]"
-                    preview-teleported
-                    hide-on-click-modal
-                  />
-                </div>
-
-                <div
-                  v-for="(u, i) in pendingVideos"
-                  :key="'pv' + i"
-                  class="pending-tile pending-tile--vid"
-                  role="button"
-                  tabindex="0"
-                  title="点击播放预览"
-                  @click="openPendingVideoPreview(u)"
-                  @keydown.enter.prevent="openPendingVideoPreview(u)"
+                <draggable
+                  :list="pendingImages"
+                  :item-key="(url) => url"
+                  class="pending-drag-group"
+                  ghost-class="pending-tile--ghost"
+                  :animation="150"
                 >
-                  <span class="pending-tile__badge pending-tile__badge--vid">视频{{ i + 1 }}</span>
-                  <span class="pending-tile__play" aria-hidden="true">
-                    <el-icon :size="26"><component :is="$icons.VideoPlay" /></el-icon>
-                  </span>
-                  <button type="button" class="pending-tile__x" title="移除" @click.stop="removePendingVideo(i)">
-                    <el-icon><component :is="$icons.Close" /></el-icon>
-                  </button>
-                  <video
-                    v-if="!failedVideoUrls.has(u)"
-                    :src="u"
-                    class="pv pending-tile__vid-dec"
-                    muted
-                    playsinline
-                    preload="auto"
-                    @loadedmetadata="nudgeVideoFirstFrame"
-                    @error="markVideoFailed(u)"
-                  />
-                  <div v-else class="pv pv--err">无法预览</div>
-                </div>
+                  <template #item="{ element: u, index: i }">
+                    <div class="pending-tile pending-tile--img">
+                      <button type="button" class="pending-tile__x" title="移除" @click.stop="removePendingImage(i)">
+                        <el-icon><component :is="$icons.Close" /></el-icon>
+                      </button>
+                      <span class="pending-tile__badge pending-tile__badge--img">图片{{ i + 1 }}</span>
+                      <el-image
+                        :src="u"
+                        fit="cover"
+                        class="pending-tile-elimg"
+                        :preview-src-list="[u]"
+                        preview-teleported
+                        hide-on-click-modal
+                      />
+                    </div>
+                  </template>
+                </draggable>
+
+                <draggable
+                  :list="pendingVideos"
+                  :item-key="(url) => url"
+                  class="pending-drag-group"
+                  ghost-class="pending-tile--ghost"
+                  :animation="150"
+                  @end="onVideosDragEnd"
+                >
+                  <template #item="{ element: u, index: i }">
+                    <div
+                      class="pending-tile pending-tile--vid"
+                      role="button"
+                      tabindex="0"
+                      title="点击播放预览"
+                      @click="openPendingVideoPreview(u)"
+                      @keydown.enter.prevent="openPendingVideoPreview(u)"
+                    >
+                      <span class="pending-tile__badge pending-tile__badge--vid">视频{{ i + 1 }}</span>
+                      <span class="pending-tile__play" aria-hidden="true">
+                        <el-icon :size="26"><component :is="$icons.VideoPlay" /></el-icon>
+                      </span>
+                      <button type="button" class="pending-tile__x" title="移除" @click.stop="removePendingVideo(i)">
+                        <el-icon><component :is="$icons.Close" /></el-icon>
+                      </button>
+                      <video
+                        v-if="!failedVideoUrls.has(u)"
+                        :src="u"
+                        class="pv pending-tile__vid-dec"
+                        muted
+                        playsinline
+                        preload="auto"
+                        @loadedmetadata="nudgeVideoFirstFrame"
+                        @error="markVideoFailed(u)"
+                      />
+                      <div v-else class="pv pv--err">无法预览</div>
+                    </div>
+                  </template>
+                </draggable>
               </div>
 
               <div class="composer-input-wrap">
@@ -560,9 +572,10 @@
 </template>
 
 <script setup name="aiVideoChat">
-import { nextTick, onMounted, onUnmounted, onActivated, ref, watch, computed, shallowRef, defineComponent, h } from "vue"
+import { nextTick, onMounted, onUnmounted, onActivated, ref, watch, computed, defineComponent, h } from "vue"
 import { ElMessage, ElMessageBox } from "element-plus"
 import dayjs from "dayjs"
+import draggable from "vuedraggable"
 import request from "@/request"
 import { uploadImage, uploadVideo, getFileExt } from "@/request/oss"
 import logoMark from "@/assets/images/logo.svg"
@@ -1081,164 +1094,55 @@ function messageRoundKey(round) {
   return round.map((x) => x.id).join("-")
 }
 
-const currentRoundIndex = ref(0)
-const displayRoundIndex = ref(1)
-
-const VISIBLE_ROUND_BUFFER = 3
-const visibleRoundRange = ref({ start: 0, end: 10 })
-const roundHeightsCache = shallowRef(new Map())
-
-function isRoundVisible(index) {
-  const total = messageRounds.value.length
-  if (total <= 8) return true
-  const { start, end } = visibleRoundRange.value
-  return index >= start && index <= end
-}
-
-function getRoundPlaceholderHeight(index) {
-  const cached = roundHeightsCache.value.get(index)
-  return cached || 280
-}
-
-function updateVisibleRoundRange() {
+function scrollToTop() {
   const scrollWrap = msgScrollRef.value?.wrapRef
-  if (!scrollWrap) return
-  const total = messageRounds.value.length
-  if (total <= 8) {
-    visibleRoundRange.value = { start: 0, end: total - 1 }
-    return
-  }
-  const roundEls = scrollWrap.querySelectorAll(".msg-round")
-  if (!roundEls.length) return
-  const wrapRect = scrollWrap.getBoundingClientRect()
-  const viewTop = wrapRect.top
-  const viewBottom = wrapRect.bottom
-  let firstVisible = -1
-  let lastVisible = -1
-  for (let i = 0; i < roundEls.length; i++) {
-    const rect = roundEls[i].getBoundingClientRect()
-    const inView = rect.bottom > viewTop && rect.top < viewBottom
-    if (inView) {
-      if (firstVisible === -1) firstVisible = i
-      lastVisible = i
-    }
-    if (rect.height > 50) {
-      const newCache = new Map(roundHeightsCache.value)
-      newCache.set(i, rect.height)
-      roundHeightsCache.value = newCache
-    }
-  }
-  if (firstVisible === -1) {
-    visibleRoundRange.value = { start: 0, end: Math.min(VISIBLE_ROUND_BUFFER * 2, total - 1) }
-    return
-  }
-  const start = Math.max(0, firstVisible - VISIBLE_ROUND_BUFFER)
-  const end = Math.min(total - 1, lastVisible + VISIBLE_ROUND_BUFFER)
-  visibleRoundRange.value = { start, end }
-}
-
-const canGoPrevRound = computed(() => currentRoundIndex.value > 0)
-const canGoNextRound = computed(() => currentRoundIndex.value < messageRounds.value.length - 1)
-
-function scrollToRound(index) {
-  const rounds = messageRounds.value
-  if (index < 0 || index >= rounds.length) return
-  currentRoundIndex.value = index
-  displayRoundIndex.value = index + 1
-  const total = rounds.length
-  const start = Math.max(0, index - VISIBLE_ROUND_BUFFER)
-  const end = Math.min(total - 1, index + VISIBLE_ROUND_BUFFER)
-  visibleRoundRange.value = { start, end }
-  const round = rounds[index]
-  if (!round?.length) return
-  nextTick(() => {
-    nextTick(() => {
-      const scrollWrap = msgScrollRef.value?.wrapRef
-      if (!scrollWrap) return
-      const roundEl = scrollWrap.querySelector(`.msg-round[data-round-idx="${index}"]`)
-      if (roundEl) {
-        roundEl.scrollIntoView({ behavior: "smooth", block: "start" })
-      }
-    })
-  })
-}
-
-function goPrevRound() {
-  if (canGoPrevRound.value) {
-    scrollToRound(currentRoundIndex.value - 1)
+  if (scrollWrap) {
+    scrollWrap.scrollTo({ top: 0, behavior: "smooth" })
   }
 }
 
-function goNextRound() {
-  if (canGoNextRound.value) {
-    scrollToRound(currentRoundIndex.value + 1)
-  }
+function scrollToEnd() {
+  scrollBottom()
 }
 
-let displayUpdateTimer = null
-function updateCurrentRoundFromScroll() {
-  const scrollWrap = msgScrollRef.value?.wrapRef
-  if (!scrollWrap) return
-  const rounds = messageRounds.value
-  if (!rounds.length) {
-    currentRoundIndex.value = 0
-    displayRoundIndex.value = 1
-    return
-  }
-  const roundEls = scrollWrap.querySelectorAll(".msg-round")
-  if (!roundEls.length) return
-  const wrapRect = scrollWrap.getBoundingClientRect()
-  const threshold = wrapRect.top + wrapRect.height * 0.3
-  let foundIndex = 0
-  for (let i = 0; i < roundEls.length; i++) {
-    const rect = roundEls[i].getBoundingClientRect()
-    if (rect.top <= threshold) {
-      foundIndex = i
-    } else {
-      break
-    }
-  }
-  currentRoundIndex.value = foundIndex
-  if (displayUpdateTimer) {
-    window.clearTimeout(displayUpdateTimer)
-  }
-  displayUpdateTimer = window.setTimeout(() => {
-    displayUpdateTimer = null
-    displayRoundIndex.value = currentRoundIndex.value + 1
-  }, 150)
-}
+// 当前可见轮次（仅用于显示，不触发任何其他更新）
+const currentVisibleRound = ref(1)
+let scrollRafId = null
 
-watch(messages, () => {
-  nextTick(() => {
-    const len = messageRounds.value.length
-    if (currentRoundIndex.value >= len) {
-      currentRoundIndex.value = Math.max(0, len - 1)
-    }
-    displayRoundIndex.value = currentRoundIndex.value + 1
-    if (len <= 8) {
-      visibleRoundRange.value = { start: 0, end: len - 1 }
-    } else {
-      updateVisibleRoundRange()
-    }
-  })
-})
-
-let scrollThrottleTimer = null
-let visibleRangeUpdateTimer = null
 function onMsgScroll() {
-  if (!scrollThrottleTimer) {
-    scrollThrottleTimer = window.setTimeout(() => {
-      scrollThrottleTimer = null
-      updateCurrentRoundFromScroll()
-    }, 120)
-  }
-  if (!visibleRangeUpdateTimer) {
-    visibleRangeUpdateTimer = window.setTimeout(() => {
-      visibleRangeUpdateTimer = null
-      updateVisibleRoundRange()
-    }, 80)
-  }
+  if (scrollRafId) return
+  scrollRafId = requestAnimationFrame(() => {
+    scrollRafId = null
+    const scrollWrap = msgScrollRef.value?.wrapRef
+    if (!scrollWrap) return
+    const rounds = messageRounds.value
+    if (!rounds.length) return
+    const roundEls = scrollWrap.querySelectorAll(".msg-round")
+    if (!roundEls.length) return
+    const wrapRect = scrollWrap.getBoundingClientRect()
+    const threshold = wrapRect.top + wrapRect.height * 0.3
+    let foundIndex = 0
+    for (let i = 0; i < roundEls.length; i++) {
+      const rect = roundEls[i].getBoundingClientRect()
+      if (rect.top <= threshold) {
+        foundIndex = i
+      } else {
+        break
+      }
+    }
+    const newVal = foundIndex + 1
+    if (currentVisibleRound.value !== newVal) {
+      currentVisibleRound.value = newVal
+    }
+  })
 }
+
+onUnmounted(() => {
+  if (scrollRafId) {
+    cancelAnimationFrame(scrollRafId)
+    scrollRafId = null
+  }
+})
 
 /** 生成中：禁止删除（前端隐藏删除入口，接口侧仍做校验） */
 function deleteMessageDisabled(m) {
@@ -1925,6 +1829,26 @@ function removePendingVideo(i) {
   pendingVideosMeta.value.splice(i, 1)
 }
 
+// 视频拖拽排序后，同步 meta 数组
+let videoOrderBeforeDrag = []
+watch(pendingVideos, (newVal, oldVal) => {
+  // 记录拖拽前的顺序，用于后续同步 meta
+  if (oldVal && oldVal.length === newVal.length) {
+    videoOrderBeforeDrag = [...oldVal]
+  }
+}, { flush: 'pre' })
+
+function onVideosDragEnd() {
+  if (!videoOrderBeforeDrag.length) return
+  const oldMeta = [...pendingVideosMeta.value]
+  const newMeta = pendingVideos.value.map((url) => {
+    const oldIdx = videoOrderBeforeDrag.indexOf(url)
+    return oldIdx >= 0 ? oldMeta[oldIdx] : null
+  })
+  pendingVideosMeta.value = newMeta
+  videoOrderBeforeDrag = []
+}
+
 const mentionDropdownVisible = ref(false)
 const mentionActiveIndex = ref(0)
 const mentionTriggerPos = ref(0)
@@ -2176,13 +2100,6 @@ async function loadMessages(opts = {}) {
 }
 
 function scrollBottom() {
-  const total = messageRounds.value.length
-  if (total > 8) {
-    const start = Math.max(0, total - VISIBLE_ROUND_BUFFER * 2 - 1)
-    visibleRoundRange.value = { start, end: total - 1 }
-    currentRoundIndex.value = total - 1
-    displayRoundIndex.value = total
-  }
   nextTick(() => {
     const el = msgScrollRef.value?.wrapRef
     if (el) el.scrollTop = el.scrollHeight
@@ -3152,22 +3069,6 @@ onUnmounted(() => {
   opacity: 0.5;
 }
 
-.msg-round-placeholder {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 12px;
-  background: var(--el-fill-color-lighter);
-  border: 1px dashed var(--el-border-color-lighter);
-  margin-bottom: 28px;
-}
-
-.msg-round-placeholder__text {
-  font-size: 13px;
-  color: var(--el-text-color-placeholder);
-  user-select: none;
-}
-
 .msg-media-fail-banner {
   width: 100%;
   max-width: min(320px, 100%);
@@ -3715,6 +3616,10 @@ onUnmounted(() => {
   scrollbar-width: thin;
 }
 
+.pending-drag-group {
+  display: contents;
+}
+
 .pending-tile {
   position: relative;
   flex-shrink: 0;
@@ -3725,92 +3630,101 @@ onUnmounted(() => {
   border: 1px solid rgba(15, 23, 42, 0.08);
   background: var(--el-fill-color-lighter);
   box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
+  cursor: grab;
+}
 
-  &.pending-tile--vid {
-    cursor: pointer;
-    padding: 0;
-    margin: 0;
-    font: inherit;
-    color: inherit;
-    text-align: left;
+.pending-tile:active {
+  cursor: grabbing;
+}
 
-    &:focus-visible {
-      outline: 2px solid color-mix(in srgb, var(--el-color-primary) 55%, transparent);
-      outline-offset: 2px;
-    }
-  }
+.pending-tile--ghost {
+  opacity: 0.4;
+}
 
-  .pending-tile__badge {
-    position: absolute;
-    left: 6px;
-    top: 6px;
-    z-index: 2;
-    padding: 2px 6px;
-    border-radius: 4px;
-    font-size: 10px;
-    font-weight: 600;
-    line-height: 1.2;
-    letter-spacing: 0.02em;
-    pointer-events: none;
-  }
+.pending-tile.pending-tile--vid {
+  cursor: pointer;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+}
 
-  .pending-tile__badge--img {
-    color: var(--el-color-primary);
-    background: var(--el-color-primary-light-9);
-  }
+.pending-tile.pending-tile--vid:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--el-color-primary) 55%, transparent);
+  outline-offset: 2px;
+}
 
-  .pending-tile__badge--vid {
-    color: var(--el-color-warning);
-    background: var(--el-color-warning-light-9);
-  }
+.pending-tile__badge {
+  position: absolute;
+  left: 6px;
+  top: 6px;
+  z-index: 2;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
 
-  .pending-tile__play {
-    position: absolute;
-    inset: 0;
-    z-index: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: rgba(255, 255, 255, 0.95);
-    filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.4));
-    pointer-events: none;
-    background: linear-gradient(180deg, transparent 40%, rgba(0, 0, 0, 0.15) 100%);
-  }
+.pending-tile__badge--img {
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
 
-  .pending-tile__vid-dec {
-    pointer-events: none;
-  }
+.pending-tile__badge--vid {
+  color: var(--el-color-warning);
+  background: var(--el-color-warning-light-9);
+}
 
-  .pending-tile-elimg {
-    width: 100%;
-    height: 100%;
-    display: block;
+.pending-tile__play {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.95);
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.4));
+  pointer-events: none;
+  background: linear-gradient(180deg, transparent 40%, rgba(0, 0, 0, 0.15) 100%);
+}
 
-    :deep(.el-image__inner) {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-    }
-  }
+.pending-tile__vid-dec {
+  pointer-events: none;
+}
 
-  .pending-tile-media,
-  .pv {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    display: block;
-  }
+.pending-tile-elimg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
 
-  .pv--err {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 11px;
-    color: var(--el-color-danger);
-    text-align: center;
-    padding: 4px;
-    box-sizing: border-box;
-  }
+.pending-tile-elimg :deep(.el-image__inner) {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.pending-tile-media,
+.pv {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.pv--err {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--el-color-danger);
+  text-align: center;
+  padding: 4px;
+  box-sizing: border-box;
 }
 
 .pending-tile__x {

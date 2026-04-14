@@ -101,9 +101,8 @@
                           :ref="(el) => bindMsgTextEl(m.id, el)"
                           class="msg-text"
                           :class="{ 'msg-text--clamped-2': !isMsgTextExpanded(m.id) }"
-                        >
-                          {{ m.text }}
-                        </div>
+                          v-html="highlightMediaRefs(m.text)"
+                        />
                       </div>
                       <template v-if="m.role === 'assistant'">
                         <div v-if="assistantShowAssistBlock(m)" class="msg-assist-foot">
@@ -427,10 +426,14 @@
                     @mouseenter="mentionActiveIndex = idx"
                   >
                     <div class="mention-dropdown__thumb-wrap">
-                      <img v-if="opt.thumb" :src="opt.thumb" class="mention-dropdown__thumb" />
-                      <div v-else class="mention-dropdown__thumb mention-dropdown__thumb--placeholder">
-                        <el-icon><component :is="$icons.VideoCamera" /></el-icon>
-                      </div>
+                      <img v-if="opt.type === 'image'" :src="opt.thumb" class="mention-dropdown__thumb" />
+                      <video
+                        v-else
+                        :src="opt.videoUrl"
+                        class="mention-dropdown__thumb"
+                        muted
+                        preload="metadata"
+                      />
                       <span class="mention-dropdown__type-badge" :class="opt.type === 'video' ? 'mention-dropdown__type-badge--video' : ''">
                         {{ opt.type === 'video' ? '视频' : '图片' }}
                       </span>
@@ -541,15 +544,17 @@
       class="vc-pending-vid-dialog"
       @closed="pendingVideoPreviewUrl = ''"
     >
-      <video
-        v-if="pendingVideoPreviewUrl"
-        :key="pendingVideoPreviewUrl"
-        class="vc-pending-vid-dialog__video"
-        :src="pendingVideoPreviewUrl"
-        controls
-        playsinline
-        preload="metadata"
-      />
+      <div class="vc-pending-vid-dialog__wrap">
+        <video
+          v-if="pendingVideoPreviewUrl"
+          :key="pendingVideoPreviewUrl"
+          class="vc-pending-vid-dialog__video"
+          :src="pendingVideoPreviewUrl"
+          controls
+          playsinline
+          preload="auto"
+        />
+      </div>
     </el-dialog>
   </div>
 </template>
@@ -828,8 +833,6 @@ const pendingImages = ref([])
 const pendingVideos = ref([])
 /** 与 pendingVideos 下标对齐：本地/已探测到的元数据；reEdit 导入未探测时为 null */
 const pendingVideosMeta = ref(/** @type {Array<{ size: number, duration: number, width: number, height: number } | null>} */ ([]))
-/** 与 pendingVideos 下标对齐：视频缩略图（第一帧截图） */
-const pendingVideoThumbs = ref(/** @type {Array<string | null>} */ ([]))
 const uploadCount = ref(0)
 const sending = ref(false)
 const msgScrollRef = ref(null)
@@ -1350,13 +1353,6 @@ function reEditMessage(m) {
   pendingImages.value = [...(m.attachments?.images || [])]
   pendingVideos.value = [...(m.attachments?.videos || [])]
   pendingVideosMeta.value = pendingVideos.value.map(() => null)
-  // 为导入的视频生成缩略图
-  pendingVideoThumbs.value = pendingVideos.value.map(() => null)
-  pendingVideos.value.forEach((url, i) => {
-    captureVideoThumbnail(url).then((thumb) => {
-      pendingVideoThumbs.value[i] = thumb
-    }).catch(() => {})
-  })
   ElMessage.success("已导入到输入框，可修改后发送")
 }
 
@@ -1653,47 +1649,6 @@ function probeRemoteVideoUrl(url) {
   })
 }
 
-/**
- * 截取视频第一帧作为缩略图
- * @param {string} videoUrl
- * @returns {Promise<string>} base64 或 blob URL
- */
-function captureVideoThumbnail(videoUrl) {
-  return new Promise((resolve, reject) => {
-    const video = document.createElement("video")
-    video.crossOrigin = "anonymous"
-    video.preload = "metadata"
-    video.muted = true
-    video.playsInline = true
-    let done = false
-    const finish = (fn) => {
-      if (done) return
-      done = true
-      video.src = ""
-      fn()
-    }
-    video.onerror = () => finish(() => reject(new Error("视频加载失败")))
-    video.onloadeddata = () => {
-      video.currentTime = 0.1
-    }
-    video.onseeked = () => {
-      try {
-        const canvas = document.createElement("canvas")
-        canvas.width = video.videoWidth || 160
-        canvas.height = video.videoHeight || 90
-        const ctx = canvas.getContext("2d")
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.7)
-        finish(() => resolve(dataUrl))
-      } catch (e) {
-        finish(() => reject(e))
-      }
-    }
-    video.src = videoUrl
-    video.load()
-  })
-}
-
 /** @returns {Promise<number | null>} Content-Length 字节数，失败为 null */
 async function fetchUrlContentLength(url) {
   const u = String(url || "").trim()
@@ -1906,9 +1861,6 @@ async function addUploadedVideoFile(file) {
       width: dim.width,
       height: dim.height,
     })
-    // 生成视频缩略图
-    const thumbUrl = await captureVideoThumbnail(url).catch(() => null)
-    pendingVideoThumbs.value.push(thumbUrl)
   } catch (e) {
     ElMessage.error(e?.message || "视频上传失败")
   } finally {
@@ -1971,7 +1923,6 @@ function removePendingImage(i) {
 function removePendingVideo(i) {
   pendingVideos.value.splice(i, 1)
   pendingVideosMeta.value.splice(i, 1)
-  pendingVideoThumbs.value.splice(i, 1)
 }
 
 const mentionDropdownVisible = ref(false)
@@ -1985,6 +1936,26 @@ const mentionPlaceholder = computed(() => {
   }
   return "描述要生成的视频…"
 })
+
+/**
+ * 将消息文本中的 @图片N / @视频N 高亮显示
+ */
+function highlightMediaRefs(text) {
+  if (!text) return ""
+  // 先转义 HTML 特殊字符，防止 XSS
+  let safe = String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+  // 高亮 @图片N（蓝色）
+  safe = safe.replace(/@图片(\d+)/g, '<span class="media-ref media-ref--image">@图片$1</span>')
+  // 高亮 @视频N（橙色）
+  safe = safe.replace(/@视频(\d+)/g, '<span class="media-ref media-ref--video">@视频$1</span>')
+  // 换行符转为 <br>
+  safe = safe.replace(/\n/g, "<br>")
+  return safe
+}
 
 const mentionOptions = computed(() => {
   const opts = []
@@ -2003,7 +1974,7 @@ const mentionOptions = computed(() => {
       index: i + 1,
       label: `视频${i + 1}`,
       value: `@视频${i + 1}`,
-      thumb: pendingVideoThumbs.value[i] || null,
+      videoUrl: pendingVideos.value[i],
     })
   }
   return opts
@@ -2297,7 +2268,6 @@ async function send() {
   pendingImages.value = []
   pendingVideos.value = []
   pendingVideosMeta.value = []
-  pendingVideoThumbs.value = []
 
   const { optimisticUserId, optimisticAssistId } = pushOptimisticSendRound(
     capturedText,
@@ -2411,7 +2381,6 @@ watch(referenceVideoAllowed, (allowed) => {
   if (!allowed && pendingVideos.value.length) {
     pendingVideos.value = []
     pendingVideosMeta.value = []
-    pendingVideoThumbs.value = []
     ElMessage.info("已切换到不支持参考视频的模型，待发送视频已清除")
   }
 })
@@ -3028,6 +2997,27 @@ onUnmounted(() => {
   min-width: 0;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.msg-text :deep(.media-ref) {
+  display: inline-block;
+  padding: 0 6px;
+  margin: 0 2px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 20px;
+  border-radius: 4px;
+  vertical-align: middle;
+}
+
+.msg-text :deep(.media-ref--image) {
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+}
+
+.msg-text :deep(.media-ref--video) {
+  background: var(--el-color-warning-light-9);
+  color: var(--el-color-warning);
 }
 
 .msg-text--clamped-2 {
@@ -3766,14 +3756,12 @@ onUnmounted(() => {
 
   .pending-tile__badge--img {
     color: var(--el-color-primary);
-    background: color-mix(in srgb, var(--el-bg-color) 88%, transparent);
-    border: 1px solid color-mix(in srgb, var(--el-color-primary) 22%, transparent);
+    background: var(--el-color-primary-light-9);
   }
 
   .pending-tile__badge--vid {
-    color: #fff;
-    background: rgba(15, 23, 42, 0.55);
-    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: var(--el-color-warning);
+    background: var(--el-color-warning-light-9);
   }
 
   .pending-tile__play {
@@ -3912,14 +3900,6 @@ onUnmounted(() => {
   object-fit: cover;
   background: var(--el-fill-color-darker);
   display: block;
-}
-
-.mention-dropdown__thumb--placeholder {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--el-text-color-secondary);
-  font-size: 18px;
 }
 
 .mention-dropdown__type-badge {
@@ -4111,10 +4091,24 @@ onUnmounted(() => {
   padding-top: 8px;
 }
 
+.vc-pending-vid-dialog__wrap {
+  aspect-ratio: 9 / 16;
+  max-height: min(70vh, 560px);
+  width: auto;
+  margin: 0 auto;
+  background: #0f0f10;
+  border-radius: 10px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .vc-pending-vid-dialog__video {
   display: block;
   width: 100%;
-  max-height: min(70vh, 560px);
+  height: 100%;
+  object-fit: contain;
   border-radius: 10px;
   background: #0f0f10;
 }

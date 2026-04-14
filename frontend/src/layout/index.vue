@@ -30,7 +30,7 @@
           <router-view v-slot="{ Component, route: routeItem }">
             <keep-alive :include="keepAlivePages">
               <component v-if="Component" :is="Component" :key="routeItem.path" class="page-transition-wrapper" />
-              <div v-else class="page-empty-box center">
+              <div v-else-if="routerReady" class="page-empty-box center">
                 <el-empty description="抱歉，当前路径没有匹配到页面" />
               </div>
             </keep-alive>
@@ -42,7 +42,7 @@
 </template>
 
 <script setup>
-import { watch } from "vue"
+import { ref, watch } from "vue"
 import { storeToRefs } from "pinia"
 import { useMenuStore } from "@/stores/menu"
 import { isMobileViewport } from "@/composables/useIsMobile"
@@ -50,7 +50,14 @@ import Navbar from "./components/navbar/index.vue"
 import Sidebar from "./components/sidebar/index.vue"
 
 const route = useRoute()
+const router = useRouter()
 const menuStore = useMenuStore()
+
+// 路由是否已就绪（动态路由注册完成）
+const routerReady = ref(false)
+router.isReady().then(() => {
+  routerReady.value = true
+})
 const { mobileDrawerOpen } = storeToRefs(menuStore)
 
 const isMobile = isMobileViewport

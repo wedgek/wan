@@ -30,12 +30,13 @@ function clonePlainOptions(raw) {
 }
 
 /**
- * 合并 options，写入方舟创建任务体顶层（与 model、content 并列），如 aspect_ratio、duration
+ * 合并 options，写入方舟创建任务体顶层（与 model、content 并列），如 ratio、duration
+ * 注：Seedance 2.0 官方 API 使用 "ratio" 而非 "aspect_ratio"
  */
 function normalizeChatVideoOptions(body) {
   const base = clonePlainOptions(body?.options)
-  const ar = String(body?.aspectRatio ?? body?.aspect_ratio ?? base.aspect_ratio ?? '').trim()
-  if (CHAT_ASPECT_RATIOS.has(ar)) base.aspect_ratio = ar
+  const ar = String(body?.aspectRatio ?? body?.aspect_ratio ?? body?.ratio ?? base.ratio ?? '').trim()
+  if (CHAT_ASPECT_RATIOS.has(ar)) base.ratio = ar
   const durRaw = body?.duration ?? base.duration
   if (durRaw != null && durRaw !== '') {
     const n = parseInt(String(durRaw), 10)
@@ -192,7 +193,7 @@ router.get('/sessions/page', async (req, res) => {
     const rows = d
       .prepare(
         `SELECT s.id, s.title,
-                datetime(s.created_at) as create_time, datetime(s.updated_at) as update_time,
+                datetime(s.created_at, 'localtime') as create_time, datetime(s.updated_at, 'localtime') as update_time,
                 m.text as first_user_text
          FROM video_chat_sessions s
          LEFT JOIN (
@@ -223,7 +224,7 @@ router.post('/sessions', (req, res) => {
     const id = Number(info.lastInsertRowid)
     const row = database()
       .prepare(
-        `SELECT id, title, datetime(created_at) as create_time, datetime(updated_at) as update_time
+        `SELECT id, title, datetime(created_at, 'localtime') as create_time, datetime(updated_at, 'localtime') as update_time
          FROM video_chat_sessions WHERE id = ? AND user_id = ?`
       )
       .get(id, req.userId)
@@ -273,7 +274,7 @@ router.put('/sessions/rename', (req, res) => {
     if (r.changes === 0) return res.json(fail(404, '会话不存在'))
     const row = database()
       .prepare(
-        `SELECT id, title, datetime(created_at) as create_time, datetime(updated_at) as update_time
+        `SELECT id, title, datetime(created_at, 'localtime') as create_time, datetime(updated_at, 'localtime') as update_time
          FROM video_chat_sessions WHERE id = ? AND user_id = ?`
       )
       .get(id, req.userId)
@@ -305,8 +306,8 @@ router.get('/messages/page', async (req, res) => {
     const rows = d
       .prepare(
         `SELECT m.id, m.session_id, m.user_id, m.role, m.text, m.attachments_json, m.video_job_id, m.status, m.result_url, m.error_message,
-                datetime(m.created_at) as create_time,
-                datetime(COALESCE(NULLIF(j.updated_at, ''), j.created_at)) as job_update_time,
+                datetime(m.created_at, 'localtime') as create_time,
+                datetime(COALESCE(NULLIF(j.updated_at, ''), j.created_at), 'localtime') as job_update_time,
                 TRIM(COALESCE(NULLIF(TRIM(m.video_model_name), ''), vm.name, '')) as video_model_name
          FROM video_chat_messages m
          LEFT JOIN video_jobs j ON j.id = m.video_job_id

@@ -123,7 +123,7 @@ router.get('/page', (req, res) => {
     const rows = d
       .prepare(
         `SELECT id, name, remark, image_urls,
-                datetime(created_at) as create_time, datetime(updated_at) as update_time
+                datetime(created_at, 'localtime') as create_time, datetime(updated_at, 'localtime') as update_time
          FROM product_library_items
          WHERE ${where}
          ORDER BY id DESC
@@ -156,7 +156,7 @@ router.post('/', (req, res) => {
     const row = d
       .prepare(
         `SELECT id, name, remark, image_urls,
-                datetime(created_at) as create_time, datetime(updated_at) as update_time
+                datetime(created_at, 'localtime') as create_time, datetime(updated_at, 'localtime') as update_time
          FROM product_library_items WHERE id = ? AND user_id = ?`,
       )
       .get(r.lastInsertRowid, userId)
@@ -187,7 +187,7 @@ router.put('/:id', (req, res) => {
     const row = d
       .prepare(
         `SELECT id, name, remark, image_urls,
-                datetime(created_at) as create_time, datetime(updated_at) as update_time
+                datetime(created_at, 'localtime') as create_time, datetime(updated_at, 'localtime') as update_time
          FROM product_library_items WHERE id = ? AND user_id = ?`,
       )
       .get(id, userId)

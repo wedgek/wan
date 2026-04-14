@@ -62,7 +62,7 @@ const userName = computed(() => authStore.user?.nickname || "用户")
 <style scoped lang="scss">
 .workbench {
   --wb-radius: 22px;
-  --wb-top-row-h: minmax(268px, min(36vh, 380px));
+  --wb-top-row-h: minmax(min(268px, 36vh), min(36vh, 380px));
   --wb-section-gap: clamp(16px, 1.5vw, 24px);
   /* 与首行共用三列，竖向分割线（趋势|日历、待办|侧栏）才能对齐 */
   --wb-cols: minmax(280px, 1.25fr) minmax(260px, 1.15fr) minmax(268px, min(26vw, 500px));
@@ -120,6 +120,12 @@ html.dark .workbench {
 .workbench__cal-wrap {
   flex: 1;
   min-height: 0;
+}
+
+.workbench__top-cell--trend :deep(.vol-trend),
+.workbench__top-cell--kpi :deep(.top-kpi),
+.workbench__cal-wrap :deep(.wb-cal) {
+  overflow: auto;
 }
 
 .workbench__cal-wrap {

@@ -728,7 +728,7 @@ function findUserById(id) {
   return getDb()
     .prepare(
       `SELECT u.id, u.username, u.nickname, u.avatar, u.dept_id, u.status, u.mobile, u.email, u.sex, u.remark,
-              datetime(u.created_at) as create_time
+              datetime(u.created_at, 'localtime') as create_time
        FROM users u WHERE u.id = ?`
     )
     .get(id)

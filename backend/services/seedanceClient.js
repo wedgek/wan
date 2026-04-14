@@ -39,6 +39,40 @@ function videoContentMode() {
   return (process.env.ARK_VIDEO_CONTENT_MODE || 'reference_only').trim().toLowerCase()
 }
 
+/**
+ * 将用户 prompt 中的 @图片N / @视频N 转换为 Seedance 2.0 API 能理解的自然语言引用。
+ * 根据官方文档示例，Seedance 2.0 智能参考模式使用 "图片1"、"视频1"、"音频1" 格式。
+ * API 按 content 数组中媒体的顺序理解引用（第一个 image_url 是图片1，第二个是图片2...）
+ * 
+ * 只转换有效范围内的引用（1 ~ 实际数量），超出范围的 @引用 保持原样不转换。
+ */
+function transformMediaReferences(prompt, imageCount, videoCount) {
+  let text = String(prompt || '')
+  // 只转换有效范围内的图片引用（1 ~ imageCount）
+  for (let i = 1; i <= imageCount; i++) {
+    const patterns = [
+      new RegExp(`@图片${i}(?![0-9])`, 'g'),
+      new RegExp(`@image${i}(?![0-9])`, 'gi'),
+      new RegExp(`@img${i}(?![0-9])`, 'gi'),
+    ]
+    for (const re of patterns) {
+      text = text.replace(re, `图片${i}`)
+    }
+  }
+  // 只转换有效范围内的视频引用（1 ~ videoCount）
+  for (let i = 1; i <= videoCount; i++) {
+    const patterns = [
+      new RegExp(`@视频${i}(?![0-9])`, 'g'),
+      new RegExp(`@video${i}(?![0-9])`, 'gi'),
+      new RegExp(`@vid${i}(?![0-9])`, 'gi'),
+    ]
+    for (const re of patterns) {
+      text = text.replace(re, `视频${i}`)
+    }
+  }
+  return text
+}
+
 function assertConfigured() {
   if (!ARK_API_KEY || !String(ARK_API_KEY).trim()) {
     const err = new Error('未配置 ARK_API_KEY 或 SEEDANCE_API_KEY')
@@ -90,24 +124,23 @@ function buildCreateTaskBody({ model, prompt, extra, imageUrls, videoUrls }) {
   const useFirstLastRoles =
     mode !== 'reference_only' && !hasVideo && urls.length >= 1 && urls.length <= 2
 
-  let text = String(prompt || '').trim()
+  let text = transformMediaReferences(String(prompt || '').trim(), urls.length, vids.length)
   if (!text && urls.length) text = '根据参考图生成视频'
   if (!text && vids.length && !urls.length) text = '根据参考视频生成视频'
   if (!text && (urls.length || vids.length)) text = '根据参考素材生成视频'
 
   const content = []
 
-  /** 图 + 参考视频：参考媒体模式；视频必须 reference_video。媒体在前、文本在后 */
+  /**
+   * Seedance 2.0 智能参考模式：
+   * 根据官方文档示例，content 数组顺序为：文本 → 图片(reference_image) → 视频(reference_video)
+   * 图片/视频按数组顺序对应 "图片1、图片2..." / "视频1、视频2..."
+   */
   const multimodalRef = hasVideo && urls.length > 0
 
   if (multimodalRef) {
-    for (const u of vids) {
-      content.push({
-        type: 'video_url',
-        role: 'reference_video',
-        video_url: { url: String(u).trim() },
-      })
-    }
+    // 智能参考模式（多模态）：文本在前，图片在中，视频在后
+    content.push({ type: 'text', text })
     for (let i = 0; i < urls.length; i++) {
       const u = String(urls[i]).trim()
       content.push({
@@ -116,8 +149,15 @@ function buildCreateTaskBody({ model, prompt, extra, imageUrls, videoUrls }) {
         image_url: { url: u },
       })
     }
-    content.push({ type: 'text', text })
+    for (const u of vids) {
+      content.push({
+        type: 'video_url',
+        role: 'reference_video',
+        video_url: { url: String(u).trim() },
+      })
+    }
   } else {
+    // 单模态或首尾帧模式
     content.push({ type: 'text', text })
     for (let i = 0; i < urls.length; i++) {
       const u = String(urls[i]).trim()
@@ -125,6 +165,9 @@ function buildCreateTaskBody({ model, prompt, extra, imageUrls, videoUrls }) {
       if (useFirstLastRoles) {
         if (urls.length === 1) item.role = 'first_frame'
         else item.role = i === 0 ? 'first_frame' : 'last_frame'
+      } else {
+        // 仅图片的智能参考模式
+        item.role = 'reference_image'
       }
       content.push(item)
     }
@@ -140,7 +183,7 @@ function buildCreateTaskBody({ model, prompt, extra, imageUrls, videoUrls }) {
   // 必须先展开业务扩展字段，最后再强制写入 model / content。
   // default_params / options 里若带有 content（或含 role 的示例片段），会覆盖上面构造的多模态正文，
   // 导致方舟报 first/last frame 与 reference media 混用。
-  // restExtra 常见项（与官方「创建视频生成任务」一致）：aspect_ratio（如 9:16、16:9、1:1）、duration（秒，整数）等。
+  // restExtra 常见项（与官方「创建视频生成任务」一致）：ratio（如 16:9、9:16、1:1、adaptive）、duration（秒，整数）等。
   const { model: _m, content: _c, ...restExtra } = safeExtra
   return {
     ...restExtra,

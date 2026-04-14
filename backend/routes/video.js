@@ -160,7 +160,7 @@ router.get('/jobs/get', async (req, res) => {
   const row = database()
     .prepare(
       `SELECT id, user_id, project_id, video_model_id, mode, source_image_url, source_video_urls, external_task_id, status, prompt, result_url, error_message,
-              datetime(created_at) as create_time, datetime(updated_at) as update_time
+              datetime(created_at, 'localtime') as create_time, datetime(updated_at, 'localtime') as update_time
        FROM video_jobs WHERE id = ? AND user_id = ?`
     )
     .get(id, req.userId)
@@ -200,7 +200,7 @@ router.get('/jobs/page', (req, res) => {
   const rows = d
     .prepare(
       `SELECT id, user_id, project_id, video_model_id, mode, source_image_url, source_video_urls, external_task_id, status, prompt, result_url, error_message,
-              datetime(created_at) as create_time, datetime(updated_at) as update_time
+              datetime(created_at, 'localtime') as create_time, datetime(updated_at, 'localtime') as update_time
        FROM video_jobs WHERE user_id = ? ORDER BY id DESC LIMIT ? OFFSET ?`
     )
     .all(req.userId, pageSize, offset)
@@ -218,7 +218,7 @@ router.get('/projects/page', (req, res) => {
       .c
     const rows = d
       .prepare(
-        `SELECT id, name, datetime(created_at) as create_time, datetime(updated_at) as update_time
+        `SELECT id, name, datetime(created_at, 'localtime') as create_time, datetime(updated_at, 'localtime') as update_time
          FROM video_projects WHERE user_id = ? ORDER BY id DESC LIMIT ? OFFSET ?`
       )
       .all(req.userId, pageSize, offset)
@@ -241,7 +241,7 @@ router.post('/projects', (req, res) => {
     const id = Number(info.lastInsertRowid)
     const row = database()
       .prepare(
-        `SELECT id, name, graph_json, datetime(created_at) as create_time, datetime(updated_at) as update_time
+        `SELECT id, name, graph_json, datetime(created_at, 'localtime') as create_time, datetime(updated_at, 'localtime') as update_time
          FROM video_projects WHERE id = ? AND user_id = ?`
       )
       .get(id, req.userId)
@@ -259,7 +259,7 @@ router.get('/projects/get', (req, res) => {
     if (!id) return res.json(fail(400, '缺少 id'))
     const row = database()
       .prepare(
-        `SELECT id, name, graph_json, datetime(created_at) as create_time, datetime(updated_at) as update_time
+        `SELECT id, name, graph_json, datetime(created_at, 'localtime') as create_time, datetime(updated_at, 'localtime') as update_time
          FROM video_projects WHERE id = ? AND user_id = ?`
       )
       .get(id, req.userId)
@@ -323,7 +323,7 @@ router.put('/projects/save', (req, res) => {
 
     const out = database()
       .prepare(
-        `SELECT id, name, graph_json, datetime(created_at) as create_time, datetime(updated_at) as update_time
+        `SELECT id, name, graph_json, datetime(created_at, 'localtime') as create_time, datetime(updated_at, 'localtime') as update_time
          FROM video_projects WHERE id = ? AND user_id = ?`
       )
       .get(id, req.userId)

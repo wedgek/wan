@@ -238,7 +238,7 @@ router.delete('/menu/delete', (req, res) => {
 function deptRowsWithLeader(whereSql, params) {
   return database()
     .prepare(
-      `SELECT d.*, datetime(d.created_at) as create_time, u.nickname as leader_user_name
+      `SELECT d.*, datetime(d.created_at, 'localtime') as create_time, u.nickname as leader_user_name
        FROM departments d
        LEFT JOIN users u ON d.leader_user_id = u.id
        WHERE ${whereSql}
@@ -348,7 +348,7 @@ router.get('/role/page', (req, res) => {
   const offset = (pageNo - 1) * pageSize
   const rows = database()
     .prepare(
-      `SELECT *, datetime(created_at) as create_time FROM roles WHERE ${where} ORDER BY sort ASC, id ASC LIMIT ? OFFSET ?`
+      `SELECT *, datetime(created_at, 'localtime') as create_time FROM roles WHERE ${where} ORDER BY sort ASC, id ASC LIMIT ? OFFSET ?`
     )
     .all(...params, pageSize, offset)
   const list = rows.map((r) => {
@@ -422,7 +422,7 @@ router.delete('/role/delete', (req, res) => {
 })
 
 router.get('/role/export-excel', (req, res) => {
-  const rows = database().prepare('SELECT id, name, code, sort, status, type, remark, datetime(created_at) as create_time FROM roles').all()
+  const rows = database().prepare('SELECT id, name, code, sort, status, type, remark, datetime(created_at, \'localtime\') as create_time FROM roles').all()
   const bom = '\ufeff'
   const head = '编号,名称,标识,排序,状态,类型,备注,创建时间\n'
   const body = rows
@@ -464,7 +464,7 @@ router.get('/user/page', (req, res) => {
   const offset = (pageNo - 1) * pageSize
   const rows = database()
     .prepare(
-      `SELECT u.*, d.name as dept_name, datetime(u.created_at) as create_time
+      `SELECT u.*, d.name as dept_name, datetime(u.created_at, 'localtime') as create_time
        FROM users u
        LEFT JOIN departments d ON u.dept_id = d.id
        WHERE ${where}
@@ -588,7 +588,7 @@ router.get('/user/qcCode', (req, res) => {
 router.get('/user/export', (req, res) => {
   const rows = database()
     .prepare(
-      `SELECT u.username, u.nickname, d.name as dept_name, u.status, u.mobile, u.email, datetime(u.created_at) as create_time
+      `SELECT u.username, u.nickname, d.name as dept_name, u.status, u.mobile, u.email, datetime(u.created_at, 'localtime') as create_time
        FROM users u LEFT JOIN departments d ON u.dept_id = d.id ORDER BY u.id`
     )
     .all()
@@ -720,7 +720,7 @@ router.get('/ai-prompt/page', (req, res) => {
   const rows = database()
     .prepare(
       `SELECT id, name, scene, content, sort, status, remark,
-              datetime(created_at) as create_time, datetime(updated_at) as update_time
+              datetime(created_at, 'localtime') as create_time, datetime(updated_at, 'localtime') as update_time
        FROM ai_prompts WHERE ${where} ORDER BY sort ASC, id DESC LIMIT ? OFFSET ?`
     )
     .all(...params, pageSize, offset)
@@ -733,7 +733,7 @@ router.get('/ai-prompt/get', (req, res) => {
   const row = database()
     .prepare(
       `SELECT id, name, scene, content, sort, status, remark,
-              datetime(created_at) as create_time, datetime(updated_at) as update_time
+              datetime(created_at, 'localtime') as create_time, datetime(updated_at, 'localtime') as update_time
        FROM ai_prompts WHERE id = ?`
     )
     .get(id)
@@ -843,7 +843,7 @@ router.get('/video-model/page', (req, res) => {
     .prepare(
       `SELECT id, name, api_model_id, sort, status, is_default, remark, default_params,
               supports_reference_video,
-              datetime(created_at) AS create_time, datetime(updated_at) AS update_time
+              datetime(created_at, 'localtime') AS create_time, datetime(updated_at, 'localtime') AS update_time
        FROM video_models WHERE ${where} ORDER BY sort ASC, id DESC LIMIT ? OFFSET ?`
     )
     .all(...params, pageSize, offset)
@@ -857,7 +857,7 @@ router.get('/video-model/get', (req, res) => {
     .prepare(
       `SELECT id, name, api_model_id, sort, status, is_default, remark, default_params,
               supports_reference_video,
-              datetime(created_at) AS create_time, datetime(updated_at) AS update_time
+              datetime(created_at, 'localtime') AS create_time, datetime(updated_at, 'localtime') AS update_time
        FROM video_models WHERE id = ?`
     )
     .get(id)

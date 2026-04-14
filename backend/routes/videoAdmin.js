@@ -59,7 +59,7 @@ function parseChatExtra(requestPayloadText) {
     const root = JSON.parse(requestPayloadText)
     const payload = root && typeof root === 'object' && root.payload ? root.payload : root
     if (!payload || typeof payload !== 'object') return out
-    const ar = payload.aspect_ratio ?? payload.aspectRatio
+    const ar = payload.ratio ?? payload.aspect_ratio ?? payload.aspectRatio
     if (ar != null && ar !== '') out.aspectRatio = String(ar)
     if (payload.duration != null && payload.duration !== '') {
       const n = parseInt(String(payload.duration), 10)
@@ -201,7 +201,7 @@ router.get('/jobs/page', (req, res) => {
       .prepare(
         `SELECT j.id, j.user_id, j.project_id, j.video_model_id, j.mode, j.source_image_url, j.source_video_urls,
                 j.external_task_id, j.status, j.prompt, j.result_url, j.error_message, j.request_payload,
-                datetime(j.created_at) as create_time, datetime(j.updated_at) as update_time,
+                datetime(j.created_at, 'localtime') as create_time, datetime(j.updated_at, 'localtime') as update_time,
                 u.username, u.nickname,
                 TRIM(COALESCE(vm.name, '')) as model_name,
                 CASE WHEN EXISTS (SELECT 1 FROM video_chat_messages m WHERE m.video_job_id = j.id LIMIT 1) THEN 1 ELSE 0 END as from_chat

@@ -45,188 +45,203 @@
       <div v-if="!sessionReady" class="video-chat__boot" v-loading="true" element-loading-text="加载会话…" />
       <template v-else-if="sessionReady">
         <div class="video-chat__stream-slot">
-          <el-scrollbar ref="msgScrollRef" class="msg-scroll">
+          <el-scrollbar ref="msgScrollRef" class="msg-scroll" @scroll="onMsgScroll">
             <div class="msg-stream" :class="{ 'msg-stream--has-msgs': messages.length }">
               <div
-                v-for="round in messageRounds"
+                v-for="(round, roundIdx) in messageRounds"
                 :key="messageRoundKey(round)"
                 class="msg-round"
+                :data-round-idx="roundIdx"
               >
-                <div v-for="m in round" :key="m.id" class="msg-row" :class="'msg-row--' + m.role">
-              <div class="msg-feed-head">
-                <div class="msg-feed-head__line">
-                  <span class="msg-feed-role">{{ feedRoleLabel(m) }}</span>
-                  <template v-if="messageFeedTimePart(m)">
-                    <span class="msg-feed-head__sep" aria-hidden="true">·</span>
-                    <span class="msg-feed-time">{{ messageFeedTimePart(m) }}</span>
-                  </template>
-                </div>
-              </div>
-              <div class="msg-bubble msg-feed__body" :class="{ 'msg-bubble--has-media': messageHasMedia(m) }">
-                <div v-if="messageHasMedia(m)" class="msg-media-row">
-                  <template v-if="m.attachments?.images?.length">
-                    <div
-                      v-for="(u, i) in m.attachments.images"
-                      :key="'mi' + i"
-                      class="msg-media-slot msg-media-slot--image"
-                    >
-                      <el-image
-                        :src="u"
-                        fit="cover"
-                        class="msg-media-elimage"
-                        :preview-src-list="chatAttachmentImageUrls(m)"
-                        :initial-index="i"
-                        preview-teleported
-                        hide-on-click-modal
-                      />
-                    </div>
-                  </template>
-                  <template v-for="(u, i) in m.attachments?.videos || []" :key="'mv' + i">
-                    <div
-                      v-if="!failedVideoUrls.has(u)"
-                      class="msg-media-slot msg-media-slot--video"
-                    >
-                      <video
-                        :src="u"
-                        controls
-                        playsinline
-                        class="msg-vid-el"
-                        preload="metadata"
-                        @loadedmetadata="nudgeVideoFirstFrame"
-                        @error="markVideoFailed(u)"
-                      />
-                    </div>
-                    <div v-else class="msg-media-slot msg-media-slot--video msg-media-slot--err" role="img" aria-label="视频无法加载">
-                      无法加载
-                    </div>
-                  </template>
-                </div>
-                <div v-if="m.text" class="msg-text-stack">
-                  <div
-                    :ref="(el) => bindMsgTextEl(m.id, el)"
-                    class="msg-text"
-                    :class="{ 'msg-text--clamped-2': !isMsgTextExpanded(m.id) }"
-                  >
-                    {{ m.text }}
-                  </div>
-                </div>
-                <template v-if="m.role === 'assistant'">
-                  <div v-if="assistantShowAssistBlock(m)" class="msg-assist-foot">
-                    <div v-if="assistantIsRunning(m)" class="msg-assist-loading">
-                      <span class="msg-assist-loading__ring" aria-hidden="true" />
-                      <div class="msg-assist-loading__copy">
-                        <span class="msg-assist-loading__title">正在生成视频</span>
-                        <span class="msg-assist-loading__sub">任务进行中，可随时离开页面，稍后回来查看结果</span>
+                <template v-if="isRoundVisible(roundIdx)">
+                  <div v-for="m in round" :key="m.id" class="msg-row" :class="'msg-row--' + m.role">
+                    <div class="msg-feed-head">
+                      <div class="msg-feed-head__line">
+                        <span class="msg-feed-role">{{ feedRoleLabel(m) }}</span>
+                        <template v-if="messageFeedTimePart(m)">
+                          <span class="msg-feed-head__sep" aria-hidden="true">·</span>
+                          <span class="msg-feed-time">{{ messageFeedTimePart(m) }}</span>
+                        </template>
                       </div>
                     </div>
-                    <template v-else-if="assistantIsSuccess(m)">
-                      <div v-if="m.resultUrl" class="msg-result-vid-wrap">
+                    <div class="msg-bubble msg-feed__body" :class="{ 'msg-bubble--has-media': messageHasMedia(m) }">
+                      <div v-if="messageHasMedia(m)" class="msg-media-row">
+                        <template v-if="m.attachments?.images?.length">
+                          <div
+                            v-for="(u, i) in m.attachments.images"
+                            :key="'mi' + i"
+                            class="msg-media-slot msg-media-slot--image"
+                          >
+                            <LazyImage
+                              :src="u"
+                              :preview-src-list="chatAttachmentImageUrls(m)"
+                              :initial-index="i"
+                            />
+                          </div>
+                        </template>
+                        <template v-for="(u, i) in m.attachments?.videos || []" :key="'mv' + i">
+                          <div
+                            v-if="!failedVideoUrls.has(u)"
+                            class="msg-media-slot msg-media-slot--video"
+                          >
+                            <LazyVideo
+                              :src="u"
+                              preload-level="none"
+                              @loadedmetadata="nudgeVideoFirstFrame"
+                              @error="markVideoFailed(u)"
+                            />
+                          </div>
+                          <div v-else class="msg-media-slot msg-media-slot--video msg-media-slot--err" role="img" aria-label="视频无法加载">
+                            无法加载
+                          </div>
+                        </template>
+                      </div>
+                      <div v-if="m.text" class="msg-text-stack">
                         <div
-                          v-if="!failedVideoUrls.has(m.resultUrl)"
-                          class="msg-media-slot msg-media-slot--video"
+                          :ref="(el) => bindMsgTextEl(m.id, el)"
+                          class="msg-text"
+                          :class="{ 'msg-text--clamped-2': !isMsgTextExpanded(m.id) }"
                         >
-                          <video
-                            :key="'result-' + m.id"
-                            class="msg-vid-el"
-                            :src="m.resultUrl"
-                            :poster="resultVideoPosters[String(m.id)] || undefined"
-                            controls
-                            playsinline
-                            preload="auto"
-                            @loadedmetadata="onAssistantResultVideoMeta($event, m)"
-                            @error="markVideoFailed(m.resultUrl)"
-                          />
-                        </div>
-                        <div v-else class="msg-media-fail-banner" role="status">
-                          成片无法在此解码，请检查链接或重新生成
+                          {{ m.text }}
                         </div>
                       </div>
-                    </template>
-                    <div v-else-if="assistantIsFailed(m)" class="msg-assist-card msg-assist-card--fail">
-                      <el-icon class="msg-assist-card__ico" :size="22">
-                        <component :is="$icons.CircleCloseFilled" />
-                      </el-icon>
-                      <div class="msg-assist-card__body">
-                        <div class="msg-assist-card__title">生成未成功</div>
-                        <div v-if="m.errorMessage" class="msg-assist-card__err">{{ m.errorMessage }}</div>
-                        <div v-else class="msg-assist-card__sub">请调整指令或参考素材后重试</div>
-                      </div>
+                      <template v-if="m.role === 'assistant'">
+                        <div v-if="assistantShowAssistBlock(m)" class="msg-assist-foot">
+                          <div v-if="assistantIsRunning(m)" class="msg-assist-loading">
+                            <span class="msg-assist-loading__ring" aria-hidden="true" />
+                            <div class="msg-assist-loading__copy">
+                              <span class="msg-assist-loading__title">正在生成视频</span>
+                              <span class="msg-assist-loading__sub">任务进行中，可随时离开页面，稍后回来查看结果</span>
+                            </div>
+                          </div>
+                          <template v-else-if="assistantIsSuccess(m)">
+                            <div v-if="m.resultUrl" class="msg-result-vid-wrap">
+                              <div
+                                v-if="!failedVideoUrls.has(m.resultUrl)"
+                                class="msg-media-slot msg-media-slot--video"
+                              >
+                                <LazyVideo
+                                  :key="'result-' + m.id"
+                                  :src="m.resultUrl"
+                                  :poster="resultVideoPosters[String(m.id)] || undefined"
+                                  preload-level="metadata"
+                                  @loadedmetadata="(e) => onAssistantResultVideoMeta(e, m)"
+                                  @error="markVideoFailed(m.resultUrl)"
+                                />
+                              </div>
+                              <div v-else class="msg-media-fail-banner" role="status">
+                                成片无法在此解码，请检查链接或重新生成
+                              </div>
+                            </div>
+                          </template>
+                          <div v-else-if="assistantIsFailed(m)" class="msg-assist-card msg-assist-card--fail">
+                            <el-icon class="msg-assist-card__ico" :size="22">
+                              <component :is="$icons.CircleCloseFilled" />
+                            </el-icon>
+                            <div class="msg-assist-card__body">
+                              <div class="msg-assist-card__title">生成未成功</div>
+                              <div v-if="m.errorMessage" class="msg-assist-card__err">{{ m.errorMessage }}</div>
+                              <div v-else class="msg-assist-card__sub">请调整指令或参考素材后重试</div>
+                            </div>
+                          </div>
+                          <div v-else class="msg-meta">
+                            <span class="msg-meta__label">状态</span>
+                            <span class="msg-meta__val">{{ m.status || "—" }}</span>
+                          </div>
+                        </div>
+                      </template>
                     </div>
-                    <div v-else class="msg-meta">
-                      <span class="msg-meta__label">状态</span>
-                      <span class="msg-meta__val">{{ m.status || "—" }}</span>
+                    <div
+                      v-if="
+                        m.role === 'user' ||
+                        !deleteMessageDisabled(m) ||
+                        (m.text && msgTextOverflow[String(m.id)]) ||
+                        assistantCanDownloadResult(m)
+                      "
+                      class="msg-feed-actions msg-feed-actions--below"
+                    >
+                      <div
+                        v-if="
+                          m.role === 'user' || assistantCanDownloadResult(m) || !deleteMessageDisabled(m)
+                        "
+                        class="msg-feed-actions__left"
+                      >
+                        <template v-if="m.role === 'user'">
+                          <el-tooltip content="重新编辑" placement="top" :show-after="400">
+                            <button type="button" class="msg-act-btn" @click="reEditMessage(m)">
+                              <el-icon :size="16"><component :is="$icons.EditPen" /></el-icon>
+                            </button>
+                          </el-tooltip>
+                          <el-tooltip content="再次生成" placement="top" :show-after="400">
+                            <button
+                              type="button"
+                              class="msg-act-btn"
+                              :disabled="sending"
+                              @click="regenerateMessage(m)"
+                            >
+                              <el-icon :size="16"><component :is="$icons.RefreshRight" /></el-icon>
+                            </button>
+                          </el-tooltip>
+                        </template>
+                        <template v-if="assistantCanDownloadResult(m)">
+                          <el-tooltip content="下载成片" placement="top" :show-after="400">
+                            <span class="msg-act-tooltip-span">
+                              <button
+                                type="button"
+                                class="msg-act-btn"
+                                :disabled="!!assistantDownloadBusy[String(m.id)]"
+                                @click="downloadAssistantResult(m)"
+                              >
+                                <el-icon :size="16"><component :is="$icons.Download" /></el-icon>
+                              </button>
+                            </span>
+                          </el-tooltip>
+                        </template>
+                        <template v-if="!deleteMessageDisabled(m)">
+                          <el-tooltip content="删除" placement="top" :show-after="400">
+                            <span class="msg-act-tooltip-span">
+                              <button type="button" class="msg-act-btn msg-act-btn--danger" @click="deleteMessage(m)">
+                                <el-icon :size="16"><component :is="$icons.Delete" /></el-icon>
+                              </button>
+                            </span>
+                          </el-tooltip>
+                        </template>
+                      </div>
+                      <div v-if="m.text && msgTextOverflow[String(m.id)]" class="msg-feed-actions__tail">
+                        <button type="button" class="msg-text-toggle" @click="toggleMsgTextExpand(m.id)">
+                          {{ isMsgTextExpanded(m.id) ? "收起" : "展开" }}
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </template>
-              </div>
-              <div
-                v-if="
-                  m.role === 'user' ||
-                  !deleteMessageDisabled(m) ||
-                  (m.text && msgTextOverflow[String(m.id)]) ||
-                  assistantCanDownloadResult(m)
-                "
-                class="msg-feed-actions msg-feed-actions--below"
-              >
-                <div
-                  v-if="
-                    m.role === 'user' || assistantCanDownloadResult(m) || !deleteMessageDisabled(m)
-                  "
-                  class="msg-feed-actions__left"
-                >
-                  <template v-if="m.role === 'user'">
-                    <el-tooltip content="重新编辑" placement="top" :show-after="400">
-                      <button type="button" class="msg-act-btn" @click="reEditMessage(m)">
-                        <el-icon :size="16"><component :is="$icons.EditPen" /></el-icon>
-                      </button>
-                    </el-tooltip>
-                    <el-tooltip content="再次生成" placement="top" :show-after="400">
-                      <button
-                        type="button"
-                        class="msg-act-btn"
-                        :disabled="sending"
-                        @click="regenerateMessage(m)"
-                      >
-                        <el-icon :size="16"><component :is="$icons.RefreshRight" /></el-icon>
-                      </button>
-                    </el-tooltip>
-                  </template>
-                  <template v-if="assistantCanDownloadResult(m)">
-                    <el-tooltip content="下载成片" placement="top" :show-after="400">
-                      <span class="msg-act-tooltip-span">
-                        <button
-                          type="button"
-                          class="msg-act-btn"
-                          :disabled="!!assistantDownloadBusy[String(m.id)]"
-                          @click="downloadAssistantResult(m)"
-                        >
-                          <el-icon :size="16"><component :is="$icons.Download" /></el-icon>
-                        </button>
-                      </span>
-                    </el-tooltip>
-                  </template>
-                  <template v-if="!deleteMessageDisabled(m)">
-                    <el-tooltip content="删除" placement="top" :show-after="400">
-                      <span class="msg-act-tooltip-span">
-                        <button type="button" class="msg-act-btn msg-act-btn--danger" @click="deleteMessage(m)">
-                          <el-icon :size="16"><component :is="$icons.Delete" /></el-icon>
-                        </button>
-                      </span>
-                    </el-tooltip>
-                  </template>
+                <div v-else class="msg-round-placeholder" :style="{ minHeight: getRoundPlaceholderHeight(roundIdx) + 'px' }">
+                  <span class="msg-round-placeholder__text">第 {{ roundIdx + 1 }} 轮对话</span>
                 </div>
-                <div v-if="m.text && msgTextOverflow[String(m.id)]" class="msg-feed-actions__tail">
-                  <button type="button" class="msg-text-toggle" @click="toggleMsgTextExpand(m.id)">
-                    {{ isMsgTextExpanded(m.id) ? "收起" : "展开" }}
-                  </button>
-                </div>
-              </div>
-            </div>
               </div>
             </div>
           </el-scrollbar>
           <div v-if="!messages.length" class="video-chat__empty-logo-overlay" aria-hidden="true">
             <img :src="logoMark" alt="" class="msg-stream__logo-img" />
+          </div>
+          <div v-if="messageRounds.length > 1" class="round-nav">
+            <button
+              type="button"
+              class="round-nav__btn"
+              :disabled="!canGoPrevRound"
+              @click="goPrevRound"
+            >
+              <el-icon :size="18"><component :is="$icons.ArrowUp" /></el-icon>
+            </button>
+            <span class="round-nav__indicator">{{ displayRoundIndex }}/{{ messageRounds.length }}</span>
+            <button
+              type="button"
+              class="round-nav__btn"
+              :disabled="!canGoNextRound"
+              @click="goNextRound"
+            >
+              <el-icon :size="18"><component :is="$icons.ArrowDown" /></el-icon>
+            </button>
           </div>
         </div>
 
@@ -341,7 +356,7 @@
                   <button type="button" class="pending-tile__x" title="移除" @click.stop="removePendingImage(i)">
                     <el-icon><component :is="$icons.Close" /></el-icon>
                   </button>
-                  <span class="pending-tile__badge pending-tile__badge--img">图片</span>
+                  <span class="pending-tile__badge pending-tile__badge--img">图片{{ i + 1 }}</span>
                   <el-image
                     :src="u"
                     fit="cover"
@@ -362,7 +377,7 @@
                   @click="openPendingVideoPreview(u)"
                   @keydown.enter.prevent="openPendingVideoPreview(u)"
                 >
-                  <span class="pending-tile__badge pending-tile__badge--vid">视频</span>
+                  <span class="pending-tile__badge pending-tile__badge--vid">视频{{ i + 1 }}</span>
                   <span class="pending-tile__play" aria-hidden="true">
                     <el-icon :size="26"><component :is="$icons.VideoPlay" /></el-icon>
                   </span>
@@ -383,16 +398,47 @@
                 </div>
               </div>
 
-              <el-input
-                v-model="inputText"
-                type="textarea"
-                :autosize="{ minRows: 3, maxRows: 8 }"
-                :maxlength="INPUT_MAX_LENGTH"
-                :placeholder="'描述要生成的视频…'"
-                class="composer-input"
-                resize="none"
-                @keydown.enter.ctrl.exact.prevent="send"
-              />
+              <div class="composer-input-wrap">
+                <el-input
+                  ref="composerInputRef"
+                  v-model="inputText"
+                  type="textarea"
+                  :autosize="{ minRows: 3, maxRows: 8 }"
+                  :maxlength="INPUT_MAX_LENGTH"
+                  :placeholder="mentionPlaceholder"
+                  class="composer-input"
+                  resize="none"
+                  @keydown.enter.ctrl.exact.prevent="send"
+                  @keydown="onInputKeydown"
+                  @input="onInputChange"
+                  @blur="onInputBlur"
+                />
+                <div
+                  v-if="mentionDropdownVisible && mentionOptions.length"
+                  class="mention-dropdown"
+                  :style="mentionDropdownStyle"
+                >
+                  <div
+                    v-for="(opt, idx) in mentionOptions"
+                    :key="opt.value"
+                    class="mention-dropdown__item"
+                    :class="{ 'mention-dropdown__item--active': mentionActiveIndex === idx }"
+                    @mousedown.prevent="selectMentionOption(opt)"
+                    @mouseenter="mentionActiveIndex = idx"
+                  >
+                    <div class="mention-dropdown__thumb-wrap">
+                      <img v-if="opt.thumb" :src="opt.thumb" class="mention-dropdown__thumb" />
+                      <div v-else class="mention-dropdown__thumb mention-dropdown__thumb--placeholder">
+                        <el-icon><component :is="$icons.VideoCamera" /></el-icon>
+                      </div>
+                      <span class="mention-dropdown__type-badge" :class="opt.type === 'video' ? 'mention-dropdown__type-badge--video' : ''">
+                        {{ opt.type === 'video' ? '视频' : '图片' }}
+                      </span>
+                    </div>
+                    <span class="mention-dropdown__label">{{ opt.label }}</span>
+                  </div>
+                </div>
+              </div>
             </div>
             <div class="composer-foot">
               <span class="composer-hint">Ctrl + Enter 发送</span>
@@ -509,21 +555,125 @@
 </template>
 
 <script setup name="aiVideoChat">
-import { nextTick, onMounted, onUnmounted, ref, watch, computed } from "vue"
+import { nextTick, onMounted, onUnmounted, onActivated, ref, watch, computed, shallowRef, defineComponent, h } from "vue"
 import { ElMessage, ElMessageBox } from "element-plus"
 import dayjs from "dayjs"
-import utc from "dayjs/plugin/utc"
-import timezone from "dayjs/plugin/timezone"
 import request from "@/request"
-
-dayjs.extend(utc)
-dayjs.extend(timezone)
-
-/** 对话时间统一按国内常用时区展示（含夏令时历史由 IANA 数据自行处理） */
-const TZ_CN = "Asia/Shanghai"
 import { uploadImage, uploadVideo, getFileExt } from "@/request/oss"
 import logoMark from "@/assets/images/logo.svg"
 import ProductLibraryPickerDialog from "./ProductLibraryPickerDialog.vue"
+
+/** 懒加载图片组件：进入可视区域后才加载 */
+const LazyImage = defineComponent({
+  props: {
+    src: String,
+    previewSrcList: Array,
+    initialIndex: { type: Number, default: 0 },
+  },
+  setup(props) {
+    const containerRef = ref(null)
+    const shouldLoad = ref(false)
+    let observer = null
+
+    onMounted(() => {
+      const el = containerRef.value
+      if (!el) return
+      observer = new IntersectionObserver(
+        (entries) => {
+          if (entries[0].isIntersecting) {
+            shouldLoad.value = true
+            observer?.disconnect()
+            observer = null
+          }
+        },
+        { rootMargin: "300px" },
+      )
+      observer.observe(el)
+    })
+
+    onUnmounted(() => {
+      observer?.disconnect()
+      observer = null
+    })
+
+    return () =>
+      h(
+        "div",
+        { ref: containerRef, class: "lazy-image-container" },
+        shouldLoad.value
+          ? h(resolveComponent("el-image"), {
+              src: props.src,
+              fit: "cover",
+              class: "msg-media-elimage",
+              previewSrcList: props.previewSrcList,
+              initialIndex: props.initialIndex,
+              previewTeleported: true,
+              hideOnClickModal: true,
+            })
+          : h("div", { class: "lazy-image-placeholder" }),
+      )
+  },
+})
+
+/** 懒加载视频组件：进入可视区域后才加载 metadata */
+const LazyVideo = defineComponent({
+  props: {
+    src: String,
+    poster: String,
+    controls: { type: Boolean, default: true },
+    preloadLevel: { type: String, default: "none" },
+  },
+  emits: ["loadedmetadata", "error"],
+  setup(props, { emit }) {
+    const containerRef = ref(null)
+    const shouldLoad = ref(false)
+    let observer = null
+
+    onMounted(() => {
+      const el = containerRef.value
+      if (!el) return
+      observer = new IntersectionObserver(
+        (entries) => {
+          if (entries[0].isIntersecting) {
+            shouldLoad.value = true
+            observer?.disconnect()
+            observer = null
+          }
+        },
+        { rootMargin: "200px" },
+      )
+      observer.observe(el)
+    })
+
+    onUnmounted(() => {
+      observer?.disconnect()
+      observer = null
+    })
+
+    return () =>
+      h(
+        "div",
+        { ref: containerRef, class: "lazy-video-container" },
+        shouldLoad.value
+          ? h("video", {
+              src: props.src,
+              poster: props.poster || undefined,
+              controls: props.controls,
+              playsinline: true,
+              muted: false,
+              preload: props.preloadLevel,
+              class: "msg-vid-el",
+              onLoadedmetadata: (e) => emit("loadedmetadata", e),
+              onError: (e) => emit("error", e),
+            })
+          : h("div", { class: "lazy-video-placeholder" }, [
+              h("span", { class: "lazy-video-placeholder__icon" }, "▶"),
+            ]),
+      )
+  },
+})
+
+import { resolveComponent } from "vue"
 
 const VC_WIDE_STORAGE_KEY = "wan-ai-video-chat-wide"
 /** 对话页所选视频模型，刷新后恢复（须仍在当前启用列表中） */
@@ -591,36 +741,26 @@ watch(videoDurationSec, (v) => {
 })
 
 /**
- * 解析为 UTC 时刻：后端 ISO（Z）或 SQLite 旧串（无时区空格格式）均按 UTC 理解，
- * 再由 formatSessionTime 转到 Asia/Shanghai 展示。
+ * 解析时间：后端已返回本地时间（通过 SQLite datetime(..., 'localtime')），
+ * 直接按本地时间解析，不做 UTC 转换。
  */
 function parseMessageInstant(d) {
   if (d == null || d === "") return null
   const s = String(d).trim()
   if (!s) return null
-  if (/^\d{4}-\d{2}-\d{2}T/.test(s) || /[zZ]$/.test(s) || /[+-]\d{2}:?\d{2}$/.test(s)) {
-    const t = dayjs.utc(s)
-    return t.isValid() ? t : null
-  }
-  const norm = s.replace("T", " ").slice(0, 19)
-  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(norm)) {
-    const t = dayjs.utc(norm.replace(" ", "T"))
-    return t.isValid() ? t : null
-  }
   const t = dayjs(s)
   return t.isValid() ? t : null
 }
 
-/** 会话列表、消息头等：国内（上海），时间精确到秒 */
+/** 会话列表、消息头等：时间精确到秒 */
 function formatSessionTime(d) {
   const t = parseMessageInstant(d)
   if (!t || !t.isValid()) return d == null || d === "" ? "" : String(d)
-  const cn = t.tz(TZ_CN)
-  const now = dayjs().tz(TZ_CN)
-  if (cn.isSame(now, "day")) return `今天 ${cn.format("HH:mm:ss")}`
-  if (cn.isSame(now.subtract(1, "day"), "day")) return `昨天 ${cn.format("HH:mm:ss")}`
-  if (cn.isSame(now, "year")) return cn.format("M月D日 HH:mm:ss")
-  return cn.format("YYYY-MM-DD HH:mm:ss")
+  const now = dayjs()
+  if (t.isSame(now, "day")) return `今天 ${t.format("HH:mm:ss")}`
+  if (t.isSame(now.subtract(1, "day"), "day")) return `昨天 ${t.format("HH:mm:ss")}`
+  if (t.isSame(now, "year")) return t.format("M月D日 HH:mm:ss")
+  return t.format("YYYY-MM-DD HH:mm:ss")
 }
 
 function messageHasMedia(m) {
@@ -683,10 +823,13 @@ let loadMessagesSeq = 0
 const models = ref([])
 const selectedModelId = ref(null)
 const inputText = ref("")
+const composerInputRef = ref(null)
 const pendingImages = ref([])
 const pendingVideos = ref([])
 /** 与 pendingVideos 下标对齐：本地/已探测到的元数据；reEdit 导入未探测时为 null */
 const pendingVideosMeta = ref(/** @type {Array<{ size: number, duration: number, width: number, height: number } | null>} */ ([]))
+/** 与 pendingVideos 下标对齐：视频缩略图（第一帧截图） */
+const pendingVideoThumbs = ref(/** @type {Array<string | null>} */ ([]))
 const uploadCount = ref(0)
 const sending = ref(false)
 const msgScrollRef = ref(null)
@@ -935,6 +1078,165 @@ function messageRoundKey(round) {
   return round.map((x) => x.id).join("-")
 }
 
+const currentRoundIndex = ref(0)
+const displayRoundIndex = ref(1)
+
+const VISIBLE_ROUND_BUFFER = 3
+const visibleRoundRange = ref({ start: 0, end: 10 })
+const roundHeightsCache = shallowRef(new Map())
+
+function isRoundVisible(index) {
+  const total = messageRounds.value.length
+  if (total <= 8) return true
+  const { start, end } = visibleRoundRange.value
+  return index >= start && index <= end
+}
+
+function getRoundPlaceholderHeight(index) {
+  const cached = roundHeightsCache.value.get(index)
+  return cached || 280
+}
+
+function updateVisibleRoundRange() {
+  const scrollWrap = msgScrollRef.value?.wrapRef
+  if (!scrollWrap) return
+  const total = messageRounds.value.length
+  if (total <= 8) {
+    visibleRoundRange.value = { start: 0, end: total - 1 }
+    return
+  }
+  const roundEls = scrollWrap.querySelectorAll(".msg-round")
+  if (!roundEls.length) return
+  const wrapRect = scrollWrap.getBoundingClientRect()
+  const viewTop = wrapRect.top
+  const viewBottom = wrapRect.bottom
+  let firstVisible = -1
+  let lastVisible = -1
+  for (let i = 0; i < roundEls.length; i++) {
+    const rect = roundEls[i].getBoundingClientRect()
+    const inView = rect.bottom > viewTop && rect.top < viewBottom
+    if (inView) {
+      if (firstVisible === -1) firstVisible = i
+      lastVisible = i
+    }
+    if (rect.height > 50) {
+      const newCache = new Map(roundHeightsCache.value)
+      newCache.set(i, rect.height)
+      roundHeightsCache.value = newCache
+    }
+  }
+  if (firstVisible === -1) {
+    visibleRoundRange.value = { start: 0, end: Math.min(VISIBLE_ROUND_BUFFER * 2, total - 1) }
+    return
+  }
+  const start = Math.max(0, firstVisible - VISIBLE_ROUND_BUFFER)
+  const end = Math.min(total - 1, lastVisible + VISIBLE_ROUND_BUFFER)
+  visibleRoundRange.value = { start, end }
+}
+
+const canGoPrevRound = computed(() => currentRoundIndex.value > 0)
+const canGoNextRound = computed(() => currentRoundIndex.value < messageRounds.value.length - 1)
+
+function scrollToRound(index) {
+  const rounds = messageRounds.value
+  if (index < 0 || index >= rounds.length) return
+  currentRoundIndex.value = index
+  displayRoundIndex.value = index + 1
+  const total = rounds.length
+  const start = Math.max(0, index - VISIBLE_ROUND_BUFFER)
+  const end = Math.min(total - 1, index + VISIBLE_ROUND_BUFFER)
+  visibleRoundRange.value = { start, end }
+  const round = rounds[index]
+  if (!round?.length) return
+  nextTick(() => {
+    nextTick(() => {
+      const scrollWrap = msgScrollRef.value?.wrapRef
+      if (!scrollWrap) return
+      const roundEl = scrollWrap.querySelector(`.msg-round[data-round-idx="${index}"]`)
+      if (roundEl) {
+        roundEl.scrollIntoView({ behavior: "smooth", block: "start" })
+      }
+    })
+  })
+}
+
+function goPrevRound() {
+  if (canGoPrevRound.value) {
+    scrollToRound(currentRoundIndex.value - 1)
+  }
+}
+
+function goNextRound() {
+  if (canGoNextRound.value) {
+    scrollToRound(currentRoundIndex.value + 1)
+  }
+}
+
+let displayUpdateTimer = null
+function updateCurrentRoundFromScroll() {
+  const scrollWrap = msgScrollRef.value?.wrapRef
+  if (!scrollWrap) return
+  const rounds = messageRounds.value
+  if (!rounds.length) {
+    currentRoundIndex.value = 0
+    displayRoundIndex.value = 1
+    return
+  }
+  const roundEls = scrollWrap.querySelectorAll(".msg-round")
+  if (!roundEls.length) return
+  const wrapRect = scrollWrap.getBoundingClientRect()
+  const threshold = wrapRect.top + wrapRect.height * 0.3
+  let foundIndex = 0
+  for (let i = 0; i < roundEls.length; i++) {
+    const rect = roundEls[i].getBoundingClientRect()
+    if (rect.top <= threshold) {
+      foundIndex = i
+    } else {
+      break
+    }
+  }
+  currentRoundIndex.value = foundIndex
+  if (displayUpdateTimer) {
+    window.clearTimeout(displayUpdateTimer)
+  }
+  displayUpdateTimer = window.setTimeout(() => {
+    displayUpdateTimer = null
+    displayRoundIndex.value = currentRoundIndex.value + 1
+  }, 150)
+}
+
+watch(messages, () => {
+  nextTick(() => {
+    const len = messageRounds.value.length
+    if (currentRoundIndex.value >= len) {
+      currentRoundIndex.value = Math.max(0, len - 1)
+    }
+    displayRoundIndex.value = currentRoundIndex.value + 1
+    if (len <= 8) {
+      visibleRoundRange.value = { start: 0, end: len - 1 }
+    } else {
+      updateVisibleRoundRange()
+    }
+  })
+})
+
+let scrollThrottleTimer = null
+let visibleRangeUpdateTimer = null
+function onMsgScroll() {
+  if (!scrollThrottleTimer) {
+    scrollThrottleTimer = window.setTimeout(() => {
+      scrollThrottleTimer = null
+      updateCurrentRoundFromScroll()
+    }, 120)
+  }
+  if (!visibleRangeUpdateTimer) {
+    visibleRangeUpdateTimer = window.setTimeout(() => {
+      visibleRangeUpdateTimer = null
+      updateVisibleRoundRange()
+    }, 80)
+  }
+}
+
 /** 生成中：禁止删除（前端隐藏删除入口，接口侧仍做校验） */
 function deleteMessageDisabled(m) {
   const list = messages.value
@@ -1048,6 +1350,13 @@ function reEditMessage(m) {
   pendingImages.value = [...(m.attachments?.images || [])]
   pendingVideos.value = [...(m.attachments?.videos || [])]
   pendingVideosMeta.value = pendingVideos.value.map(() => null)
+  // 为导入的视频生成缩略图
+  pendingVideoThumbs.value = pendingVideos.value.map(() => null)
+  pendingVideos.value.forEach((url, i) => {
+    captureVideoThumbnail(url).then((thumb) => {
+      pendingVideoThumbs.value[i] = thumb
+    }).catch(() => {})
+  })
   ElMessage.success("已导入到输入框，可修改后发送")
 }
 
@@ -1344,6 +1653,47 @@ function probeRemoteVideoUrl(url) {
   })
 }
 
+/**
+ * 截取视频第一帧作为缩略图
+ * @param {string} videoUrl
+ * @returns {Promise<string>} base64 或 blob URL
+ */
+function captureVideoThumbnail(videoUrl) {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement("video")
+    video.crossOrigin = "anonymous"
+    video.preload = "metadata"
+    video.muted = true
+    video.playsInline = true
+    let done = false
+    const finish = (fn) => {
+      if (done) return
+      done = true
+      video.src = ""
+      fn()
+    }
+    video.onerror = () => finish(() => reject(new Error("视频加载失败")))
+    video.onloadeddata = () => {
+      video.currentTime = 0.1
+    }
+    video.onseeked = () => {
+      try {
+        const canvas = document.createElement("canvas")
+        canvas.width = video.videoWidth || 160
+        canvas.height = video.videoHeight || 90
+        const ctx = canvas.getContext("2d")
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.7)
+        finish(() => resolve(dataUrl))
+      } catch (e) {
+        finish(() => reject(e))
+      }
+    }
+    video.src = videoUrl
+    video.load()
+  })
+}
+
 /** @returns {Promise<number | null>} Content-Length 字节数，失败为 null */
 async function fetchUrlContentLength(url) {
   const u = String(url || "").trim()
@@ -1556,6 +1906,9 @@ async function addUploadedVideoFile(file) {
       width: dim.width,
       height: dim.height,
     })
+    // 生成视频缩略图
+    const thumbUrl = await captureVideoThumbnail(url).catch(() => null)
+    pendingVideoThumbs.value.push(thumbUrl)
   } catch (e) {
     ElMessage.error(e?.message || "视频上传失败")
   } finally {
@@ -1618,6 +1971,116 @@ function removePendingImage(i) {
 function removePendingVideo(i) {
   pendingVideos.value.splice(i, 1)
   pendingVideosMeta.value.splice(i, 1)
+  pendingVideoThumbs.value.splice(i, 1)
+}
+
+const mentionDropdownVisible = ref(false)
+const mentionActiveIndex = ref(0)
+const mentionTriggerPos = ref(0)
+const mentionDropdownStyle = ref({})
+
+const mentionPlaceholder = computed(() => {
+  if (pendingImages.value.length || pendingVideos.value.length) {
+    return "描述要生成的视频，输入 @ 可引用上传的素材…"
+  }
+  return "描述要生成的视频…"
+})
+
+const mentionOptions = computed(() => {
+  const opts = []
+  for (let i = 0; i < pendingImages.value.length; i++) {
+    opts.push({
+      type: "image",
+      index: i + 1,
+      label: `图片${i + 1}`,
+      value: `@图片${i + 1}`,
+      thumb: pendingImages.value[i],
+    })
+  }
+  for (let i = 0; i < pendingVideos.value.length; i++) {
+    opts.push({
+      type: "video",
+      index: i + 1,
+      label: `视频${i + 1}`,
+      value: `@视频${i + 1}`,
+      thumb: pendingVideoThumbs.value[i] || null,
+    })
+  }
+  return opts
+})
+
+function getTextareaEl() {
+  return composerInputRef.value?.$el?.querySelector("textarea")
+}
+
+function onInputChange() {
+  const textarea = getTextareaEl()
+  if (!textarea) return
+  const text = inputText.value
+  const cursorPos = textarea.selectionStart
+  const textBeforeCursor = text.slice(0, cursorPos)
+  const atMatch = textBeforeCursor.match(/@[^@\s]*$/)
+  if (atMatch && (pendingImages.value.length || pendingVideos.value.length)) {
+    mentionTriggerPos.value = cursorPos - atMatch[0].length
+    mentionActiveIndex.value = 0
+    mentionDropdownVisible.value = true
+    updateMentionDropdownPosition(textarea)
+  } else {
+    mentionDropdownVisible.value = false
+  }
+}
+
+function updateMentionDropdownPosition(textarea) {
+  if (!textarea) return
+  const rect = textarea.getBoundingClientRect()
+  mentionDropdownStyle.value = {
+    position: "absolute",
+    left: "10px",
+    bottom: "100%",
+    marginBottom: "4px",
+  }
+}
+
+function onInputKeydown(e) {
+  if (!mentionDropdownVisible.value || !mentionOptions.value.length) return
+  if (e.key === "ArrowDown") {
+    e.preventDefault()
+    mentionActiveIndex.value = (mentionActiveIndex.value + 1) % mentionOptions.value.length
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault()
+    mentionActiveIndex.value =
+      (mentionActiveIndex.value - 1 + mentionOptions.value.length) % mentionOptions.value.length
+  } else if (e.key === "Enter" && !e.ctrlKey) {
+    e.preventDefault()
+    const opt = mentionOptions.value[mentionActiveIndex.value]
+    if (opt) selectMentionOption(opt)
+  } else if (e.key === "Escape") {
+    e.preventDefault()
+    mentionDropdownVisible.value = false
+  }
+}
+
+function onInputBlur() {
+  setTimeout(() => {
+    mentionDropdownVisible.value = false
+  }, 150)
+}
+
+function selectMentionOption(opt) {
+  const textarea = getTextareaEl()
+  if (!textarea) return
+  const text = inputText.value
+  const cursorPos = textarea.selectionStart
+  const before = text.slice(0, mentionTriggerPos.value)
+  const after = text.slice(cursorPos)
+  const insert = opt.value + " "
+  inputText.value = before + insert + after
+  mentionDropdownVisible.value = false
+  nextTick(() => {
+    const newPos = mentionTriggerPos.value + insert.length
+    textarea.focus()
+    textarea.setSelectionRange(newPos, newPos)
+  })
 }
 
 function readStoredModelId() {
@@ -1742,8 +2205,17 @@ async function loadMessages(opts = {}) {
 }
 
 function scrollBottom() {
-  const el = msgScrollRef.value?.wrapRef
-  if (el) el.scrollTop = el.scrollHeight
+  const total = messageRounds.value.length
+  if (total > 8) {
+    const start = Math.max(0, total - VISIBLE_ROUND_BUFFER * 2 - 1)
+    visibleRoundRange.value = { start, end: total - 1 }
+    currentRoundIndex.value = total - 1
+    displayRoundIndex.value = total
+  }
+  nextTick(() => {
+    const el = msgScrollRef.value?.wrapRef
+    if (el) el.scrollTop = el.scrollHeight
+  })
 }
 
 function onPickImages({ file }) {
@@ -1825,6 +2297,7 @@ async function send() {
   pendingImages.value = []
   pendingVideos.value = []
   pendingVideosMeta.value = []
+  pendingVideoThumbs.value = []
 
   const { optimisticUserId, optimisticAssistId } = pushOptimisticSendRound(
     capturedText,
@@ -1938,6 +2411,7 @@ watch(referenceVideoAllowed, (allowed) => {
   if (!allowed && pendingVideos.value.length) {
     pendingVideos.value = []
     pendingVideosMeta.value = []
+    pendingVideoThumbs.value = []
     ElMessage.info("已切换到不支持参考视频的模型，待发送视频已清除")
   }
 })
@@ -2055,6 +2529,11 @@ onMounted(async () => {
   await loadModels()
   await loadSessions()
   await loadManagedPrompts()
+  nextTick(() => scrollBottom())
+})
+
+onActivated(() => {
+  nextTick(() => scrollBottom())
 })
 
 onUnmounted(() => {
@@ -2156,7 +2635,6 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
   flex-wrap: wrap;
   min-width: 0;
 }
@@ -2246,6 +2724,85 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   pointer-events: none;
+}
+
+.round-nav {
+  position: absolute;
+  right: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 6px;
+  border-radius: 24px;
+  background: color-mix(in srgb, var(--el-bg-color) 92%, transparent);
+  backdrop-filter: blur(12px);
+  box-shadow:
+    0 4px 20px rgba(15, 23, 42, 0.08),
+    0 1px 4px rgba(15, 23, 42, 0.04);
+  border: 1px solid rgba(15, 23, 42, 0.06);
+}
+
+.round-nav__btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--el-text-color-secondary);
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    transform 0.12s ease;
+
+  &:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--el-color-primary) 12%, var(--el-fill-color-light));
+    color: var(--el-color-primary);
+  }
+
+  &:active:not(:disabled) {
+    transform: scale(0.92);
+  }
+
+  &:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+}
+
+.round-nav__indicator {
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--el-text-color-secondary);
+  white-space: nowrap;
+  line-height: 1.2;
+  padding: 2px 0;
+  user-select: none;
+}
+
+@media (max-width: 768px) {
+  .round-nav {
+    right: 10px;
+    padding: 6px 4px;
+  }
+
+  .round-nav__btn {
+    width: 30px;
+    height: 30px;
+  }
+
+  .round-nav__indicator {
+    font-size: 10px;
+  }
 }
 
 .msg-scroll {
@@ -2578,6 +3135,47 @@ onUnmounted(() => {
   background: var(--el-fill-color-lighter);
   border: 1px dashed var(--el-border-color);
   box-shadow: none;
+}
+
+.lazy-image-container,
+.lazy-video-container {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+}
+
+.lazy-image-placeholder,
+.lazy-video-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, var(--el-fill-color-darker) 0%, var(--el-fill-color-dark) 100%);
+  color: var(--el-text-color-placeholder);
+}
+
+.lazy-video-placeholder__icon {
+  font-size: 24px;
+  opacity: 0.5;
+}
+
+.msg-round-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: var(--el-fill-color-lighter);
+  border: 1px dashed var(--el-border-color-lighter);
+  margin-bottom: 28px;
+}
+
+.msg-round-placeholder__text {
+  font-size: 13px;
+  color: var(--el-text-color-placeholder);
+  user-select: none;
 }
 
 .msg-media-fail-banner {
@@ -3121,7 +3719,7 @@ onUnmounted(() => {
   display: flex;
   flex-wrap: nowrap;
   gap: 10px;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
   overflow-x: auto;
   padding-bottom: 4px;
   scrollbar-width: thin;
@@ -3254,6 +3852,10 @@ onUnmounted(() => {
   }
 }
 
+.composer-input-wrap {
+  position: relative;
+}
+
 :deep(.composer-input.el-textarea) {
   .el-textarea__inner {
     border: none;
@@ -3267,6 +3869,82 @@ onUnmounted(() => {
       box-shadow: none;
     }
   }
+}
+
+.mention-dropdown {
+  z-index: 100;
+  min-width: 140px;
+  max-width: 280px;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 6px 0;
+  border-radius: 10px;
+  background: var(--el-bg-color);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow:
+    0 8px 24px rgba(15, 23, 42, 0.12),
+    0 2px 6px rgba(15, 23, 42, 0.06);
+}
+
+.mention-dropdown__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+
+  &:hover,
+  &.mention-dropdown__item--active {
+    background: var(--el-fill-color-light);
+  }
+}
+
+.mention-dropdown__thumb-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.mention-dropdown__thumb {
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: var(--el-fill-color-darker);
+  display: block;
+}
+
+.mention-dropdown__thumb--placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--el-text-color-secondary);
+  font-size: 18px;
+}
+
+.mention-dropdown__type-badge {
+  position: absolute;
+  bottom: -2px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--el-color-primary);
+  color: #fff;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.mention-dropdown__type-badge--video {
+  background: var(--el-color-warning);
+}
+
+.mention-dropdown__label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--el-text-color-primary);
 }
 
 .toolbar-gen-opts {

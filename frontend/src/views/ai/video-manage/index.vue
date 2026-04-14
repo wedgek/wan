@@ -69,13 +69,7 @@
           <template #default="{ row }">
             <div v-if="row.resultUrl" class="result-cell">
               <div class="result-wrap ratio-9-16" @click="openResult(row.resultUrl)">
-                <video
-                  :src="row.resultUrl"
-                  class="result-mini"
-                  muted
-                  preload="metadata"
-                  playsinline
-                />
+                <LazyVideo :src="row.resultUrl" class="result-mini" />
                 <div class="result-play-mask">
                   <el-icon class="result-play-icon" :size="26"><component :is="$icons.VideoPlay" /></el-icon>
                 </div>
@@ -105,9 +99,9 @@
         <el-table-column label="参考图 / 视频" min-width="300" align="center" class-name="col-ref-media">
           <template #default="{ row }">
             <div class="ref-col-inner">
-              <div v-if="refMediaItems(row).length" class="ref-grid">
+              <div v-if="getRowMedia(row).items.length" class="ref-grid">
                 <div
-                  v-for="(item, idx) in refMediaItems(row)"
+                  v-for="(item, idx) in getRowMedia(row).items"
                   :key="item.type + idx + item.url.slice(-24)"
                   class="ref-tile"
                 >
@@ -125,14 +119,15 @@
                         :src="item.url"
                         fit="cover"
                         class="ref-thumb-img"
+                        lazy
                         preview-teleported
-                        :preview-src-list="rowImageList(row)"
-                        :initial-index="imageIndexInRow(row, item.url)"
+                        :preview-src-list="getRowMedia(row).images"
+                        :initial-index="item.imageIndex ?? 0"
                       />
                     </template>
                     <template v-else>
                       <div class="ref-vid-wrap" @click="openRefVideo(item.url)">
-                        <video :src="item.url" class="ref-vid-mini" muted preload="metadata" playsinline />
+                        <LazyVideo :src="item.url" class="ref-vid-mini" />
                         <div class="ref-play-mask">
                           <el-icon class="ref-play-icon" :size="26"><component :is="$icons.VideoPlay" /></el-icon>
                         </div>
@@ -148,7 +143,7 @@
         <el-table-column prop="modelName" label="模型" min-width="120" align="center" show-overflow-tooltip />
         <el-table-column label="参数" width="100" align="center">
           <template #default="{ row }">
-            <span v-if="row.aspectRatio || row.durationSec != null" class="muted">
+            <span v-if="row.aspectRatio || row.durationSec != null">
               {{ row.aspectRatio || "—" }}<template v-if="row.durationSec != null"> · {{ row.durationSec }}s</template>
             </span>
             <span v-else class="muted">—</span>
@@ -196,9 +191,12 @@
       :title="resultDialogTitle"
       width="min(560px, 94vw)"
       destroy-on-close
+      align-center
       @closed="onResultDialogClose"
     >
-      <video v-if="resultPlayUrl" :src="resultPlayUrl" controls playsinline class="result-video" />
+      <div class="result-video-wrap">
+        <video v-if="resultPlayUrl" :src="resultPlayUrl" controls playsinline class="result-video" />
+      </div>
     </el-dialog>
   </div>
 </template>
@@ -208,6 +206,46 @@ import { useTable } from "@/hooks/useTable"
 import CzPagination from "@/components/cz-pagination/index.vue"
 import request from "@/request"
 import { debounce } from "@/utils"
+
+/** 懒加载视频组件：进入可视区域后才加载 metadata */
+const LazyVideo = defineComponent({
+  props: { src: String },
+  setup(props) {
+    const videoRef = ref(null)
+    const shouldLoad = ref(false)
+    let observer = null
+
+    onMounted(() => {
+      const el = videoRef.value
+      if (!el) return
+      observer = new IntersectionObserver(
+        (entries) => {
+          if (entries[0].isIntersecting) {
+            shouldLoad.value = true
+            observer?.disconnect()
+            observer = null
+          }
+        },
+        { rootMargin: "200px" },
+      )
+      observer.observe(el)
+    })
+
+    onUnmounted(() => {
+      observer?.disconnect()
+      observer = null
+    })
+
+    return () =>
+      h("video", {
+        ref: videoRef,
+        src: shouldLoad.value ? props.src : undefined,
+        muted: true,
+        preload: "metadata",
+        playsinline: true,
+      })
+  },
+})
 
 onMounted(() => {
   getTableData()
@@ -248,7 +286,7 @@ const defaultTableParams = () => ({
   keyword: "",
   createTimeRange: null,
   pageNo: 1,
-  pageSize: 20,
+  pageSize: 10,
 })
 
 const { tableParams, tableData, tableTotal, tableLoading, getTableData, tableSearch, resetTable } = useTable(
@@ -275,30 +313,31 @@ function onReset() {
   loadUserOptions("")
 }
 
-function rowImageList(row) {
-  const arr = Array.isArray(row.sourceImageUrls) ? row.sourceImageUrls : []
-  const cleaned = arr.filter((u) => u && String(u).trim().startsWith("http")).map((u) => String(u).trim())
-  if (cleaned.length) return [...new Set(cleaned)]
-  const one = row.sourceImageUrl && String(row.sourceImageUrl).trim()
-  return one && one.startsWith("http") ? [one] : []
-}
+/** 缓存每行的媒体数据，避免重复计算 */
+const rowMediaCache = new WeakMap()
 
-function rowVideoList(row) {
-  const arr = Array.isArray(row.sourceVideoUrls) ? row.sourceVideoUrls : []
-  return [...new Set(arr.filter((u) => u && String(u).trim().startsWith("http")).map((u) => String(u).trim()))]
-}
+function getRowMedia(row) {
+  if (rowMediaCache.has(row)) return rowMediaCache.get(row)
 
-/** 先图后视频，供网格展示 */
-function refMediaItems(row) {
-  const imgs = rowImageList(row).map((url) => ({ type: "image", url }))
-  const vids = rowVideoList(row).map((url) => ({ type: "video", url }))
-  return [...imgs, ...vids]
-}
+  const imgArr = Array.isArray(row.sourceImageUrls) ? row.sourceImageUrls : []
+  const cleanedImgs = imgArr.filter((u) => u && String(u).trim().startsWith("http")).map((u) => String(u).trim())
+  const images = cleanedImgs.length
+    ? [...new Set(cleanedImgs)]
+    : row.sourceImageUrl && String(row.sourceImageUrl).trim().startsWith("http")
+      ? [String(row.sourceImageUrl).trim()]
+      : []
 
-function imageIndexInRow(row, url) {
-  const list = rowImageList(row)
-  const i = list.indexOf(url)
-  return i >= 0 ? i : 0
+  const vidArr = Array.isArray(row.sourceVideoUrls) ? row.sourceVideoUrls : []
+  const videos = [...new Set(vidArr.filter((u) => u && String(u).trim().startsWith("http")).map((u) => String(u).trim()))]
+
+  const items = [
+    ...images.map((url, idx) => ({ type: "image", url, imageIndex: idx })),
+    ...videos.map((url) => ({ type: "video", url })),
+  ]
+
+  const result = { images, videos, items }
+  rowMediaCache.set(row, result)
+  return result
 }
 
 const expandedPromptById = ref(/** @type {Record<number, boolean>} */ ({}))
@@ -411,6 +450,7 @@ function statusLabel(raw) {
   align-items: center;
 }
 .prompt-cell {
+  position: relative;
   padding: 4px 0;
 }
 .prompt-text {
@@ -432,9 +472,10 @@ function statusLabel(raw) {
 .prompt-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  margin-top: 6px;
-  font-size: 13px;
+  gap: 2px;
+  float: right;
+  margin-top: 4px;
+  font-size: 12px;
   color: var(--el-color-primary);
   cursor: pointer;
   user-select: none;
@@ -574,9 +615,22 @@ function statusLabel(raw) {
   font-size: 12px;
   color: var(--el-color-danger);
 }
+.result-video-wrap {
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  max-height: 70vh;
+  background: #000;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .result-video {
   width: 100%;
-  max-height: 70vh;
+  height: 100%;
+  object-fit: contain;
   border-radius: 8px;
   background: #000;
 }

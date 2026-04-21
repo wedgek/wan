@@ -792,8 +792,7 @@ watch(videoResolution, (v) => {
 })
 
 /**
- * 解析时间：后端已返回本地时间（通过 SQLite datetime(..., 'localtime')），
- * 直接按本地时间解析，不做 UTC 转换。
+ * 解析时间：后端返回 ISO UTC 字符串（带 Z），dayjs 自动按浏览器本地时区显示。
  */
 function parseMessageInstant(d) {
   if (d == null || d === "") return null

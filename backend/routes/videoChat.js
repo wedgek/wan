@@ -196,7 +196,7 @@ router.get('/sessions/page', async (req, res) => {
     const rows = d
       .prepare(
         `SELECT s.id, s.title,
-                datetime(s.created_at, 'localtime') as create_time, datetime(s.updated_at, 'localtime') as update_time,
+                s.created_at as create_time, s.updated_at as update_time,
                 m.text as first_user_text
          FROM video_chat_sessions s
          LEFT JOIN (
@@ -227,7 +227,7 @@ router.post('/sessions', (req, res) => {
     const id = Number(info.lastInsertRowid)
     const row = database()
       .prepare(
-        `SELECT id, title, datetime(created_at, 'localtime') as create_time, datetime(updated_at, 'localtime') as update_time
+        `SELECT id, title, created_at as create_time, updated_at as update_time
          FROM video_chat_sessions WHERE id = ? AND user_id = ?`
       )
       .get(id, req.userId)
@@ -277,7 +277,7 @@ router.put('/sessions/rename', (req, res) => {
     if (r.changes === 0) return res.json(fail(404, '会话不存在'))
     const row = database()
       .prepare(
-        `SELECT id, title, datetime(created_at, 'localtime') as create_time, datetime(updated_at, 'localtime') as update_time
+        `SELECT id, title, created_at as create_time, updated_at as update_time
          FROM video_chat_sessions WHERE id = ? AND user_id = ?`
       )
       .get(id, req.userId)
@@ -309,8 +309,8 @@ router.get('/messages/page', async (req, res) => {
     const rows = d
       .prepare(
         `SELECT m.id, m.session_id, m.user_id, m.role, m.text, m.attachments_json, m.video_job_id, m.status, m.result_url, m.error_message,
-                datetime(m.created_at, 'localtime') as create_time,
-                datetime(COALESCE(NULLIF(j.updated_at, ''), j.created_at), 'localtime') as job_update_time,
+                m.created_at as create_time,
+                COALESCE(NULLIF(j.updated_at, ''), j.created_at) as job_update_time,
                 TRIM(COALESCE(NULLIF(TRIM(m.video_model_name), ''), vm.name, '')) as video_model_name
          FROM video_chat_messages m
          LEFT JOIN video_jobs j ON j.id = m.video_job_id

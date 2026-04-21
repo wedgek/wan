@@ -339,6 +339,17 @@
                 >
                   <el-option v-for="sec in videoDurationChoices" :key="sec" :label="`${sec}s`" :value="sec" />
                 </el-select>
+                <el-select
+                  v-model="videoResolution"
+                  class="toolbar-gen-select toolbar-gen-select--res"
+                  size="small"
+                  placement="top"
+                  teleported
+                  popper-class="vc-toolbar-gen-popper"
+                >
+                  <el-option label="720p" value="720p" />
+                  <el-option label="1080p" value="1080p" />
+                </el-select>
               </div>
             </div>
 
@@ -698,13 +709,17 @@ const VC_WIDE_STORAGE_KEY = "wan-ai-video-chat-wide"
 const VC_MODEL_ID_STORAGE_KEY = "wan-ai-video-chat-model-id"
 const VC_ASPECT_STORAGE_KEY = "wan-ai-video-chat-aspect"
 const VC_DURATION_STORAGE_KEY = "wan-ai-video-chat-duration"
+const VC_RESOLUTION_STORAGE_KEY = "wan-ai-video-chat-resolution"
 
 /** 与后端 videoChat normalize 及方舟 Seedance 文档常见区间对齐 */
 const VIDEO_GEN_DURATION_MIN = 4
 const VIDEO_GEN_DURATION_MAX = 15
 
+const VALID_RESOLUTIONS = ["720p", "1080p"]
+
 const videoAspectRatio = ref("9:16")
 const videoDurationSec = ref(5)
+const videoResolution = ref("1080p")
 const videoDurationChoices = computed(() => {
   const list = []
   for (let s = VIDEO_GEN_DURATION_MIN; s <= VIDEO_GEN_DURATION_MAX; s++) list.push(s)
@@ -742,6 +757,16 @@ function readStoredDurationSec() {
   return null
 }
 
+function readStoredResolution() {
+  try {
+    const r = sessionStorage.getItem(VC_RESOLUTION_STORAGE_KEY)
+    if (r && VALID_RESOLUTIONS.includes(r)) return r
+  } catch (_) {
+    /* ignore */
+  }
+  return null
+}
+
 watch(videoAspectRatio, (v) => {
   try {
     sessionStorage.setItem(VC_ASPECT_STORAGE_KEY, v)
@@ -753,6 +778,14 @@ watch(videoAspectRatio, (v) => {
 watch(videoDurationSec, (v) => {
   try {
     sessionStorage.setItem(VC_DURATION_STORAGE_KEY, String(v))
+  } catch (_) {
+    /* ignore */
+  }
+})
+
+watch(videoResolution, (v) => {
+  try {
+    sessionStorage.setItem(VC_RESOLUTION_STORAGE_KEY, v)
   } catch (_) {
     /* ignore */
   }
@@ -807,9 +840,9 @@ const REF_VIDEO_DURATION_SUM_MIN = 2
 const REF_VIDEO_DURATION_SUM_MAX = 15
 /** 参考视频体积：单文件与总和均须 < 此值（字节） */
 const REF_VIDEO_MAX_BYTES = 50 * 1024 * 1024
-/** 单路参考视频像素数（宽×高） */
+/** 单路参考视频像素数（宽×高）；上限兼容 1080p（1920×1080 = 2073600） */
 const REF_VIDEO_PIXELS_MIN = 409_600
-const REF_VIDEO_PIXELS_MAX = 927_408
+const REF_VIDEO_PIXELS_MAX = 2_073_600
 
 /** 输入框字数上限（与 Element 计数器一致） */
 const INPUT_MAX_LENGTH = 20000
@@ -1271,6 +1304,7 @@ async function postChatSendPayload(payload) {
       ...payload,
       aspectRatio: videoAspectRatio.value,
       duration: videoDurationSec.value,
+      resolution: videoResolution.value,
     },
   })
 }
@@ -1593,7 +1627,7 @@ function validateReferenceVideoRules(items, { prefixError }) {
     const pixels = it.width * it.height
     if (pixels < REF_VIDEO_PIXELS_MIN || pixels > REF_VIDEO_PIXELS_MAX) {
       ElMessage.warning(
-        `${pre}第 ${i + 1} 个参考视频分辨率不合要求：总像素须在 ${REF_VIDEO_PIXELS_MIN.toLocaleString()}～${REF_VIDEO_PIXELS_MAX.toLocaleString()} 之间（约 480p～720p）`,
+        `${pre}第 ${i + 1} 个参考视频分辨率不合要求：总像素须在 ${REF_VIDEO_PIXELS_MIN.toLocaleString()}～${REF_VIDEO_PIXELS_MAX.toLocaleString()} 之间（约 480p～1080p）`,
       )
       return false
     }
@@ -1737,7 +1771,7 @@ async function addUploadedVideoFile(file) {
   const pixels = dim.width * dim.height
   if (pixels < REF_VIDEO_PIXELS_MIN || pixels > REF_VIDEO_PIXELS_MAX) {
     ElMessage.warning(
-      `参考视频分辨率不合要求：总像素须在 ${REF_VIDEO_PIXELS_MIN.toLocaleString()}～${REF_VIDEO_PIXELS_MAX.toLocaleString()} 之间（约 480p～720p）`,
+      `参考视频分辨率不合要求：总像素须在 ${REF_VIDEO_PIXELS_MIN.toLocaleString()}～${REF_VIDEO_PIXELS_MAX.toLocaleString()} 之间（约 480p～1080p）`,
     )
     return
   }
@@ -2410,6 +2444,8 @@ onMounted(async () => {
   if (ar) videoAspectRatio.value = ar
   const ds = readStoredDurationSec()
   if (ds != null) videoDurationSec.value = ds
+  const rs = readStoredResolution()
+  if (rs) videoResolution.value = rs
   document.addEventListener("fullscreenchange", onDocumentFullscreenChange)
   document.addEventListener("webkitfullscreenchange", onDocumentFullscreenChange)
   await loadModels()
@@ -3886,7 +3922,11 @@ onUnmounted(() => {
 }
 
 :deep(.toolbar-gen-select--dur.el-select .el-select__wrapper) {
-  min-width: 3.75rem;
+  min-width: 4rem;
+}
+
+:deep(.toolbar-gen-select--res.el-select .el-select__wrapper) {
+  min-width: 5.5rem;
 }
 
 .composer-foot {

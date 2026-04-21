@@ -15,6 +15,7 @@ const DEFAULT_SESSION_TITLES = new Set(['', '新对话'])
 const CHAT_VIDEO_DURATION_MIN = Math.max(2, Number(process.env.ARK_CHAT_DURATION_MIN || 4))
 const CHAT_VIDEO_DURATION_MAX = Math.min(60, Number(process.env.ARK_CHAT_DURATION_MAX || 15))
 const CHAT_ASPECT_RATIOS = new Set(['9:16', '16:9', '1:1'])
+const CHAT_RESOLUTIONS = new Set(['480p', '720p', '1080p'])
 
 /** 对话参考附件上限（图+视+音，与前端 Seedance 规则一致） */
 const CHAT_REF_ATTACHMENT_MAX = 12
@@ -44,6 +45,8 @@ function normalizeChatVideoOptions(body) {
       base.duration = Math.min(CHAT_VIDEO_DURATION_MAX, Math.max(CHAT_VIDEO_DURATION_MIN, n))
     }
   }
+  const res = String(body?.resolution ?? base.resolution ?? '').trim().toLowerCase()
+  if (CHAT_RESOLUTIONS.has(res)) base.resolution = res
   return base
 }
 

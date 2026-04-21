@@ -348,7 +348,7 @@
                   popper-class="vc-toolbar-gen-popper"
                 >
                   <el-option label="720p" value="720p" />
-                  <el-option label="1080p" value="1080p" />
+                  <el-option label="1080p" value="1080p" :disabled="!isAdmin" />
                 </el-select>
               </div>
             </div>
@@ -372,10 +372,13 @@
                         :src="u"
                         fit="cover"
                         class="pending-tile-elimg"
-                        :preview-src-list="[u]"
+                        :preview-src-list="uploadingBlobUrls.has(u) ? [] : [u]"
                         preview-teleported
                         hide-on-click-modal
                       />
+                      <div v-if="uploadingBlobUrls.has(u)" class="pending-tile__loading">
+                        <span class="pending-tile__spinner" />
+                      </div>
                     </div>
                   </template>
                 </draggable>
@@ -393,12 +396,12 @@
                       class="pending-tile pending-tile--vid"
                       role="button"
                       tabindex="0"
-                      title="点击播放预览"
-                      @click="openPendingVideoPreview(u)"
-                      @keydown.enter.prevent="openPendingVideoPreview(u)"
+                      :title="uploadingBlobUrls.has(u) ? '上传中…' : '点击播放预览'"
+                      @click="!uploadingBlobUrls.has(u) && openPendingVideoPreview(u)"
+                      @keydown.enter.prevent="!uploadingBlobUrls.has(u) && openPendingVideoPreview(u)"
                     >
                       <span class="pending-tile__badge pending-tile__badge--vid">视频{{ i + 1 }}</span>
-                      <span class="pending-tile__play" aria-hidden="true">
+                      <span v-if="!uploadingBlobUrls.has(u)" class="pending-tile__play" aria-hidden="true">
                         <el-icon :size="26"><component :is="$icons.VideoPlay" /></el-icon>
                       </span>
                       <button type="button" class="pending-tile__x" title="移除" @click.stop="removePendingVideo(i)">
@@ -415,6 +418,9 @@
                         @error="markVideoFailed(u)"
                       />
                       <div v-else class="pv pv--err">无法预览</div>
+                      <div v-if="uploadingBlobUrls.has(u)" class="pending-tile__loading">
+                        <span class="pending-tile__spinner" />
+                      </div>
                     </div>
                   </template>
                 </draggable>
@@ -588,6 +594,7 @@ import { ElMessage, ElMessageBox } from "element-plus"
 import dayjs from "dayjs"
 import draggable from "vuedraggable"
 import request from "@/request"
+import { useAuthStore } from "@/stores/auth"
 import { uploadImage, uploadVideo, getFileExt } from "@/request/oss"
 import logoMark from "@/assets/images/logo.svg"
 import ProductLibraryPickerDialog from "./ProductLibraryPickerDialog.vue"
@@ -719,7 +726,10 @@ const VALID_RESOLUTIONS = ["720p", "1080p"]
 
 const videoAspectRatio = ref("9:16")
 const videoDurationSec = ref(5)
-const videoResolution = ref("1080p")
+const videoResolution = ref("720p")
+
+const authStore = useAuthStore()
+const isAdmin = computed(() => authStore.roles?.includes(1))
 const videoDurationChoices = computed(() => {
   const list = []
   for (let s = VIDEO_GEN_DURATION_MIN; s <= VIDEO_GEN_DURATION_MAX; s++) list.push(s)
@@ -879,6 +889,8 @@ const pendingVideos = ref([])
 /** 与 pendingVideos 下标对齐：本地/已探测到的元数据；reEdit 导入未探测时为 null */
 const pendingVideosMeta = ref(/** @type {Array<{ size: number, duration: number, width: number, height: number } | null>} */ ([]))
 const uploadCount = ref(0)
+/** 正在上传中的 blob URL 集合，用于展示 loading 遮罩 */
+const uploadingBlobUrls = ref(new Set())
 const sending = ref(false)
 const msgScrollRef = ref(null)
 const sessionsDrawer = ref(false)
@@ -1718,13 +1730,21 @@ async function addUploadedImageFile(file) {
     return
   }
   const raw = rawUploadFile(file)
+  const blobUrl = URL.createObjectURL(raw)
+  pendingImages.value.push(blobUrl)
+  uploadingBlobUrls.value.add(blobUrl)
   uploadCount.value++
   try {
     const { url } = await uploadImage(raw)
-    pendingImages.value.push(url)
+    const idx = pendingImages.value.indexOf(blobUrl)
+    if (idx >= 0) pendingImages.value.splice(idx, 1, url)
   } catch (e) {
+    const idx = pendingImages.value.indexOf(blobUrl)
+    if (idx >= 0) pendingImages.value.splice(idx, 1)
     ElMessage.error(e?.message || "图片上传失败")
   } finally {
+    uploadingBlobUrls.value.delete(blobUrl)
+    URL.revokeObjectURL(blobUrl)
     uploadCount.value--
   }
 }
@@ -1788,19 +1808,25 @@ async function addUploadedVideoFile(file) {
     return
   }
 
+  const blobUrl = URL.createObjectURL(raw)
+  pendingVideos.value.push(blobUrl)
+  pendingVideosMeta.value.push({ size: raw.size, duration: dim.duration, width: dim.width, height: dim.height })
+  uploadingBlobUrls.value.add(blobUrl)
   uploadCount.value++
   try {
     const { url } = await uploadVideo(raw)
-    pendingVideos.value.push(url)
-    pendingVideosMeta.value.push({
-      size: raw.size,
-      duration: dim.duration,
-      width: dim.width,
-      height: dim.height,
-    })
+    const idx = pendingVideos.value.indexOf(blobUrl)
+    if (idx >= 0) pendingVideos.value.splice(idx, 1, url)
   } catch (e) {
+    const idx = pendingVideos.value.indexOf(blobUrl)
+    if (idx >= 0) {
+      pendingVideos.value.splice(idx, 1)
+      pendingVideosMeta.value.splice(idx, 1)
+    }
     ElMessage.error(e?.message || "视频上传失败")
   } finally {
+    uploadingBlobUrls.value.delete(blobUrl)
+    URL.revokeObjectURL(blobUrl)
     uploadCount.value--
   }
 }
@@ -2445,6 +2471,7 @@ onMounted(async () => {
   if (ds != null) videoDurationSec.value = ds
   const rs = readStoredResolution()
   if (rs) videoResolution.value = rs
+  if (!isAdmin.value && videoResolution.value === "1080p") videoResolution.value = "720p"
   document.addEventListener("fullscreenchange", onDocumentFullscreenChange)
   document.addEventListener("webkitfullscreenchange", onDocumentFullscreenChange)
   await loadModels()
@@ -3760,6 +3787,33 @@ onUnmounted(() => {
   text-align: center;
   padding: 4px;
   box-sizing: border-box;
+}
+
+.pending-tile__loading {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.55);
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.pending-tile__spinner {
+  width: 22px;
+  height: 22px;
+  border: 2.5px solid rgba(0, 0, 0, 0.1);
+  border-top-color: var(--el-color-primary);
+  border-radius: 50%;
+  animation: pending-spin 0.7s linear infinite;
+}
+
+@keyframes pending-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .pending-tile__x {

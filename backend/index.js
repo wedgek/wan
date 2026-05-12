@@ -61,13 +61,19 @@ function removeDevPortFile() {
 
 const server = http.createServer(app)
 
+/** 日志里展示本机可访问地址（绑定 0.0.0.0 / :: 时监听范围不变，仅便于终端点开） */
+function listeningUrlHostForLog() {
+  if (HOST === "0.0.0.0" || HOST === "::") return "127.0.0.1"
+  return HOST
+}
+
 server.on("listening", () => {
   const addr = server.address()
   const port = typeof addr === "object" && addr ? addr.port : null
   if (port != null) {
     writeDevPort(port)
     console.log(
-      `[wan-ai] server listening on http://${HOST}:${port} (${isProd ? "production" : "development"})`,
+      `[wan-ai] server listening on http://${listeningUrlHostForLog()}:${port} (${isProd ? "production" : "development"})`,
     )
     if (!isProd) {
       if (!hasExplicitPort && port !== 3000) {

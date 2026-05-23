@@ -33,7 +33,7 @@ function parseDefaultParams(text) {
 }
 
 /** 合并 default_params / options 时禁止带上这些键，否则会与 buildCreateTaskBody 拼好的 multimodal 冲突 */
-const ARK_EXTRA_FORBIDDEN = new Set(['content', 'contents', 'model', 'messages'])
+const ARK_EXTRA_FORBIDDEN = new Set(['content', 'contents', 'input', 'model', 'messages'])
 
 function sanitizeArkExtra(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
@@ -57,19 +57,22 @@ function normalizeHttpUrls(list) {
 }
 
 function resolveModelRow(dbi, videoModelId) {
+  const videoOnly = "status = 0 AND modality = 'video'"
   let modelRow = null
   const mid = Number(videoModelId)
   if (mid > 0) {
-    modelRow = dbi.prepare('SELECT * FROM video_models WHERE id = ? AND status = 0').get(mid)
+    modelRow = dbi.prepare(`SELECT * FROM video_models WHERE id = ? AND ${videoOnly}`).get(mid)
   }
   if (!modelRow) {
     modelRow = dbi
-      .prepare('SELECT * FROM video_models WHERE status = 0 AND is_default = 1 ORDER BY sort ASC LIMIT 1')
+      .prepare(
+        `SELECT * FROM video_models WHERE ${videoOnly} AND is_default = 1 ORDER BY sort ASC LIMIT 1`,
+      )
       .get()
   }
   if (!modelRow) {
     modelRow = dbi
-      .prepare('SELECT * FROM video_models WHERE status = 0 ORDER BY sort ASC, id ASC LIMIT 1')
+      .prepare(`SELECT * FROM video_models WHERE ${videoOnly} ORDER BY sort ASC, id ASC LIMIT 1`)
       .get()
   }
   return modelRow
@@ -142,7 +145,7 @@ async function createVideoJob(dbi, opts) {
     return {
       ok: false,
       code: 503,
-      message: '服务端未配置 ARK_API_KEY / SEEDANCE_API_KEY，无法调用 Seedance',
+      message: '服务端未配置视频 API Key（ARK_API_KEY / DMXAPI_API_KEY），无法调用 Seedance',
     }
   }
 
@@ -184,9 +187,9 @@ async function createVideoJob(dbi, opts) {
   } catch (e) {
     console.error(`[videoJobService] create task arkModelId=${arkModelId} video_models.id=${modelRow.id}`, e.message)
     const code = e.code === 'E_ARK_CONFIG' ? 503 : 502
-    let msg = e.message || '创建方舟任务失败'
+    let msg = e.message || `创建${seedance.providerLabel()}视频任务失败`
     const raw = String(msg)
-    /** 方舟英/中文：图+视频同任务被拒的常见表述 */
+    /** 图+视频同任务被拒的常见表述 */
     const multimodalRejected =
       /first[/\\]last frame.*reference media/i.test(raw) ||
       /参考图.*参考视频|参考视频.*参考图/.test(raw) ||
@@ -194,10 +197,10 @@ async function createVideoJob(dbi, opts) {
       /不能.*混用|不支持.*同时/.test(raw)
     if (code === 502 && hasImg && hasVid && multimodalRejected) {
       msg =
-        `方舟拒绝了「参考图 + 参考视频」同任务（本次请求 model=${arkModelId}，对应后台视频模型 id=${modelRow.id}）。\n` +
-        `说明：并未传错后台条目的 api_model_id；Doubao-Seedance-2.0-fast 等接入点仍可能对多模态参有限制，方舟若提示可改用 1.5 Pro 等，请以控制台该接入点文档为准。\n` +
-        `可选：换同系列非 Fast 的 2.0 接入点、或单任务只传图或只传视频、或在 .env 设置 ARK_MULTIMODAL_MODEL_ID 指向文档标明支持该组合的接入点。\n` +
-        `—— 方舟原文：${raw}`
+        `视频 API 拒绝了「参考图 + 参考视频」同任务（本次请求 model=${arkModelId}，对应后台视频模型 id=${modelRow.id}）。\n` +
+        `说明：并未传错后台条目的 api_model_id；部分模型（如 Seedance 2.0 Fast）仍可能对多模态参有限制，请以 DMXAPI/方舟文档为准。\n` +
+        `可选：换支持多模态参考的模型（如 doubao-seedance-2-0-260128）、或单任务只传图或只传视频、或在 .env 设置 ARK_MULTIMODAL_MODEL_ID 覆盖模型。\n` +
+        `—— 接口原文：${raw}`
     }
     return { ok: false, code, message: msg }
   }
@@ -205,7 +208,7 @@ async function createVideoJob(dbi, opts) {
   const tid = seedance.pickTaskId(remote)
   if (!tid) {
     console.error('[videoJobService] unexpected create response', JSON.stringify(remote).slice(0, 500))
-    return { ok: false, code: 502, message: '方舟返回中缺少任务 id，请核对接口版本' }
+    return { ok: false, code: 502, message: '视频 API 返回中缺少任务 id，请核对接口版本与 VIDEO_API_PROVIDER' }
   }
 
   const sourceImageCol = hasImg ? imgList[0] : null

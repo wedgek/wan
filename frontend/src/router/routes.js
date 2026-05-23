@@ -10,6 +10,7 @@ export const routeComponents = {
   aiVideoStudio: () => import("@/views/ai/studio/index.vue"),
   aiVideoChat: () => import("@/views/ai/video-chat/index.vue"),
   aiVideoModelManage: () => import("@/views/ai/video-models/index.vue"),
+  aiModelCatalog: () => import("@/views/ai/model-catalog/index.vue"),
   aiVideoManage: () => import("@/views/ai/video-manage/index.vue"),
   aiProductLibrary: () => import("@/views/ai/product-library/index.vue"),
 }
@@ -103,6 +104,17 @@ export const staticRoutes = [
     },
   },
   {
+    path: "/ai/model-catalog",
+    name: "menuAiModelCatalog",
+    component: () => import("@/views/ai/model-catalog/index.vue"),
+    meta: {
+      requiresAuth: true,
+      showNavbar: true,
+      showSidebar: true,
+      title: "模型目录",
+    },
+  },
+  {
     path: "/ai/video-models",
     name: "menuAiVideoModels",
     component: () => import("@/views/ai/video-models/index.vue"),
@@ -110,7 +122,7 @@ export const staticRoutes = [
       requiresAuth: true,
       showNavbar: true,
       showSidebar: true,
-      title: "模型管理",
+      title: "模型商店",
     },
   },
   {
@@ -142,6 +154,7 @@ export const staticMenuRoutePaths = new Set([
   "/ai/prompts",
   "/ai/video-chat",
   "/ai/studio",
+  "/ai/model-catalog",
   "/ai/video-models",
   "/ai/product-library",
   "/ai/video-manage",

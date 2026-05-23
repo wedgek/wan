@@ -67,6 +67,7 @@ npm run build:prod
 |------|------|
 | 根 `package.json` | workspaces、统一脚本、`npm install` 装全仓 |
 | `frontend/` | 管理端界面、构建配置、`.env*`、产物 **`frontend/dist`** |
+| `frontend/src/assets/vendors/` | 厂商 Logo SVG；更新方式见 **[厂商 Logo 说明](./frontend/src/assets/vendors/README.md)** |
 | `backend/` | HTTP API、SQLite，数据目录 **`backend/data`**（勿提交 `*.db`） |
 | `ecosystem.config.cjs` | PM2 配置 |
 

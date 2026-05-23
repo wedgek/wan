@@ -1,5 +1,5 @@
 /**
- * 从方舟拉取任务状态；成片成功时可选转存 TOS（见 videoResultTosMirror）。
+ * 从视频 API 拉取任务状态；成片成功时可选转存 TOS（见 videoResultTosMirror）。
  */
 const seedance = require('./seedanceClient')
 const { maybeMirrorSeedanceVideoToTos } = require('./videoResultTosMirror')

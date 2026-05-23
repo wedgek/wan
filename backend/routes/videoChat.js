@@ -4,6 +4,8 @@ const db = require('../db')
 const seedance = require('../services/seedanceClient')
 const { pullArkJobStateAndStableResultUrl } = require('../services/videoJobArkSync')
 const { createVideoJob, allowVideoJobRate } = require('../services/videoJobService')
+const { polishPrompt, polishPromptStream } = require('../services/promptPolishService')
+const { getPolishTextModelStatus } = require('../services/textModelService')
 
 const router = express.Router()
 const database = () => db.getDb()
@@ -413,6 +415,98 @@ router.post('/send', async (req, res) => {
       status: result.status,
     })
   )
+})
+
+function mapPolishError(e) {
+  const code = e.code || ''
+  if (code === 'E_PROMPT_EMPTY') return { status: 400, msg: e.message }
+  if (code === 'E_PROMPT_TOO_LONG') return { status: 400, msg: e.message }
+  if (code === 'E_TEXT_MODEL_CONFIG') return { status: 400, msg: e.message }
+  if (code === 'E_DMXAPI_CONFIG') return { status: 503, msg: e.message }
+  if (code === 'E_CHAT_TIMEOUT') return { status: 504, msg: e.message }
+  return { status: e.status === 429 ? 429 : 502, msg: e.message || '润色失败' }
+}
+
+router.get('/polish-config', (req, res) => {
+  try {
+    const status = getPolishTextModelStatus(database())
+    res.json(ok(status))
+  } catch (e) {
+    console.error('[videoChat] polish-config', e.message)
+    res.json(ok({ available: false }))
+  }
+})
+
+router.post('/polish-prompt/stream', async (req, res) => {
+  if (!allowVideoJobRate(req.userId)) {
+    return res.status(429).json(fail(429, '请求过于频繁，请稍后再试'))
+  }
+
+  const text = String(req.body?.text || '').trim()
+  if (!text) return res.status(400).json(fail(400, '请先输入提示词'))
+
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
+  res.setHeader('Cache-Control', 'no-cache, no-transform')
+  res.setHeader('Connection', 'keep-alive')
+  res.setHeader('X-Accel-Buffering', 'no')
+  if (typeof res.flushHeaders === 'function') res.flushHeaders()
+
+  const sendEvent = (event, data) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+    if (typeof res.flush === 'function') res.flush()
+  }
+
+  sendEvent('start', { ok: true })
+
+  const abortController = new AbortController()
+  const onClose = () => abortController.abort()
+  req.on('close', onClose)
+
+  try {
+    const result = await polishPromptStream(
+      database(),
+      text,
+      (_delta, full) => {
+        sendEvent('delta', { text: full })
+      },
+      { signal: abortController.signal },
+    )
+    sendEvent('done', {
+      text: result.text,
+      modelId: result.modelId,
+      modelName: result.modelName,
+    })
+    res.end()
+  } catch (e) {
+    if (abortController.signal.aborted) {
+      res.end()
+    } else {
+      const mapped = mapPolishError(e)
+      console.error('[videoChat] polish-prompt/stream', e.message)
+      sendEvent('error', { msg: mapped.msg, code: mapped.status })
+      res.end()
+    }
+  } finally {
+    req.off('close', onClose)
+  }
+})
+
+router.post('/polish-prompt', async (req, res) => {
+  if (!allowVideoJobRate(req.userId)) {
+    return res.json(fail(429, '请求过于频繁，请稍后再试'))
+  }
+
+  const text = String(req.body?.text || '').trim()
+  if (!text) return res.json(fail(400, '请先输入提示词'))
+
+  try {
+    const result = await polishPrompt(database(), text)
+    res.json(ok({ text: result.text, modelId: result.modelId, modelName: result.modelName }))
+  } catch (e) {
+    const mapped = mapPolishError(e)
+    console.error('[videoChat] polish-prompt', e.message)
+    res.json(fail(mapped.status, mapped.msg))
+  }
 })
 
 router.delete('/messages/:id', (req, res) => {

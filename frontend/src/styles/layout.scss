@@ -195,6 +195,16 @@
     border: 1px solid var(--el-border-color-lighter);
     border-bottom: none;
     box-sizing: border-box;
+    .el-button + .el-button {
+      margin-left: 0;
+    }
+    .page-table-header-left,
+    .page-table-header-actions {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
   }
   .page-pagination-box{
     flex-shrink: 0;

@@ -1,32 +1,66 @@
 <template>
   <el-dialog
     v-model="modalVisible"
-    :title="modalMode === 'add' ? '新增视频模型' : '编辑视频模型'"
+    :title="modalMode === 'add' ? '新增模型' : '编辑模型'"
     width="640px"
     destroy-on-close
   >
     <el-form :model="formData" label-width="110px">
+      <el-form-item v-if="modalMode === 'add'" label="从目录选择">
+        <el-select
+          v-model="selectedCatalogId"
+          placeholder="可选：从模型目录带入配置"
+          filterable
+          clearable
+          style="width: 100%"
+          @change="applyCatalogSelection"
+        >
+          <el-option
+            v-for="item in catalogOptions"
+            :key="item.id"
+            :label="item.apiModelId"
+            :value="item.id"
+          />
+        </el-select>
+        <div class="form-item-tip">列出目录中已启用的条目；也可不选，手动填写下方字段。</div>
+      </el-form-item>
       <el-form-item label="显示名称" v-required-dot>
         <el-input v-model="formData.name" placeholder="如下拉中展示名称" clearable clear-icon="Close" />
       </el-form-item>
-      <el-form-item label="方舟模型 ID" v-required-dot>
+      <el-form-item label="模型 ID" v-required-dot>
         <el-input
           v-model="formData.apiModelId"
-          placeholder="控制台推理接入点对应的 model id（如 ep-xxxx 或 doubao-seedance-…）"
+          placeholder="DMXAPI 模型名，如 doubao-seedance-2-0-260128"
           clearable
           clear-icon="Close"
         />
       </el-form-item>
-      <el-form-item label="参考视频">
-        <el-switch
-          v-model="formData.supportsReferenceVideo"
-          active-text="支持"
-          inactive-text="不支持"
-        />
-        <div class="form-item-tip">开启后，对话创作/画布等可在同任务中上传「参考视频」（智能参考）；仅对方舟支持多模态参考的接入点（如 Seedance 2.0）开启。</div>
+      <el-form-item label="模态" v-required-dot>
+        <el-select v-model="formData.modality" placeholder="选择模态" style="width: 100%">
+          <el-option label="视频" value="video" />
+          <el-option label="图片" value="image" />
+          <el-option label="文本" value="text" />
+          <el-option label="未分类" value="unknown" />
+        </el-select>
+        <div class="form-item-tip">对话创作 / 画布生成视频时，仅加载「视频」类模型。</div>
+      </el-form-item>
+      <el-form-item v-if="formData.modality === 'video'" label="参考视频">
+        <div class="form-item-control">
+          <el-switch
+            v-model="formData.supportsReferenceVideo"
+            active-text="支持"
+            inactive-text="不支持"
+          />
+          <div class="form-item-tip form-item-tip--inline">
+            开启后，对话创作/画布等可上传「参考视频」。Seedance 2.0 支持智能参考；可灵为动作控制，需同时上传参考图。
+          </div>
+        </div>
       </el-form-item>
       <el-form-item label="默认模型">
-        <el-switch v-model="formData.isDefault" active-text="是" inactive-text="否" />
+        <div class="form-item-control">
+          <el-switch v-model="formData.isDefault" active-text="是" inactive-text="否" />
+          <div class="form-item-tip form-item-tip--inline">默认模型按模态分组，各模态可各设一个默认。</div>
+        </div>
       </el-form-item>
       <el-form-item label="排序">
         <el-input-number v-model="formData.sort" :min="0" :max="9999" />
@@ -42,7 +76,7 @@
           v-model="formData.defaultParamsStr"
           type="textarea"
           :rows="5"
-          placeholder='可选，合并进创建任务请求体，如 {"duration":8}（须符合方舟文档）'
+          placeholder='可选，合并进创建任务请求体，如 {"duration":8,"ratio":"16:9"}（须符合 DMXAPI/Seedance 文档）'
         />
       </el-form-item>
       <el-form-item label="备注">
@@ -60,17 +94,22 @@
 <script setup>
 import request from "@/request"
 import { resetState, cloneDeep } from "@/utils/lodash"
+import { inferSupportsReferenceVideo } from "@/utils/catalogCapabilities"
 
 const emit = defineEmits(["success"])
 
 const modalVisible = ref(false)
 const modalMode = ref("add")
 const modalLoading = ref(false)
+const catalogOptions = ref([])
+const selectedCatalogId = ref(null)
 
 const defaultFormData = () => ({
   id: "",
+  catalogId: null,
   name: "",
   apiModelId: "",
+  modality: "video",
   supportsReferenceVideo: false,
   sort: 0,
   status: 0,
@@ -80,19 +119,72 @@ const defaultFormData = () => ({
 })
 const formData = reactive(defaultFormData())
 
-const showAdd = () => {
+async function loadCatalogOptions() {
+  try {
+    const res = await request({
+      url: "/admin-api/system/model-catalog/options",
+      method: "GET",
+      params: { status: 0 },
+    })
+    catalogOptions.value = res.code === 0 && Array.isArray(res.data) ? res.data : []
+  } catch (_) {
+    catalogOptions.value = []
+  }
+}
+
+function applyCatalogSelection(catalogId) {
+  if (!catalogId) {
+    formData.catalogId = null
+    return
+  }
+  const item = catalogOptions.value.find((x) => x.id === catalogId)
+  if (!item) return
+  formData.catalogId = item.id
+  formData.name = item.apiModelId
+  formData.apiModelId = item.apiModelId || ""
+  formData.modality = item.modality || "unknown"
+  formData.supportsReferenceVideo = !!item.capabilities?.supportsReferenceVideo
+  formData.remark = item.remark || ""
+  if (item.defaultParams == null) {
+    formData.defaultParamsStr = ""
+  } else if (typeof item.defaultParams === "string") {
+    formData.defaultParamsStr = item.defaultParams
+  } else {
+    try {
+      formData.defaultParamsStr = JSON.stringify(item.defaultParams, null, 2)
+    } catch (_) {
+      formData.defaultParamsStr = ""
+    }
+  }
+}
+
+watch(
+  () => [formData.apiModelId, formData.modality, modalMode.value],
+  ([id, modality, mode]) => {
+    if (mode === "add" && modality === "video" && id) {
+      formData.supportsReferenceVideo = inferSupportsReferenceVideo(id)
+    }
+  },
+)
+
+const showAdd = async () => {
   modalMode.value = "add"
   resetState(formData, defaultFormData())
+  selectedCatalogId.value = null
   modalVisible.value = true
+  await loadCatalogOptions()
 }
 
 const showEdit = (row) => {
   modalMode.value = "edit"
   resetState(formData, defaultFormData())
+  selectedCatalogId.value = null
   modalVisible.value = true
   formData.id = row.id
+  formData.catalogId = row.catalogId ?? null
   formData.name = row.name || ""
   formData.apiModelId = row.apiModelId || ""
+  formData.modality = row.modality || "video"
   formData.supportsReferenceVideo = !!row.supportsReferenceVideo
   formData.sort = row.sort ?? 0
   formData.status = row.status ?? 0
@@ -117,7 +209,7 @@ const validateForm = () => {
     return false
   }
   if (!formData.apiModelId?.trim()) {
-    ElMessage("请填写方舟模型 ID")
+    ElMessage("请填写模型 ID")
     return false
   }
   if (formData.defaultParamsStr?.trim()) {
@@ -145,7 +237,9 @@ const handleSubmit = async () => {
   }
   data.defaultParams = defaultParams
   data.isDefault = formData.isDefault ? 1 : 0
-  data.supportsReferenceVideo = formData.supportsReferenceVideo ? 1 : 0
+  data.supportsReferenceVideo =
+    formData.modality === "video" && formData.supportsReferenceVideo ? 1 : 0
+  if (!data.catalogId) delete data.catalogId
 
   modalLoading.value = true
   try {
@@ -170,10 +264,25 @@ defineExpose({ showAdd, showEdit })
 </script>
 
 <style scoped>
+.form-item-control {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  width: 100%;
+  min-height: 32px;
+}
+
 .form-item-tip {
   margin-top: 6px;
   font-size: 12px;
   color: var(--el-text-color-secondary);
   line-height: 1.45;
+}
+
+.form-item-tip--inline {
+  margin-top: 0;
+  flex: 1;
+  min-width: 220px;
 }
 </style>

@@ -4,9 +4,14 @@ const auth = require('./auth')
 const { requireAuth, menuRowsForUser } = auth
 const { buildTree } = require('../utils/tree')
 const { ok, fail } = require('../utils/response')
+const modelCatalogRouter = require('./modelCatalog')
+const { rowToCatalog, parseJsonField, normalizeVendor, resolveStoreModality, isStoreModalityUnset } = require('../services/modelCatalogService')
+const { publishCatalogToStore, clearOtherDefaults } = require('../services/catalogPublishService')
 
 const router = express.Router()
 router.use(requireAuth)
+
+router.use(modelCatalogRouter)
 
 const database = () => db.getDb()
 
@@ -790,7 +795,7 @@ router.delete('/ai-prompt/delete', (req, res) => {
   res.json(ok(true))
 })
 
-/* ---------- 视频模型（Seedance / 方舟接入点配置） ---------- */
+/* ---------- 视频模型（Seedance / DMXAPI 或方舟模型配置） ---------- */
 function rowToVideoModel(r) {
   if (!r) return null
   let defaultParams = null
@@ -805,6 +810,12 @@ function rowToVideoModel(r) {
     id: r.id,
     name: r.name || '',
     apiModelId: r.api_model_id || '',
+    catalogId: r.catalog_id ?? null,
+    vendor: normalizeVendor(r.catalog_vendor || '', r.api_model_id),
+    modality: isStoreModalityUnset(r.modality)
+      ? resolveStoreModality(r.api_model_id)
+      : String(r.modality).trim(),
+    tags: String(r.tags || r.catalog_tags || '').trim(),
     sort: r.sort ?? 0,
     status: r.status ?? 0,
     isDefault: r.is_default === 1,
@@ -816,8 +827,15 @@ function rowToVideoModel(r) {
   }
 }
 
-function clearOtherDefaults(dbi, keepId) {
-  dbi.prepare('UPDATE video_models SET is_default = 0 WHERE id != ?').run(keepId)
+function resolveVideoModelModality(d, b) {
+  const explicit = String(b.modality || '').trim()
+  if (explicit) return explicit
+  const catalogId = Number(b.catalogId)
+  if (catalogId > 0) {
+    const cat = d.prepare('SELECT modality, api_model_id FROM model_catalog WHERE id = ?').get(catalogId)
+    if (cat) return resolveStoreModality(cat.api_model_id, cat.modality)
+  }
+  return resolveStoreModality(String(b.apiModelId || '').trim())
 }
 
 router.get('/video-model/page', (req, res) => {
@@ -825,29 +843,61 @@ router.get('/video-model/page', (req, res) => {
   const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 20))
   const name = (req.query.name || '').trim()
   const status = req.query.status
+  const modality = (req.query.modality || '').trim()
+  const vendor = (req.query.vendor || '').trim()
   const conds = ['1=1']
   const params = []
   if (name) {
-    conds.push('(name LIKE ? OR api_model_id LIKE ?)')
-    params.push(`%${name}%`, `%${name}%`)
+    conds.push('(vm.name LIKE ? OR vm.api_model_id LIKE ? OR vm.tags LIKE ?)')
+    const q = `%${name}%`
+    params.push(q, q, q)
+  }
+  if (modality) {
+    conds.push('vm.modality = ?')
+    params.push(modality)
+  }
+  if (vendor) {
+    conds.push(`(
+      mc.vendor = ?
+      OR EXISTS (SELECT 1 FROM model_catalog c WHERE c.api_model_id = vm.api_model_id AND c.vendor = ? LIMIT 1)
+    )`)
+    params.push(vendor, vendor)
   }
   if (status !== undefined && status !== '') {
-    conds.push('status = ?')
+    conds.push('vm.status = ?')
     params.push(Number(status))
   }
   const where = conds.join(' AND ')
   const d = database()
-  const total = d.prepare(`SELECT COUNT(*) AS c FROM video_models WHERE ${where}`).get(...params).c
+  const total = d.prepare(`SELECT COUNT(*) AS c FROM video_models vm LEFT JOIN model_catalog mc ON mc.id = vm.catalog_id WHERE ${where}`).get(...params).c
   const offset = (pageNo - 1) * pageSize
   const rows = d
     .prepare(
-      `SELECT id, name, api_model_id, sort, status, is_default, remark, default_params,
-              supports_reference_video,
-              datetime(created_at, 'localtime') AS create_time, datetime(updated_at, 'localtime') AS update_time
-       FROM video_models WHERE ${where} ORDER BY sort ASC, id DESC LIMIT ? OFFSET ?`
+      `SELECT vm.id, vm.name, vm.api_model_id, vm.catalog_id, vm.modality, vm.tags, vm.sort, vm.status, vm.is_default, vm.remark,
+              vm.default_params, vm.supports_reference_video, mc.vendor AS catalog_vendor, mc.tags AS catalog_tags,
+              datetime(vm.created_at, 'localtime') AS create_time, datetime(vm.updated_at, 'localtime') AS update_time
+       FROM video_models vm
+       LEFT JOIN model_catalog mc ON mc.id = vm.catalog_id
+       WHERE ${where} ORDER BY vm.sort ASC, vm.id DESC LIMIT ? OFFSET ?`,
     )
     .all(...params, pageSize, offset)
   res.json(ok({ list: rows.map(rowToVideoModel), total }))
+})
+
+router.get('/video-model/vendors', (req, res) => {
+  const rows = database()
+    .prepare(
+      `SELECT vm.api_model_id, mc.vendor AS catalog_vendor
+       FROM video_models vm
+       LEFT JOIN model_catalog mc ON mc.id = vm.catalog_id`,
+    )
+    .all()
+  const set = new Set()
+  for (const r of rows) {
+    const v = normalizeVendor(r.catalog_vendor || '', r.api_model_id)
+    if (v) set.add(v)
+  }
+  res.json(ok([...set].sort((a, b) => a.localeCompare(b, 'zh-CN'))))
 })
 
 router.get('/video-model/get', (req, res) => {
@@ -855,10 +905,12 @@ router.get('/video-model/get', (req, res) => {
   if (!id) return res.json(fail(400, '缺少 id'))
   const row = database()
     .prepare(
-      `SELECT id, name, api_model_id, sort, status, is_default, remark, default_params,
-              supports_reference_video,
-              datetime(created_at, 'localtime') AS create_time, datetime(updated_at, 'localtime') AS update_time
-       FROM video_models WHERE id = ?`
+      `SELECT vm.id, vm.name, vm.api_model_id, vm.catalog_id, vm.modality, vm.tags, vm.sort, vm.status, vm.is_default, vm.remark,
+              vm.default_params, vm.supports_reference_video, mc.vendor AS catalog_vendor, mc.tags AS catalog_tags,
+              datetime(vm.created_at, 'localtime') AS create_time, datetime(vm.updated_at, 'localtime') AS update_time
+       FROM video_models vm
+       LEFT JOIN model_catalog mc ON mc.id = vm.catalog_id
+       WHERE vm.id = ?`,
     )
     .get(id)
   if (!row) return res.json(fail(404, '记录不存在'))
@@ -868,7 +920,7 @@ router.get('/video-model/get', (req, res) => {
 router.post('/video-model/create', (req, res) => {
   const b = req.body || {}
   if (!String(b.name || '').trim()) return res.json(fail(400, '请填写名称'))
-  if (!String(b.apiModelId || '').trim()) return res.json(fail(400, '请填写方舟模型 ID（apiModelId）'))
+  if (!String(b.apiModelId || '').trim()) return res.json(fail(400, '请填写模型 ID（apiModelId）'))
   let defaultParamsJson = null
   if (b.defaultParams != null && b.defaultParams !== '') {
     try {
@@ -881,26 +933,32 @@ router.post('/video-model/create', (req, res) => {
   }
   const isDef = b.isDefault === true || b.isDefault === 1 ? 1 : 0
   const refVid = b.supportsReferenceVideo === true || b.supportsReferenceVideo === 1 ? 1 : 0
+  const catalogId = Number(b.catalogId) > 0 ? Number(b.catalogId) : null
   const d = database()
+  const modality = resolveVideoModelModality(d, b)
+  const storeRefVid = modality === 'video' ? refVid : 0
   const newId = d.transaction(() => {
     const info = d
       .prepare(
-        `INSERT INTO video_models (name, api_model_id, sort, status, is_default, remark, default_params, supports_reference_video)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO video_models (name, api_model_id, catalog_id, modality, tags, sort, status, is_default, remark, default_params, supports_reference_video)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         String(b.name).trim(),
         String(b.apiModelId).trim(),
+        catalogId,
+        modality,
+        String(b.tags || '').trim() || null,
         Number(b.sort) || 0,
         n(b.status, 0),
         isDef,
         String(b.remark || '').trim() || null,
         defaultParamsJson,
-        refVid
+        storeRefVid
       )
     const id = Number(info.lastInsertRowid)
     if (isDef) {
-      clearOtherDefaults(d, id)
+      clearOtherDefaults(d, id, modality)
       d.prepare('UPDATE video_models SET is_default = 1 WHERE id = ?').run(id)
     }
     return id
@@ -913,7 +971,7 @@ router.put('/video-model/update', (req, res) => {
   const id = Number(b.id)
   if (!id) return res.json(fail(400, '缺少 id'))
   if (!String(b.name || '').trim()) return res.json(fail(400, '请填写名称'))
-  if (!String(b.apiModelId || '').trim()) return res.json(fail(400, '请填写方舟模型 ID（apiModelId）'))
+  if (!String(b.apiModelId || '').trim()) return res.json(fail(400, '请填写模型 ID（apiModelId）'))
   let defaultParamsJson = null
   if (b.defaultParams != null && b.defaultParams !== '') {
     try {
@@ -926,35 +984,102 @@ router.put('/video-model/update', (req, res) => {
   }
   const isDef = b.isDefault === true || b.isDefault === 1 ? 1 : 0
   const refVid = b.supportsReferenceVideo === true || b.supportsReferenceVideo === 1 ? 1 : 0
+  const catalogId = Number(b.catalogId) > 0 ? Number(b.catalogId) : null
   const d = database()
+  const modality = resolveVideoModelModality(d, b)
+  const storeRefVid = modality === 'video' ? refVid : 0
   d.transaction(() => {
     d.prepare(
-      `UPDATE video_models SET name = ?, api_model_id = ?, sort = ?, status = ?, is_default = ?, remark = ?,
+      `UPDATE video_models SET name = ?, api_model_id = ?, catalog_id = ?, modality = ?, tags = ?, sort = ?, status = ?, is_default = ?, remark = ?,
        default_params = ?, supports_reference_video = ?, updated_at = datetime('now') WHERE id = ?`
     ).run(
       String(b.name).trim(),
       String(b.apiModelId).trim(),
+      catalogId,
+      modality,
+      String(b.tags || '').trim() || null,
       Number(b.sort) || 0,
       n(b.status, 0),
       isDef,
       String(b.remark || '').trim() || null,
       defaultParamsJson,
-      refVid,
+      storeRefVid,
       id
     )
     if (isDef) {
-      clearOtherDefaults(d, id)
+      clearOtherDefaults(d, id, modality)
       d.prepare('UPDATE video_models SET is_default = 1 WHERE id = ?').run(id)
     }
   })()
   res.json(ok(true))
 })
 
+router.put('/video-model/update-status', (req, res) => {
+  const { id, status } = req.body || {}
+  if (!id) return res.json(fail(400, '缺少 id'))
+  const nextStatus = Number(status) === 1 ? 1 : 0
+  const d = database()
+  const row = d.prepare('SELECT id FROM video_models WHERE id = ?').get(Number(id))
+  if (!row) return res.json(fail(404, '记录不存在'))
+  d.prepare(`UPDATE video_models SET status = ?, updated_at = datetime('now') WHERE id = ?`).run(
+    nextStatus,
+    Number(id),
+  )
+  res.json(ok(true))
+})
+
+router.post('/video-model/publish-from-catalog', (req, res) => {
+  const b = req.body || {}
+  const catalogId = Number(b.catalogId)
+  if (!catalogId) return res.json(fail(400, '缺少 catalogId'))
+
+  const result = publishCatalogToStore(database(), catalogId, b)
+  if (!result.ok) {
+    if (result.duplicate) {
+      return res.json(ok({ duplicate: true }))
+    }
+    const code = result.msg === '目录条目不存在' ? 404 : 400
+    return res.json(fail(code, result.msg))
+  }
+
+  const catRow = database()
+    .prepare(
+      `SELECT id, api_model_id, display_name, modality, vendor, source, status, tags,
+              capabilities_json, default_params, remark,
+              datetime(synced_at, 'localtime') AS synced_at,
+              datetime(created_at, 'localtime') AS create_time,
+              datetime(updated_at, 'localtime') AS update_time
+       FROM model_catalog WHERE id = ?`,
+    )
+    .get(catalogId)
+  res.json(ok({ id: result.id, catalog: rowToCatalog(catRow) }))
+})
+
 router.delete('/video-model/delete', (req, res) => {
   const id = Number(req.query.id)
   if (!id) return res.json(fail(400, '缺少 id'))
-  database().prepare('DELETE FROM video_models WHERE id = ?').run(id)
-  res.json(ok(true))
+
+  const d = database()
+  const row = d.prepare('SELECT id FROM video_models WHERE id = ?').get(id)
+  if (!row) return res.json(fail(404, '记录不存在'))
+
+  const jobCount = d.prepare('SELECT COUNT(*) AS c FROM video_jobs WHERE video_model_id = ?').get(id).c
+  if (jobCount > 0) {
+    return res.json(
+      fail(
+        400,
+        `该模型已被 ${jobCount} 条创作任务引用，无法删除。请改用左侧「停用」，或清理相关创作记录后再试。`,
+      ),
+    )
+  }
+
+  try {
+    d.prepare('DELETE FROM video_models WHERE id = ?').run(id)
+    res.json(ok(true))
+  } catch (e) {
+    console.error('[video-model] delete', id, e.message)
+    res.json(fail(500, e.message || '删除失败'))
+  }
 })
 
 module.exports = router

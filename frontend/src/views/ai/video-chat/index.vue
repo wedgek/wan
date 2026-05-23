@@ -22,15 +22,32 @@
             v-model="selectedModelId"
             placeholder="选择模型"
             class="toolbar-model"
+            popper-class="vc-model-select-popper"
             filterable
             size="default"
           >
+            <template v-if="selectedModel" #label>
+              <div class="toolbar-model-option toolbar-model-option--selected">
+                <VendorBadge
+                  :vendor="selectedModel.vendor"
+                  :api-model-id="selectedModel.apiModelId"
+                  :show-label="false"
+                  compact
+                />
+                <span class="toolbar-model-option__name">{{ selectedModel.name }}</span>
+              </div>
+            </template>
             <el-option
               v-for="x in models"
               :key="x.id"
               :label="x.name"
               :value="x.id"
-            />
+            >
+              <div class="toolbar-model-option">
+                <VendorBadge :vendor="x.vendor" :api-model-id="x.apiModelId" :show-label="false" compact />
+                <span class="toolbar-model-option__name">{{ x.name }}</span>
+              </div>
+            </el-option>
           </el-select>
         </div>
         <div class="video-chat__toolbar-end">
@@ -434,7 +451,9 @@
                   :autosize="{ minRows: 3, maxRows: 8 }"
                   :maxlength="INPUT_MAX_LENGTH"
                   :placeholder="mentionPlaceholder"
+                  :readonly="polishing"
                   class="composer-input"
+                  :class="{ 'composer-input--polishing': polishing }"
                   resize="none"
                   @keydown.enter.ctrl.exact.prevent="send"
                   @keydown="onInputKeydown"
@@ -473,10 +492,25 @@
               </div>
             </div>
             <div class="composer-foot">
-              <span class="composer-hint">Ctrl + Enter 发送</span>
+              <div class="composer-foot__left">
+                <button
+                  v-if="polishAvailable"
+                  type="button"
+                  class="composer-polish-btn"
+                  :class="{ 'is-loading': polishing }"
+                  :disabled="!canPolish"
+                  aria-label="AI 润色"
+                  @click="polishPrompt"
+                >
+                  <el-icon v-if="polishing" class="composer-polish-btn__spinner"><component :is="$icons.Loading" /></el-icon>
+                  <span v-else class="composer-polish-btn__emoji" aria-hidden="true">🤖</span>
+                  AI 润色
+                </button>
+                <span class="composer-hint">Ctrl + Enter 发送</span>
+              </div>
               <div class="composer-foot__right">
                 <span class="composer-count">{{ inputText.length }} / {{ INPUT_MAX_LENGTH }}</span>
-                <el-button type="primary" round :disabled="!canSend || sending" @click="send">
+                <el-button type="primary" round :disabled="!canSend || sending || polishing" @click="send">
                   发送
                 </el-button>
               </div>
@@ -598,6 +632,7 @@ import { useAuthStore } from "@/stores/auth"
 import { uploadImage, uploadVideo, getFileExt } from "@/request/oss"
 import logoMark from "@/assets/images/logo.svg"
 import ProductLibraryPickerDialog from "./ProductLibraryPickerDialog.vue"
+import VendorBadge from "@/components/vendor-badge/index.vue"
 
 /** 懒加载图片组件：进入可视区域后才加载 */
 const LazyImage = defineComponent({
@@ -892,6 +927,8 @@ const uploadCount = ref(0)
 /** 正在上传中的 blob URL 集合，用于展示 loading 遮罩 */
 const uploadingBlobUrls = ref(new Set())
 const sending = ref(false)
+const polishing = ref(false)
+const polishAvailable = ref(false)
 const msgScrollRef = ref(null)
 const sessionsDrawer = ref(false)
 const isWideMode = ref(false)
@@ -1429,6 +1466,226 @@ function openPromptPicker() {
   promptDialogVisible.value = true
 }
 
+async function loadPolishConfig() {
+  try {
+    const res = await request({ url: "/admin-api/video/chat/polish-config", method: "GET" })
+    polishAvailable.value = !!(res.code === 0 && res.data?.available)
+  } catch (_) {
+    polishAvailable.value = false
+  }
+}
+
+function resolvePolishStreamUrl() {
+  const raw = import.meta.env.VITE_API_BASE_URL
+  if (raw == null || String(raw).trim() === "") {
+    return "/admin-api/video/chat/polish-prompt/stream"
+  }
+  return `${String(raw).trim().replace(/\/+$/, "")}/admin-api/video/chat/polish-prompt/stream`
+}
+
+function parsePolishSseBlock(block) {
+  let event = "message"
+  const dataLines = []
+  for (const rawLine of block.split("\n")) {
+    const line = rawLine.replace(/\r$/, "")
+    if (line.startsWith("event:")) event = line.slice(6).trim()
+    else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim())
+  }
+  if (!dataLines.length) return null
+  try {
+    return { event, data: JSON.parse(dataLines.join("\n")) }
+  } catch (_) {
+    return null
+  }
+}
+
+function createPolishTextPlayer() {
+  let target = ""
+  let pos = 0
+  let timer = null
+  const stepMs = 14
+
+  function stopTimer() {
+    if (timer) {
+      clearInterval(timer)
+      timer = null
+    }
+  }
+
+  function tick() {
+    if (pos < target.length) {
+      pos += 1
+      inputText.value = target.slice(0, pos)
+    }
+    if (pos >= target.length) stopTimer()
+  }
+
+  return {
+    push(next) {
+      target = String(next || "")
+      if (pos < target.length && !timer) {
+        timer = setInterval(tick, stepMs)
+      }
+    },
+    async drain(finalText) {
+      target = String(finalText ?? target)
+      stopTimer()
+      while (pos < target.length) {
+        pos += 1
+        inputText.value = target.slice(0, pos)
+        await new Promise((resolve) => setTimeout(resolve, stepMs))
+      }
+      inputText.value = target
+    },
+    stop() {
+      stopTimer()
+    },
+  }
+}
+
+async function requestPolishStream(sourceText, onText) {
+  const authStore = useAuthStore()
+  const res = await fetch(resolvePolishStreamUrl(), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+      ...(authStore.token ? { Authorization: `Bearer ${authStore.token}` } : {}),
+    },
+    body: JSON.stringify({ text: sourceText }),
+  })
+
+  if (!res.ok) {
+    let msg = "润色失败"
+    try {
+      const body = await res.json()
+      msg = body.msg || body.message || msg
+    } catch (_) {
+      /* ignore */
+    }
+    throw new Error(msg)
+  }
+
+  const reader = res.body?.getReader()
+  if (!reader) throw new Error("润色失败")
+
+  const decoder = new TextDecoder()
+  let buffer = ""
+  let finalText = ""
+  let gotDelta = false
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n")
+
+    let sep = buffer.indexOf("\n\n")
+    while (sep !== -1) {
+      const block = buffer.slice(0, sep)
+      buffer = buffer.slice(sep + 2)
+      const parsed = parsePolishSseBlock(block)
+      if (parsed) {
+        if (parsed.event === "start") {
+          /* 连接已建立，等待增量 */
+        } else if (parsed.event === "delta" && parsed.data?.text != null) {
+          gotDelta = true
+          finalText = String(parsed.data.text)
+          onText(finalText)
+        } else if (parsed.event === "done") {
+          finalText = String(parsed.data?.text ?? finalText)
+          onText(finalText)
+          return finalText
+        } else if (parsed.event === "error") {
+          throw new Error(parsed.data?.msg || "润色失败")
+        }
+      }
+      sep = buffer.indexOf("\n\n")
+    }
+  }
+
+  if (!gotDelta && !finalText) {
+    throw new Error("润色失败")
+  }
+
+  return finalText
+}
+
+async function animateReplaceText(fromText, toText, stepMs = 12) {
+  const from = String(fromText || "")
+  const target = String(toText || "")
+  if (!target) return
+
+  const deleteStride = Math.max(1, Math.ceil(from.length / 28))
+  for (let len = from.length; len > 0; len -= deleteStride) {
+    inputText.value = from.slice(0, Math.max(0, len - deleteStride))
+    await new Promise((resolve) => setTimeout(resolve, stepMs))
+  }
+
+  const typeStride = Math.max(1, Math.ceil(target.length / 120))
+  for (let i = typeStride; i <= target.length; i += typeStride) {
+    inputText.value = target.slice(0, Math.min(i, target.length))
+    await new Promise((resolve) => setTimeout(resolve, stepMs))
+  }
+  inputText.value = target
+}
+
+async function polishPromptFallback(originalText) {
+  const res = await request({
+    url: "/admin-api/video/chat/polish-prompt",
+    method: "POST",
+    data: { text: originalText },
+    timeout: 90000,
+  })
+  if (res.code === 0 && res.data?.text) {
+    await animateReplaceText(originalText, res.data.text)
+    ElMessage.success("已润色")
+    return true
+  }
+  ElMessage.error(res.msg || "润色失败")
+  return false
+}
+
+async function polishPrompt() {
+  const raw = inputText.value.trim()
+  if (!raw) {
+    ElMessage.warning("请先输入提示词")
+    return
+  }
+  if (polishing.value || sending.value || uploadBusy.value) return
+
+  const originalText = inputText.value
+  polishing.value = true
+  const player = createPolishTextPlayer()
+  let succeeded = false
+
+  try {
+    const finalText = await requestPolishStream(originalText, (text) => {
+      player.push(text)
+    })
+    await player.drain(finalText)
+    succeeded = true
+    ElMessage.success("已润色")
+  } catch (err) {
+    player.stop()
+    inputText.value = originalText
+    try {
+      const ok = await polishPromptFallback(originalText)
+      succeeded = ok
+    } catch (_) {
+      inputText.value = originalText
+      ElMessage.error(err?.message || "润色失败")
+    }
+  } finally {
+    player.stop()
+    if (!succeeded && inputText.value === "") {
+      inputText.value = originalText
+    }
+    polishing.value = false
+    await nextTick()
+    getTextareaEl()?.focus()
+  }
+}
+
 function openProductLibraryPicker() {
   productLibraryDialogVisible.value = true
 }
@@ -1482,9 +1739,14 @@ function mergeProductLibraryImages(urls) {
 
 const canSend = computed(() => {
   if (!selectedModelId.value) return false
-  if (uploadBusy.value) return false
+  if (polishing.value || sending.value || uploadBusy.value) return false
   const t = inputText.value.trim()
   return !!(t || pendingImages.value.length || pendingVideos.value.length)
+})
+
+const canPolish = computed(() => {
+  if (polishing.value || sending.value || uploadBusy.value) return false
+  return !!inputText.value.trim()
 })
 
 function rawUploadFile(file) {
@@ -2226,7 +2488,7 @@ function pushOptimisticSendRound(capturedText, capturedImages, capturedVideos) {
 }
 
 async function send() {
-  if (!canSend.value || sending.value) return
+  if (!canSend.value || sending.value || polishing.value) return
   if (!activeSessionId.value) {
     const ok = await activateNewChatSession()
     if (!ok) return
@@ -2475,6 +2737,7 @@ onMounted(async () => {
   document.addEventListener("fullscreenchange", onDocumentFullscreenChange)
   document.addEventListener("webkitfullscreenchange", onDocumentFullscreenChange)
   await loadModels()
+  await loadPolishConfig()
   await loadSessions()
   await loadManagedPrompts()
   nextTick(() => scrollBottom())
@@ -2591,11 +2854,40 @@ onUnmounted(() => {
   margin-right: 4px;
 }
 
-/* 模型名尽量完整展示：加大 min-width，减轻选中项被强制省略 */
+.toolbar-model-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  min-width: 0;
+  line-height: 1;
+
+  &__name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 14px;
+    line-height: 20px;
+  }
+}
+
+:deep(.toolbar-model-option .vendor-badge) {
+  flex-shrink: 0;
+  align-items: center;
+}
+
+:deep(.toolbar-model-option .vendor-badge__logo),
+:deep(.toolbar-model-option .vendor-badge__icon) {
+  width: 20px;
+  height: 20px;
+  padding: 1px;
+}
+
+/* 模型名尽量完整展示：加大 min/max-width，减轻选中项被强制省略 */
 .toolbar-model {
   width: auto;
   min-width: 0;
-  max-width: min(720px, 100%);
+  max-width: min(960px, 100%);
 }
 
 :deep(.toolbar-model.el-select) {
@@ -2604,13 +2896,13 @@ onUnmounted(() => {
 
   display: inline-flex;
   width: auto !important;
-  min-width: 15rem;
+  min-width: 20rem;
   max-width: 100%;
   vertical-align: middle;
 
   .el-select__wrapper {
     min-height: 36px;
-    min-width: 12rem;
+    min-width: 16rem;
     box-shadow: none !important;
     border: none !important;
     background: transparent !important;
@@ -2622,12 +2914,18 @@ onUnmounted(() => {
   }
 
   .el-select__selected-item {
+    display: flex;
+    align-items: center;
     color: var(--el-text-color-primary);
     flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    max-width: 100%;
+  }
+
+  .toolbar-model-option--selected {
+    max-width: 100%;
+    line-height: 1;
   }
 
   .el-select__caret {
@@ -3862,6 +4160,13 @@ onUnmounted(() => {
   }
 }
 
+:deep(.composer-input--polishing.el-textarea) {
+  .el-textarea__inner {
+    background: rgba(64, 158, 255, 0.04);
+    caret-color: var(--el-color-primary);
+  }
+}
+
 .mention-dropdown {
   z-index: 100;
   min-width: 140px;
@@ -3993,11 +4298,69 @@ onUnmounted(() => {
   border-top: 1px solid rgba(15, 23, 42, 0.06);
 }
 
+.composer-foot__left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
 .composer-foot__right {
   display: flex;
   align-items: center;
   gap: 12px;
   flex-shrink: 0;
+}
+
+.composer-polish-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 0 10px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(248, 250, 252, 0.92);
+  color: var(--el-text-color-regular);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+
+  .composer-polish-btn__emoji {
+    font-size: 14px;
+    line-height: 1;
+    font-style: normal;
+  }
+
+  .composer-polish-btn__spinner {
+    font-size: 14px;
+    animation: rotating 1.2s linear infinite;
+  }
+
+  &:hover:not(:disabled) {
+    border-color: rgba(64, 158, 255, 0.35);
+    background: rgba(236, 245, 255, 0.95);
+    color: var(--el-color-primary);
+  }
+
+  &:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+}
+
+@keyframes rotating {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .composer-count {
@@ -4160,6 +4523,20 @@ video.msg-vid-el:fullscreen::backdrop,
 }
 
 /* 比例/时长下拉挂载到 body */
+.vc-model-select-popper {
+  .el-select-dropdown__item {
+    height: auto;
+    min-height: 36px;
+    padding: 6px 12px;
+    line-height: 1.4;
+  }
+
+  .toolbar-model-option {
+    display: flex;
+    width: 100%;
+  }
+}
+
 .vc-toolbar-gen-popper {
   .el-select-dropdown__item.is-selected {
     background: transparent !important;

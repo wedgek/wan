@@ -2,6 +2,14 @@ const fs = require('fs')
 const path = require('path')
 const crypto = require('crypto')
 const Database = require('better-sqlite3')
+const {
+  purgeModelCatalogSeed,
+  normalizeModelCatalogVendors,
+  normalizeModelCatalogDisplayNames,
+  normalizeModelCatalogCapabilities,
+  normalizeModelCatalogSyncMeta,
+  normalizeVideoModelsModality,
+} = require('./services/modelCatalogService')
 
 function hashPassword(password) {
   return crypto.createHash('sha256').update(`wan-ai:${password}`, 'utf8').digest('hex')
@@ -63,9 +71,18 @@ function applySchemaPatches(dbi) {
     ensureProductLibrarySchema(dbi)
     ensureProductLibraryMenu(dbi)
     ensureAiVideoModelMenuInSidebar(dbi)
+    ensureModelCatalogSchema(dbi)
+    ensureModelCatalogMenu(dbi)
     ensureAuthSessionsSchema(dbi)
     ensureWorkflowMenuSync(dbi)
     seedVideoModelsIfEmpty(dbi)
+    purgeModelCatalogSeed(dbi)
+    normalizeModelCatalogVendors(dbi)
+    normalizeModelCatalogDisplayNames(dbi)
+    normalizeModelCatalogCapabilities(dbi)
+    normalizeModelCatalogSyncMeta(dbi)
+    normalizeVideoModelsModality(dbi)
+    ensureModelMenuOrder(dbi)
     dedupeMenusByComponentName(dbi)
     ensureSuperAdminAllMenuIds(dbi)
   } catch (e) {
@@ -139,6 +156,36 @@ function ensureVideoSchema(dbi) {
   `)
   /** 能力开关：是否在对话/画布中允许「参考视频」；由后台视频模型配置维护 */
   ensureColumn(dbi, 'video_models', 'supports_reference_video', 'INTEGER NOT NULL DEFAULT 0')
+  ensureColumn(dbi, 'video_models', 'catalog_id', 'INTEGER')
+  ensureColumn(dbi, 'video_models', 'modality', "TEXT NOT NULL DEFAULT 'video'")
+  ensureColumn(dbi, 'video_models', 'tags', 'TEXT')
+}
+
+/** 模型目录：DMXAPI 同步 / 手动维护的候选模型库 */
+function ensureModelCatalogSchema(dbi) {
+  dbi.exec(`
+    CREATE TABLE IF NOT EXISTS model_catalog (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      api_model_id TEXT NOT NULL UNIQUE,
+      display_name TEXT NOT NULL,
+      modality TEXT NOT NULL DEFAULT 'unknown',
+      vendor TEXT,
+      source TEXT NOT NULL DEFAULT 'manual',
+      status INTEGER NOT NULL DEFAULT 0,
+      tags TEXT,
+      capabilities_json TEXT,
+      default_params TEXT,
+      remark TEXT,
+      raw_meta_json TEXT,
+      synced_at TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_model_catalog_modality ON model_catalog(modality);
+    CREATE INDEX IF NOT EXISTS idx_model_catalog_status ON model_catalog(status);
+  `)
+  ensureColumn(dbi, 'model_catalog', 'dmxapi_price_text', 'TEXT')
+  ensureColumn(dbi, 'model_catalog', 'dmxapi_price_json', 'TEXT')
 }
 
 /** 视频创作 Hub：项目表 + 任务字段；幂等 */
@@ -350,7 +397,7 @@ function ensureAiVideoModelMenuInSidebar(dbi) {
         INSERT INTO menus (id, parent_id, type, name, path, component_name, icon, sort, permission, status, visible, keep_alive)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `)
-      ins.run(id, parentId, 2, '模型管理', 'video-models', 'aiVideoModelManage', 'VideoCamera', 99, 'ai:video-model:list', 0, 1, 0)
+      ins.run(id, parentId, 2, '模型商店', 'video-models', 'aiVideoModelManage', 'VideoCamera', 99, 'ai:video-model:list', 0, 1, 0)
       dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (1, ?)').run(id)
       try {
         dbi.prepare('INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES (?, ?)').run('menus', id)
@@ -359,14 +406,69 @@ function ensureAiVideoModelMenuInSidebar(dbi) {
       }
       return
     }
-    dbi.prepare(`UPDATE menus SET visible = 1 WHERE component_name = 'aiVideoModelManage'`).run()
+    dbi.prepare(`UPDATE menus SET visible = 1, sort = 99 WHERE component_name = 'aiVideoModelManage'`).run()
     dbi
       .prepare(
-        `UPDATE menus SET name = '模型管理' WHERE component_name = 'aiVideoModelManage' AND name IN ('视频模型配置', '视频模型')`,
+        `UPDATE menus SET name = '模型商店' WHERE component_name = 'aiVideoModelManage' AND name IN ('视频模型配置', '视频模型', '模型管理')`,
       )
       .run()
   } catch (e) {
     console.error('[db] ensureAiVideoModelMenuInSidebar', e.message)
+  }
+}
+
+/** 模型商店在上、模型目录在下（sort 越小越靠前） */
+function ensureModelMenuOrder(dbi) {
+  try {
+    dbi.prepare(`UPDATE menus SET sort = 99 WHERE component_name = 'aiVideoModelManage'`).run()
+    dbi.prepare(`UPDATE menus SET sort = 100 WHERE component_name = 'aiModelCatalog'`).run()
+  } catch (e) {
+    console.error('[db] ensureModelMenuOrder', e.message)
+  }
+}
+
+/** 侧栏「模型目录」菜单 */
+function ensureModelCatalogMenu(dbi) {
+  try {
+    const row = dbi.prepare(`SELECT id FROM menus WHERE component_name = ?`).get('aiModelCatalog')
+    if (row) {
+      dbi
+        .prepare(`UPDATE menus SET visible = 1, name = '模型目录', sort = 100 WHERE component_name = 'aiModelCatalog'`)
+        .run()
+      dbi.prepare(`UPDATE menus SET sort = 99 WHERE component_name = 'aiVideoModelManage'`).run()
+      return
+    }
+    const aiRow = dbi.prepare(`SELECT id FROM menus WHERE parent_id = 0 AND path = '/ai' LIMIT 1`).get()
+    if (!aiRow) return
+    const parentId = aiRow.id
+    const maxRow = dbi.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM menus').get()
+    const id = maxRow.m + 1
+    const ins = dbi.prepare(`
+      INSERT INTO menus (id, parent_id, type, name, path, component_name, icon, sort, permission, status, visible, keep_alive)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    ins.run(
+      id,
+      parentId,
+      2,
+      '模型目录',
+      'model-catalog',
+      'aiModelCatalog',
+      'Collection',
+      100,
+      'ai:model-catalog:list',
+      0,
+      1,
+      0,
+    )
+    dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (1, ?)').run(id)
+    try {
+      dbi.prepare('INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES (?, ?)').run('menus', id)
+    } catch (_) {
+      /* ignore */
+    }
+  } catch (e) {
+    console.error('[db] ensureModelCatalogMenu', e.message)
   }
 }
 
@@ -419,31 +521,8 @@ function ensureAiStudioPatch(dbi) {
   }
 }
 
-function seedVideoModelsIfEmpty(dbi) {
-  const c = dbi.prepare('SELECT COUNT(*) AS c FROM video_models').get().c
-  if (c > 0) return
-  const ins = dbi.prepare(
-    `INSERT INTO video_models (name, api_model_id, sort, status, is_default, remark, default_params, supports_reference_video)
-     VALUES (?, ?, ?, 0, ?, ?, ?, ?)`
-  )
-  ins.run(
-    'Seedance 2.0（默认）',
-    'ep-YOUR_SEEDANCE2_ENDPOINT_ID',
-    1,
-    1,
-    '在火山方舟控制台创建 Seedance 2.0 推理接入点，将 api_model_id 改为控制台复制的 ep- 开头 ID。多模态参考（文/图/参考视频）见 backend/services/seedanceClient.js 与官方「创建视频生成任务」文档。',
-    null,
-    1
-  )
-  ins.run(
-    'Seedance 1.0 Lite（示例）',
-    'doubao-seedance-1-0-lite-250528',
-    2,
-    0,
-    '旧版示例接入点；一般不支持同任务参考视频或与 2.0 相同的多模态组合。需要参考视频时请用 2.0 并打开该模型的「参考视频」开关。',
-    null,
-    0
-  )
+function seedVideoModelsIfEmpty(_dbi) {
+  /* 模型商店改由 DMXAPI 同步 + 从目录上架，不再预置示例条目 */
 }
 
 /**
@@ -523,7 +602,7 @@ function ensureVideoMenus(dbi) {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
   ins.run(id1, parentId, 2, '工作流', 'studio', 'aiVideoStudio', 'Grid', 1, 'ai:canvas:access', 0, 1, 0)
-  ins.run(id2, parentId, 2, '模型管理', 'video-models', 'aiVideoModelManage', 'VideoCamera', 99, 'ai:video-model:list', 0, 1, 0)
+  ins.run(id2, parentId, 2, '模型商店', 'video-models', 'aiVideoModelManage', 'VideoCamera', 99, 'ai:video-model:list', 0, 1, 0)
   dbi.prepare(`UPDATE menus SET sort = 2 WHERE component_name = 'aiPromptManage' AND parent_id = ?`).run(parentId)
   const ir = dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (?, ?)')
   ir.run(1, id1)

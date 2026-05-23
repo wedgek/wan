@@ -1,5 +1,5 @@
 /**
- * 将方舟 / Seedance 返回的限时成片 URL 拉取后写入火山 TOS，返回可长期访问的直链。
+ * 将 Seedance 返回的限时成片 URL 拉取后写入火山 TOS，返回可长期访问的直链。
  *
  * 环境变量（可选）：
  * - VIDEO_RESULT_MIRROR_TOS=0：关闭转存（仍使用方舟原始 URL）

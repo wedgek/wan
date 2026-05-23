@@ -6,6 +6,7 @@ const db = require('../db')
 const seedance = require('../services/seedanceClient')
 const { pullArkJobStateAndStableResultUrl } = require('../services/videoJobArkSync')
 const { createVideoJob, allowVideoJobRate } = require('../services/videoJobService')
+const { normalizeVendor } = require('../services/modelCatalogService')
 const videoChatRouter = require('./videoChat')
 const videoAdminRouter = require('./videoAdmin')
 
@@ -91,13 +92,16 @@ function parseDefaultParams(text) {
   }
 }
 
-/** 画布：启用的模型（下拉） */
+/** 画布 / 对话创作：仅返回视频类启用模型 */
 router.get('/model/list-enabled', (req, res) => {
   try {
     const rows = database()
       .prepare(
-        `SELECT id, name, api_model_id, is_default, default_params, supports_reference_video
-         FROM video_models WHERE status = 0 ORDER BY sort ASC, id ASC`
+        `SELECT vm.id, vm.name, vm.api_model_id, vm.is_default, vm.default_params, vm.supports_reference_video,
+                mc.vendor AS catalog_vendor
+         FROM video_models vm
+         LEFT JOIN model_catalog mc ON mc.id = vm.catalog_id
+         WHERE vm.status = 0 AND vm.modality = 'video' ORDER BY vm.sort ASC, vm.id ASC`
       )
       .all()
     res.json(
@@ -106,6 +110,7 @@ router.get('/model/list-enabled', (req, res) => {
           id: r.id,
           name: r.name,
           apiModelId: r.api_model_id,
+          vendor: normalizeVendor(r.catalog_vendor || '', r.api_model_id),
           isDefault: r.is_default === 1,
           supportsReferenceVideo: r.supports_reference_video === 1,
           defaultParams: parseDefaultParams(r.default_params),

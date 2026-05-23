@@ -2,7 +2,7 @@ const express = require('express')
 const { ok, fail } = require('../utils/response')
 const db = require('../db')
 const seedance = require('../services/seedanceClient')
-const { pullArkJobStateAndStableResultUrl } = require('../services/videoJobArkSync')
+const { pullArkJobStateAndStableResultUrl, syncAssistantMessagesForJob } = require('../services/videoJobArkSync')
 const { createVideoJob, allowVideoJobRate } = require('../services/videoJobService')
 const { polishPrompt, polishPromptStream } = require('../services/promptPolishService')
 const { getPolishTextModelStatus } = require('../services/textModelService')
@@ -136,21 +136,11 @@ function syncAssistantMessagesFromJobs(dbi, userId, sessionId) {
   const msgs = dbi
     .prepare(
       `SELECT id, video_job_id FROM video_chat_messages
-       WHERE session_id = ? AND user_id = ? AND role = 'assistant' AND video_job_id IS NOT NULL`
+       WHERE session_id = ? AND user_id = ? AND role = 'assistant' AND video_job_id IS NOT NULL`,
     )
     .all(sessionId, userId)
   for (const m of msgs) {
-    const job = dbi
-      .prepare(
-        `SELECT status, result_url, error_message FROM video_jobs WHERE id = ? AND user_id = ?`
-      )
-      .get(m.video_job_id, userId)
-    if (!job) continue
-    dbi
-      .prepare(
-        `UPDATE video_chat_messages SET status = ?, result_url = ?, error_message = ? WHERE id = ?`
-      )
-      .run(job.status, job.result_url || '', job.error_message || '', m.id)
+    syncAssistantMessagesForJob(dbi, m.video_job_id)
   }
 }
 
@@ -160,9 +150,10 @@ async function syncJobsForSession(dbi, userId, sessionIds) {
   const placeholders = sessionIds.map(() => '?').join(',')
   const jobs = dbi
     .prepare(
-      `SELECT DISTINCT j.id, j.external_task_id, j.status
+      `SELECT DISTINCT j.id, j.external_task_id, j.status, vm.api_model_id, j.api_profile, j.request_payload
        FROM video_jobs j
        INNER JOIN video_chat_messages m ON m.video_job_id = j.id
+       LEFT JOIN video_models vm ON vm.id = j.video_model_id
        WHERE j.user_id = ?
          AND m.session_id IN (${placeholders})
          AND j.external_task_id IS NOT NULL
@@ -174,6 +165,9 @@ async function syncJobsForSession(dbi, userId, sessionIds) {
       const { status, resultUrl, errorMessage } = await pullArkJobStateAndStableResultUrl(
         j.external_task_id,
         j.id,
+        j.api_model_id || '',
+        j.api_profile || '',
+        j.request_payload || '',
       )
       if (status !== j.status || resultUrl || errorMessage) {
         dbi
@@ -181,9 +175,18 @@ async function syncJobsForSession(dbi, userId, sessionIds) {
             `UPDATE video_jobs SET status = ?, result_url = COALESCE(?, result_url), error_message = ?, updated_at = datetime('now') WHERE id = ?`
           )
           .run(status, resultUrl || null, errorMessage || null, j.id)
+        syncAssistantMessagesForJob(dbi, j.id)
       }
     } catch (e) {
       console.error('[videoChat] sync job', j.id, e.message)
+      if (/task status:\s*FAILED|任务.*失败/i.test(String(e.message || ''))) {
+        dbi
+          .prepare(
+            `UPDATE video_jobs SET status = 'failed', error_message = ?, updated_at = datetime('now') WHERE id = ?`,
+          )
+          .run(String(e.message), j.id)
+        syncAssistantMessagesForJob(dbi, j.id)
+      }
     }
   }
 }
@@ -299,8 +302,11 @@ router.get('/messages/page', async (req, res) => {
       .get(sessionId, req.userId)
     if (!sess) return res.json(fail(404, '会话不存在'))
 
-    await syncJobsForSession(database(), req.userId, [sessionId])
-    syncAssistantMessagesFromJobs(database(), req.userId, sessionId)
+    const skipJobSync = req.query.syncJobs === '0' || req.query.syncJobs === 'false'
+    if (!skipJobSync) {
+      await syncJobsForSession(database(), req.userId, [sessionId])
+      syncAssistantMessagesFromJobs(database(), req.userId, sessionId)
+    }
 
     const pageNo = Math.max(1, parseInt(req.query.pageNo, 10) || 1)
     const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize, 10) || 100))
@@ -405,6 +411,41 @@ router.post('/send', async (req, res) => {
   const assistantMsgId = Number(assistIns.lastInsertRowid)
 
   d.prepare(`UPDATE video_chat_sessions SET updated_at = datetime('now') WHERE id = ?`).run(sessionId)
+
+  const vmForSync = jobMeta
+    ? d.prepare('SELECT api_model_id FROM video_models WHERE id = ?').get(jobMeta.video_model_id)
+    : null
+  const syncJobId = result.id
+  const syncTaskId = result.externalTaskId
+  const syncModelId = vmForSync?.api_model_id || ''
+  const syncProfile = result.apiProfile || ''
+  const syncPayloadRow = d
+    .prepare('SELECT request_payload FROM video_jobs WHERE id = ? AND user_id = ?')
+    .get(syncJobId, req.userId)
+  const syncRequestPayload = syncPayloadRow?.request_payload || ''
+  setImmediate(() => {
+    pullArkJobStateAndStableResultUrl(
+      syncTaskId,
+      syncJobId,
+      syncModelId,
+      syncProfile,
+      syncRequestPayload,
+    )
+      .then(({ status, resultUrl, errorMessage }) => {
+        const dbi = database()
+        if (status !== result.status || resultUrl || errorMessage) {
+          dbi
+            .prepare(
+              `UPDATE video_jobs SET status = ?, result_url = COALESCE(?, result_url), error_message = ?, updated_at = datetime('now') WHERE id = ?`,
+            )
+            .run(status, resultUrl || null, errorMessage || null, syncJobId)
+        }
+        syncAssistantMessagesForJob(dbi, syncJobId)
+      })
+      .catch((e) => {
+        console.error('[videoChat] send initial sync', syncJobId, e.message)
+      })
+  })
 
   res.json(
     ok({

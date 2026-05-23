@@ -4,7 +4,8 @@
 const express = require('express')
 const db = require('../db')
 const { ok, fail } = require('../utils/response')
-const { rowToCatalog, parseJsonField, normalizeVendor, buildCatalogCapabilities, capabilitiesToJson } = require('../services/modelCatalogService')
+const { rowToCatalog, parseJsonField, normalizeVendor, buildCatalogCapabilities, capabilitiesToJson, inferApiProfile } = require('../services/modelCatalogService')
+const { listProfileOptions } = require('../services/videoApiProfiles')
 const { syncDmxapiModelCatalog } = require('../services/dmxapiModelSync')
 const { publishCatalogToStore } = require('../services/catalogPublishService')
 
@@ -65,7 +66,7 @@ router.get('/model-catalog/page', (req, res) => {
   const rows = d
     .prepare(
       `SELECT id, api_model_id, display_name, modality, vendor, source, status, tags,
-              capabilities_json, default_params, remark, dmxapi_price_text, dmxapi_price_json,
+              capabilities_json, default_params, remark, api_profile, dmxapi_price_text, dmxapi_price_json,
               datetime(synced_at, 'localtime') AS synced_at,
               datetime(created_at, 'localtime') AS create_time,
               datetime(updated_at, 'localtime') AS update_time,
@@ -84,7 +85,7 @@ router.get('/model-catalog/get', (req, res) => {
   const row = database()
     .prepare(
       `SELECT id, api_model_id, display_name, modality, vendor, source, status, tags,
-              capabilities_json, default_params, remark, dmxapi_price_text, dmxapi_price_json,
+              capabilities_json, default_params, remark, api_profile, dmxapi_price_text, dmxapi_price_json,
               datetime(synced_at, 'localtime') AS synced_at,
               datetime(created_at, 'localtime') AS create_time,
               datetime(updated_at, 'localtime') AS update_time
@@ -135,6 +136,10 @@ router.get('/model-catalog/options', (req, res) => {
   res.json(ok(rows.map(rowToCatalog)))
 })
 
+router.get('/model-catalog/profile-options', (req, res) => {
+  res.json(ok(listProfileOptions()))
+})
+
 router.post('/model-catalog/create', (req, res) => {
   const b = req.body || {}
   const apiModelId = String(b.apiModelId || '').trim()
@@ -169,12 +174,17 @@ router.post('/model-catalog/create', (req, res) => {
   const dup = d.prepare('SELECT id FROM model_catalog WHERE api_model_id = ?').get(apiModelId)
   if (dup) return res.json(fail(400, '该模型 ID 已存在于目录中'))
 
+  const apiProfile =
+    String(b.apiProfile || '').trim() ||
+    (modality === 'video' ? inferApiProfile(apiModelId) : '') ||
+    null
+
   const info = d
     .prepare(
       `INSERT INTO model_catalog (
         api_model_id, display_name, modality, vendor, source, status, tags,
-        capabilities_json, default_params, remark, updated_at
-      ) VALUES (?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?, datetime('now'))`,
+        capabilities_json, default_params, remark, api_profile, updated_at
+      ) VALUES (?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?, datetime('now'))`,
     )
     .run(
       apiModelId,
@@ -186,6 +196,7 @@ router.post('/model-catalog/create', (req, res) => {
       capabilitiesJson,
       defaultParamsJson,
       String(b.remark || '').trim(),
+      apiProfile,
     )
   res.json(ok({ id: info.lastInsertRowid }))
 })
@@ -228,9 +239,14 @@ router.put('/model-catalog/update', (req, res) => {
   const dup = d.prepare('SELECT id FROM model_catalog WHERE api_model_id = ? AND id != ?').get(apiModelId, id)
   if (dup) return res.json(fail(400, '该模型 ID 已被其他目录条目使用'))
 
+  const apiProfile =
+    String(b.apiProfile || '').trim() ||
+    (modality === 'video' ? inferApiProfile(apiModelId) : '') ||
+    null
+
   d.prepare(
     `UPDATE model_catalog SET api_model_id = ?, display_name = ?, modality = ?, vendor = ?,
-      status = ?, tags = ?, capabilities_json = ?, default_params = ?, remark = ?,
+      status = ?, tags = ?, capabilities_json = ?, default_params = ?, remark = ?, api_profile = ?,
       updated_at = datetime('now')
      WHERE id = ?`,
   ).run(
@@ -243,6 +259,7 @@ router.put('/model-catalog/update', (req, res) => {
     capabilitiesJson,
     defaultParamsJson,
     String(b.remark || '').trim(),
+    apiProfile,
     id,
   )
   res.json(ok(true))

@@ -4,9 +4,9 @@ const { requireAuth } = auth
 const { ok, fail } = require('../utils/response')
 const db = require('../db')
 const seedance = require('../services/seedanceClient')
-const { pullArkJobStateAndStableResultUrl } = require('../services/videoJobArkSync')
+const { pullArkJobStateAndStableResultUrl, syncAssistantMessagesForJob } = require('../services/videoJobArkSync')
 const { createVideoJob, allowVideoJobRate } = require('../services/videoJobService')
-const { normalizeVendor } = require('../services/modelCatalogService')
+const { normalizeVendor, parseJsonField, getProfileById, mergeConstraints, inferApiProfile } = require('../services/modelCatalogService')
 const videoChatRouter = require('./videoChat')
 const videoAdminRouter = require('./videoAdmin')
 
@@ -98,24 +98,53 @@ router.get('/model/list-enabled', (req, res) => {
     const rows = database()
       .prepare(
         `SELECT vm.id, vm.name, vm.api_model_id, vm.is_default, vm.default_params, vm.supports_reference_video,
-                mc.vendor AS catalog_vendor
+                vm.api_profile, mc.vendor AS catalog_vendor, mc.capabilities_json AS catalog_capabilities_json
          FROM video_models vm
          LEFT JOIN model_catalog mc ON mc.id = vm.catalog_id
-         WHERE vm.status = 0 AND vm.modality = 'video' ORDER BY vm.sort ASC, vm.id ASC`
+         WHERE vm.status = 0 AND vm.modality = 'video' ORDER BY vm.sort ASC, vm.id ASC`,
       )
       .all()
     res.json(
       ok(
-        rows.map((r) => ({
-          id: r.id,
-          name: r.name,
-          apiModelId: r.api_model_id,
-          vendor: normalizeVendor(r.catalog_vendor || '', r.api_model_id),
-          isDefault: r.is_default === 1,
-          supportsReferenceVideo: r.supports_reference_video === 1,
-          defaultParams: parseDefaultParams(r.default_params),
-        }))
-      )
+        rows.map((r) => {
+          const apiProfile =
+            String(r.api_profile || '').trim() ||
+            inferApiProfile(r.api_model_id) ||
+            ''
+          const profile = getProfileById(apiProfile)
+          const catalogCaps = parseJsonField(r.catalog_capabilities_json, {})
+          const constraints = profile
+            ? mergeConstraints(profile, catalogCaps)
+            : {
+                supportsReferenceVideo: r.supports_reference_video === 1,
+                supportsReferenceImage: true,
+                requiresImageWithVideo: false,
+                maxRefImages: 9,
+                maxRefVideos: r.supports_reference_video === 1 ? 3 : 0,
+                maxRefTotal: 12,
+                durationMin: 4,
+                durationMax: 15,
+                durationChoices: null,
+                refVideoDurationMin: 1,
+                refVideoDurationMax: 30,
+                aspectRatios: ['16:9', '9:16', '1:1'],
+                resolutions: ['720p', '1080p'],
+              }
+          return {
+            id: r.id,
+            name: r.name,
+            apiModelId: r.api_model_id,
+            vendor: normalizeVendor(r.catalog_vendor || '', r.api_model_id),
+            isDefault: r.is_default === 1,
+            apiProfile,
+            constraints,
+            supportsReferenceVideo: !!constraints.supportsReferenceVideo,
+            supportsReferenceImage: constraints.supportsReferenceImage !== false,
+            requiresImageWithVideo: !!constraints.requiresImageWithVideo,
+            defaultParams: parseDefaultParams(r.default_params),
+          }
+        }),
+      ),
     )
   } catch (e) {
     console.error('[video] list-enabled.models', e.message)
@@ -164,9 +193,12 @@ router.get('/jobs/get', async (req, res) => {
 
   const row = database()
     .prepare(
-      `SELECT id, user_id, project_id, video_model_id, mode, source_image_url, source_video_urls, external_task_id, status, prompt, result_url, error_message,
-              datetime(created_at, 'localtime') as create_time, datetime(updated_at, 'localtime') as update_time
-       FROM video_jobs WHERE id = ? AND user_id = ?`
+      `SELECT j.id, j.user_id, j.project_id, j.video_model_id, j.mode, j.source_image_url, j.source_video_urls, j.external_task_id, j.status, j.prompt, j.result_url, j.error_message,
+              j.api_profile, j.request_payload, vm.api_model_id,
+              datetime(j.created_at, 'localtime') as create_time, datetime(j.updated_at, 'localtime') as update_time
+       FROM video_jobs j
+       LEFT JOIN video_models vm ON vm.id = j.video_model_id
+       WHERE j.id = ? AND j.user_id = ?`
     )
     .get(id, req.userId)
   if (!row) return res.json(fail(404, '任务不存在'))
@@ -177,6 +209,9 @@ router.get('/jobs/get', async (req, res) => {
       const { status, resultUrl, errorMessage } = await pullArkJobStateAndStableResultUrl(
         row.external_task_id,
         row.id,
+        row.api_model_id || '',
+        row.api_profile || '',
+        row.request_payload || '',
       )
       if (status !== row.status || resultUrl || errorMessage) {
         database()
@@ -187,9 +222,20 @@ router.get('/jobs/get', async (req, res) => {
         row.status = status
         if (resultUrl) row.result_url = resultUrl
         if (errorMessage) row.error_message = errorMessage
+        syncAssistantMessagesForJob(database(), id)
       }
     } catch (e) {
       console.error('[video] sync job', e.message)
+      if (/task status:\s*FAILED|任务.*失败/i.test(String(e.message || ''))) {
+        database()
+          .prepare(
+            `UPDATE video_jobs SET status = 'failed', error_message = ?, updated_at = datetime('now') WHERE id = ?`,
+          )
+          .run(String(e.message), id)
+        syncAssistantMessagesForJob(database(), id)
+        row.status = 'failed'
+        row.error_message = String(e.message)
+      }
     }
   }
 

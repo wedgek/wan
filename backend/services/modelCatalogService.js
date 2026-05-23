@@ -2,13 +2,22 @@
  * 模型目录：模态推断、DMXAPI 同步维护
  */
 const { mergeRemoteMeta } = require('./dmxapiModelMeta')
+const {
+  inferApiProfile,
+  getProfileById,
+  mergeConstraints,
+  buildCatalogCapabilitiesFromProfile,
+} = require('./videoApiProfiles')
 
 function inferModality(apiModelId, hint = '') {
   const id = String(apiModelId || '').toLowerCase()
   const h = String(hint || '').toLowerCase()
   const s = `${id} ${h}`
 
-  if (/seedance|kling|vidu|wan2\.|video|hailuo|pixverse|seedance-2-0-get|happyhorse/.test(s)) return 'video'
+  if (/seedance|kling|vidu|wan2\.|video|hailuo|pixverse|seedance-2-0-get|happyhorse/.test(s)) {
+    if (/wan2\.[0-9]+-(?:t2i|image|image-pro)/.test(id)) return 'image'
+    return 'video'
+  }
   if (/seedream|image|gpt-image|qwen-image|wan.*image|recraft|flux|midjourney|dall/.test(s)) return 'image'
   if (/doubao/.test(s) && !/seedance|seedream/.test(s)) return 'text'
   if (
@@ -46,28 +55,32 @@ function isQueryModelId(apiModelId) {
   return /-get(?:$|-)/.test(id) || id.endsWith('-get-all')
 }
 
-/** Seedance 2.0 / 可灵 / 万相 r2v 等支持「参考视频」；排除 *-get 与专用 *-image2video 端点 */
-function inferSupportsReferenceVideo(apiModelId, hint = '') {
+/**
+ * 是否支持参考视频：优先 API Profile；无 Profile 时仅按 model id 显式规则推断，不用描述/标签猜测。
+ */
+function inferSupportsReferenceVideo(apiModelId, _hint = '') {
+  const profileId = inferApiProfile(apiModelId)
+  if (profileId) {
+    const profile = getProfileById(profileId)
+    if (profile) return !!mergeConstraints(profile).supportsReferenceVideo
+  }
   const id = String(apiModelId || '').toLowerCase()
   if (!id || isQueryModelId(id)) return false
-  const s = `${id} ${String(hint || '').toLowerCase()}`
 
-  if (/seedance-2[.-]0|doubao-seedance-2[.-]0/.test(s)) return true
-  if (/(?:^|[-_/])(?:r2v|reference-video|video-generation)(?:$|[-_/])/.test(id)) return true
-  if (/happyhorse.*r2v|wan2\.6-r2v/.test(id)) return true
-
-  if (/kling/.test(id)) {
-    if (/-image2video(?:$|-)/.test(id)) return false
-    if (/^kling-v(?:2-[56]|3)(?:$|-)/.test(id)) return true
-    if (/kling.*omni|kling.*video-generation/.test(id)) return true
-  }
-
-  if (/参考视频|reference[\s_-]?video|动作控制|video_list|reference_urls|\br2v\b/.test(s)) return true
+  if (/seedance-2[.-]0|doubao-seedance-2[.-]0/.test(id)) return true
+  if (/wan2\.[0-9]+-r2v/.test(id)) return true
+  if (/^kling-v(?:2-[56]|2\.[56])(?:$|-)/.test(id) && !/-image2video(?:$|-)/.test(id)) return true
 
   return false
 }
 
 function buildCatalogCapabilities(apiModelId, modality, hint = '', overrides = null) {
+  const profileId =
+    (overrides && overrides.apiProfile) ||
+    inferApiProfile(apiModelId)
+  if (modality === 'video' && profileId) {
+    return buildCatalogCapabilitiesFromProfile(apiModelId, profileId, modality, hint, overrides)
+  }
   const caps = overrides && typeof overrides === 'object' ? { ...overrides } : {}
   if (modality === 'video') {
     if (caps.supportsReferenceVideo === undefined) {
@@ -356,6 +369,11 @@ function rowToCatalog(r) {
   const capabilities = parseJsonField(r.capabilities_json, {})
   const defaultParams = parseJsonField(r.default_params, null)
   const modality = r.modality || 'unknown'
+  const apiProfile =
+    String(r.api_profile || '').trim() ||
+    capabilities.apiProfile ||
+    inferApiProfile(r.api_model_id) ||
+    ''
   return {
     id: r.id,
     apiModelId: r.api_model_id || '',
@@ -365,6 +383,7 @@ function rowToCatalog(r) {
     source: r.source || 'manual',
     status: r.status ?? 0,
     tags: r.tags || '',
+    apiProfile,
     capabilities,
     supportsReferenceVideo: modality === 'video' && !!capabilities.supportsReferenceVideo,
     defaultParams,
@@ -376,6 +395,48 @@ function rowToCatalog(r) {
     syncedAt: formatTime(r.synced_at),
     createTime: formatTime(r.create_time),
     updateTime: formatTime(r.update_time),
+  }
+}
+
+/** 回填 model_catalog / video_models 的 api_profile */
+function normalizeModelCatalogApiProfiles(dbi) {
+  try {
+    const catRows = dbi
+      .prepare(`SELECT id, api_model_id, modality, api_profile FROM model_catalog`)
+      .all()
+    const updCat = dbi.prepare('UPDATE model_catalog SET api_profile = ? WHERE id = ?')
+    const updVm = dbi.prepare(
+      'UPDATE video_models SET api_profile = ? WHERE catalog_id = ? AND (api_profile IS NULL OR TRIM(api_profile) = \'\')',
+    )
+    let changed = 0
+    for (const r of catRows) {
+      if (r.modality !== 'video') continue
+      const next = String(r.api_profile || '').trim() || inferApiProfile(r.api_model_id)
+      if (next && next !== (r.api_profile || '')) {
+        updCat.run(next, r.id)
+        updVm.run(next, r.id)
+        changed++
+      }
+    }
+    const vmRows = dbi
+      .prepare(
+        `SELECT vm.id, vm.api_model_id, vm.api_profile, vm.catalog_id
+         FROM video_models vm WHERE vm.modality = 'video' AND (vm.api_profile IS NULL OR TRIM(vm.api_profile) = '')`,
+      )
+      .all()
+    const updVmDirect = dbi.prepare('UPDATE video_models SET api_profile = ? WHERE id = ?')
+    for (const r of vmRows) {
+      const next = inferApiProfile(r.api_model_id)
+      if (next) {
+        updVmDirect.run(next, r.id)
+        changed++
+      }
+    }
+    if (changed > 0) {
+      console.log(`[db] normalized ${changed} api_profile rows`)
+    }
+  } catch (e) {
+    console.error('[db] normalizeModelCatalogApiProfiles', e.message)
   }
 }
 
@@ -401,6 +462,7 @@ module.exports = {
   inferModality,
   inferVendor,
   inferSupportsReferenceVideo,
+  inferApiProfile,
   isQueryModelId,
   buildCatalogCapabilities,
   capabilitiesToJson,
@@ -418,4 +480,7 @@ module.exports = {
   normalizeModelCatalogCapabilities,
   normalizeModelCatalogSyncMeta,
   normalizeVideoModelsModality,
+  normalizeModelCatalogApiProfiles,
+  mergeConstraints,
+  getProfileById,
 }

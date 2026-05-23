@@ -9,6 +9,7 @@ const { SYSTEM_PROMPT, MAX_INPUT_LENGTH } = require('../services/promptPolishSer
 assert.ok(SYSTEM_PROMPT.includes('@图片'))
 assert.ok(SYSTEM_PROMPT.includes('@视频'))
 assert.ok(SYSTEM_PROMPT.includes('电商'))
+assert.ok(SYSTEM_PROMPT.includes('重复优化'))
 
 assert.strictEqual(
   pickMessageContent({
@@ -78,5 +79,16 @@ assert.deepStrictEqual(
 )
 
 assert.strictEqual(MAX_INPUT_LENGTH, 20000)
+
+delete require.cache[require.resolve('../services/promptPolishService')]
+const { buildPolishMessages: buildPolishMessagesFn } = require('../services/promptPolishService')
+assert.ok(
+  buildPolishMessagesFn('与 @视频1 保持一致，仅替换 @图片1 中的产品，其余不变。').some(
+    (m) => m.role === 'user' && m.content.includes('二次轻量修订'),
+  ),
+)
+assert.ok(
+  !buildPolishMessagesFn('一只猫在跑步').some((m) => m.content.includes('二次轻量修订')),
+)
 
 console.log('[prompt-polish.test] OK')

@@ -12,7 +12,9 @@ const ORIGIN = (process.env.DMXAPI_API_BASE || 'https://www.dmxapi.cn/v1')
 /** 官方页面有说明但 pricing 接口未返回时的兜底（按 model id） */
 const KNOWN_DESCRIPTIONS = {
   'kling-v3-video-generation':
-    '可灵-视频生成模型，支持文生视频、图生视频（首尾帧）、参考视频及视频编辑。',
+    '可灵 V3 视频生成，支持文生视频、图生视频（首尾帧）及续写。',
+  'kling-v1-video-generation':
+    '可灵视频生成（DMXAPI），支持文生视频与图生视频（首尾帧）。',
   'kling-v3-get': 'kling-v3-get 获取生成的视频。',
   'wan2.6-r2v': '万相 2.6 参考视频（r2v）生成。',
   'happyhorse-1.0-r2v': '万相 2.6 参考视频（r2v）生成。',

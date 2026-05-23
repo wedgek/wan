@@ -29,13 +29,29 @@
       <el-form-item label="标签">
         <el-input v-model="formData.tags" placeholder="逗号分隔，可选" clearable clear-icon="Close" />
       </el-form-item>
+      <el-form-item v-if="formData.modality === 'video'" label="API Profile">
+        <el-select
+          v-model="formData.apiProfile"
+          placeholder="自动推断"
+          clearable
+          filterable
+          style="width: 100%"
+        >
+          <el-option
+            v-for="p in profileOptions"
+            :key="p.id"
+            :label="`${p.label} (${p.id})`"
+            :value="p.id"
+          />
+        </el-select>
+        <div class="form-item-tip">
+          决定 DMXAPI 请求协议与对话页上传约束；留空则按模型 ID 自动推断。同 Profile 内换 model 无需改代码。
+        </div>
+      </el-form-item>
       <el-form-item v-if="formData.modality === 'video'" label="参考视频">
         <el-switch v-model="supportsReferenceVideo" active-text="支持" inactive-text="不支持" />
         <div class="form-item-tip">
-          字段：<code>capabilities.supportsReferenceVideo</code>。Seedance 2.0 类（如
-          <code>doubao-seedance-2-0-*</code>）与可灵 v2.5+ / v3（如
-          <code>kling-v2-6</code>、<code>kling-v3</code>）同步时会自动识别；上架商店后会写入商店的
-          <code>supports_reference_video</code>。可灵参考视频为「动作控制」，需图+视频。
+          由 API Profile 推断为主；同步后请勿仅凭描述猜测。可灵 V3 不支持参考视频；可灵 V2 动作控制需图+视频。
         </div>
       </el-form-item>
       <el-form-item label="默认参数 JSON">
@@ -61,7 +77,19 @@
 <script setup>
 import request from "@/request"
 import { resetState, cloneDeep } from "@/utils/lodash"
-import { inferSupportsReferenceVideo } from "@/utils/catalogCapabilities"
+import { inferSupportsReferenceVideo, inferApiProfile } from "@/utils/catalogCapabilities"
+
+const profileOptions = ref([])
+
+async function loadProfileOptions() {
+  try {
+    const res = await request({ url: "/admin-api/system/model-catalog/profile-options", method: "GET" })
+    if (res.code === 0 && Array.isArray(res.data)) profileOptions.value = res.data
+  } catch (_) {
+    profileOptions.value = []
+  }
+}
+loadProfileOptions()
 
 const emit = defineEmits(["success"])
 
@@ -78,6 +106,7 @@ const defaultFormData = () => ({
   tags: "",
   remark: "",
   defaultParamsStr: "",
+  apiProfile: "",
 })
 const formData = reactive(defaultFormData())
 
@@ -85,6 +114,7 @@ watch(
   () => [formData.apiModelId, formData.modality, modalMode.value],
   ([id, modality, mode]) => {
     if (mode === "add" && modality === "video" && id) {
+      if (!formData.apiProfile) formData.apiProfile = inferApiProfile(id) || ""
       supportsReferenceVideo.value = inferSupportsReferenceVideo(id)
     }
   },
@@ -107,6 +137,7 @@ const showEdit = (row) => {
   formData.vendor = row.vendor || ""
   formData.tags = row.tags || ""
   formData.remark = row.remark || ""
+  formData.apiProfile = row.apiProfile || row.capabilities?.apiProfile || inferApiProfile(row.apiModelId) || ""
   supportsReferenceVideo.value = !!row.supportsReferenceVideo || !!row.capabilities?.supportsReferenceVideo
   if (row.defaultParams == null) {
     formData.defaultParamsStr = ""
@@ -155,8 +186,10 @@ const handleSubmit = async () => {
   const capabilities = {}
   if (formData.modality === "video") {
     capabilities.supportsReferenceVideo = supportsReferenceVideo.value
+    if (formData.apiProfile) capabilities.apiProfile = formData.apiProfile
   }
   data.capabilities = capabilities
+  data.apiProfile = formData.apiProfile || null
 
   modalLoading.value = true
   try {

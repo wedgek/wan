@@ -27,7 +27,13 @@ const SYSTEM_PROMPT = `你是电商 AI 视频生成提示词优化助手，服�
 ## 禁止
 - 不要输出「好的/以下是润色结果」等前缀或任何元说明。
 - 不要把占位符改写成「第一张图」「参考视频」等自然语言替代。
-- 不要擅自补充未提及的卖点、功效、场景或剧情。`
+- 不要擅自补充未提及的卖点、功效、场景或剧情。
+
+## 重复优化（重要）
+当用户再次提交同一段或已较完整的提示词时，默认视为「二次优化」：
+- 只做轻量修订：错别字、语序、重复啰嗦、标点与衔接；优先保留原有句式与用词。
+- 不要再次套用相同模板把全文重写成另一版「看起来差不多」的段落。
+- 若原文已清晰可执行，改动应尽量少；没有明显问题时，只做微调而非整段改写。`
 
 function stripMarkdownFence(text) {
   let s = String(text || '').trim()
@@ -47,7 +53,7 @@ async function polishPrompt(dbi, rawText) {
   const { content } = await chatCompletion({
     model: modelRow.apiModelId,
     messages: buildPolishMessages(input),
-    temperature: 0.5,
+    temperature: 0.62,
   })
 
   const polished = finalizePolishedText(content)
@@ -74,9 +80,18 @@ function validatePolishInput(rawText) {
 }
 
 function buildPolishMessages(input) {
+  const body = String(input || '').trim()
+  const hasMediaRef = /@(?:图片|视频|image|video)\d/i.test(body)
+  const hasPolishedStyle = /保持一致|相同镜头|仅(?:做|替换|改)|其余.*不变|清晰可读|运镜|构图/.test(body)
+  const looksPolished = hasMediaRef && hasPolishedStyle
+
+  const userContent = looksPolished
+    ? `以下提示词可能已优化过，请做二次轻量修订（保留原句式，仅修正明显问题，勿整段重写）：\n\n${body}`
+    : body
+
   return [
     { role: 'system', content: SYSTEM_PROMPT },
-    { role: 'user', content: input },
+    { role: 'user', content: userContent },
   ]
 }
 
@@ -102,7 +117,7 @@ async function polishPromptStream(dbi, rawText, onDelta, opts = {}) {
   const chatOpts = {
     model: modelRow.apiModelId,
     messages: buildPolishMessages(input),
-    temperature: 0.5,
+    temperature: 0.62,
     signal: opts.signal,
   }
 
@@ -147,4 +162,5 @@ module.exports = {
   polishPromptStream,
   SYSTEM_PROMPT,
   MAX_INPUT_LENGTH,
+  buildPolishMessages,
 }

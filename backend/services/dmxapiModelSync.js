@@ -2,7 +2,7 @@
  * 从 DMXAPI GET /v1/models + /api/pricing 同步模型目录
  * 文档：https://doc.dmxapi.cn/model-list.html
  */
-const { inferModality, inferVendor, normalizeVendor, buildCatalogCapabilities, capabilitiesToJson, priceJsonToText } = require('./modelCatalogService')
+const { inferModality, inferVendor, normalizeVendor, buildCatalogCapabilities, capabilitiesToJson, priceJsonToText, inferApiProfile } = require('./modelCatalogService')
 const { catalogDisplayName } = require('./catalogDisplayName')
 const { fetchDmxapiPricingMap, mergeRemoteMeta } = require('./dmxapiModelMeta')
 
@@ -81,13 +81,13 @@ function upsertSyncModels(dbi, remoteList, pricingBundle = { map: new Map(), gro
   const ins = dbi.prepare(
     `INSERT INTO model_catalog (
       api_model_id, display_name, modality, vendor, source, status, tags,
-      capabilities_json, default_params, remark, dmxapi_price_text, dmxapi_price_json, raw_meta_json, synced_at, updated_at
-    ) VALUES (?, ?, ?, ?, 'sync', 0, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+      capabilities_json, default_params, remark, dmxapi_price_text, dmxapi_price_json, raw_meta_json, api_profile, synced_at, updated_at
+    ) VALUES (?, ?, ?, ?, 'sync', 0, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
   )
   const upd = dbi.prepare(
     `UPDATE model_catalog SET display_name = ?, modality = ?, vendor = ?, tags = ?,
       capabilities_json = ?, remark = ?, dmxapi_price_text = ?, dmxapi_price_json = ?,
-      raw_meta_json = ?, synced_at = datetime('now'), updated_at = datetime('now')
+      raw_meta_json = ?, api_profile = ?, synced_at = datetime('now'), updated_at = datetime('now')
      WHERE id = ? AND source != 'manual'`,
   )
 
@@ -108,6 +108,7 @@ function upsertSyncModels(dbi, remoteList, pricingBundle = { map: new Map(), gro
     const capabilitiesJson = capabilitiesToJson(
       buildCatalogCapabilities(m.id, modality, meta.hint || m.description),
     )
+    const apiProfile = modality === 'video' ? inferApiProfile(m.id) || null : null
     const displayName = catalogDisplayName(m.id)
     const priceJson = priceJsonToText(meta.dmxapiPrice)
     const rawPayload = {
@@ -130,6 +131,7 @@ function upsertSyncModels(dbi, remoteList, pricingBundle = { map: new Map(), gro
         meta.dmxapiPriceText,
         priceJson || null,
         rawJson,
+        apiProfile,
       )
       inserted++
     } else if (existing.source !== 'manual') {
@@ -143,6 +145,7 @@ function upsertSyncModels(dbi, remoteList, pricingBundle = { map: new Map(), gro
         meta.dmxapiPriceText,
         priceJson || null,
         rawJson,
+        apiProfile,
         existing.id,
       )
       updated++

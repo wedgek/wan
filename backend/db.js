@@ -9,6 +9,7 @@ const {
   normalizeModelCatalogCapabilities,
   normalizeModelCatalogSyncMeta,
   normalizeVideoModelsModality,
+  normalizeModelCatalogApiProfiles,
 } = require('./services/modelCatalogService')
 
 function hashPassword(password) {
@@ -82,6 +83,7 @@ function applySchemaPatches(dbi) {
     normalizeModelCatalogCapabilities(dbi)
     normalizeModelCatalogSyncMeta(dbi)
     normalizeVideoModelsModality(dbi)
+    normalizeModelCatalogApiProfiles(dbi)
     ensureModelMenuOrder(dbi)
     dedupeMenusByComponentName(dbi)
     ensureSuperAdminAllMenuIds(dbi)
@@ -159,6 +161,8 @@ function ensureVideoSchema(dbi) {
   ensureColumn(dbi, 'video_models', 'catalog_id', 'INTEGER')
   ensureColumn(dbi, 'video_models', 'modality', "TEXT NOT NULL DEFAULT 'video'")
   ensureColumn(dbi, 'video_models', 'tags', 'TEXT')
+  ensureColumn(dbi, 'video_models', 'api_profile', 'TEXT')
+  ensureColumn(dbi, 'video_jobs', 'api_profile', 'TEXT')
 }
 
 /** 模型目录：DMXAPI 同步 / 手动维护的候选模型库 */
@@ -186,6 +190,7 @@ function ensureModelCatalogSchema(dbi) {
   `)
   ensureColumn(dbi, 'model_catalog', 'dmxapi_price_text', 'TEXT')
   ensureColumn(dbi, 'model_catalog', 'dmxapi_price_json', 'TEXT')
+  ensureColumn(dbi, 'model_catalog', 'api_profile', 'TEXT')
 }
 
 /** 视频创作 Hub：项目表 + 任务字段；幂等 */

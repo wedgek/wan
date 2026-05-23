@@ -8,6 +8,8 @@
     "db:patch": "node scripts/db-apply-patches.cjs",
     "tos:check": "node scripts/tos-diagnose.cjs",
     "test:seedance": "node scripts/seedance-client.test.cjs",
+    "test:profiles": "node scripts/video-api-profiles.test.cjs",
+    "test:kling": "node scripts/kling-video-client.test.cjs",
     "test:catalog": "node scripts/model-catalog.test.cjs",
     "test:polish": "node scripts/prompt-polish.test.cjs"
   },

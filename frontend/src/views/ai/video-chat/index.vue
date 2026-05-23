@@ -46,6 +46,9 @@
               <div class="toolbar-model-option">
                 <VendorBadge :vendor="x.vendor" :api-model-id="x.apiModelId" :show-label="false" compact />
                 <span class="toolbar-model-option__name">{{ x.name }}</span>
+                <span v-if="modelCapabilityTags(x).length" class="toolbar-model-option__tags">
+                  <el-tag v-for="t in modelCapabilityTags(x)" :key="t" size="small" type="info">{{ t }}</el-tag>
+                </span>
               </div>
             </el-option>
           </el-select>
@@ -126,7 +129,7 @@
                             <span class="msg-assist-loading__ring" aria-hidden="true" />
                             <div class="msg-assist-loading__copy">
                               <span class="msg-assist-loading__title">正在生成视频</span>
-                              <span class="msg-assist-loading__sub">任务进行中，可随时离开页面，稍后回来查看结果</span>
+                              <span class="msg-assist-loading__sub">任务进行中；生成成功后会转存至对象存储，完成后自动展示成片（无需刷新）</span>
                             </div>
                           </div>
                           <template v-else-if="assistantIsSuccess(m)">
@@ -443,7 +446,7 @@
                 </draggable>
               </div>
 
-              <div class="composer-input-wrap">
+              <div class="composer-input-wrap" :class="{ 'composer-input-wrap--polishing': polishing }">
                 <el-input
                   ref="composerInputRef"
                   v-model="inputText"
@@ -497,14 +500,35 @@
                   v-if="polishAvailable"
                   type="button"
                   class="composer-polish-btn"
-                  :class="{ 'is-loading': polishing }"
-                  :disabled="!canPolish"
-                  aria-label="AI 润色"
+                  :class="{ 'composer-polish-btn--thinking': polishing }"
+                  :disabled="!canPolish && !polishing"
+                  :aria-label="polishing ? POLISH_BUSY_LABEL : POLISH_ACTION_LABEL"
+                  aria-live="polite"
                   @click="polishPrompt"
                 >
-                  <el-icon v-if="polishing" class="composer-polish-btn__spinner"><component :is="$icons.Loading" /></el-icon>
-                  <span v-else class="composer-polish-btn__emoji" aria-hidden="true">🤖</span>
-                  AI 润色
+                  <span class="composer-polish-btn__content">
+                    <span class="composer-polish-btn__icon-slot">
+                      <Transition name="polish-emoji" mode="out-in">
+                        <span
+                          :key="polishing ? 'busy' : 'idle'"
+                          class="composer-polish-btn__icon"
+                          :class="{ 'composer-polish-btn__icon--busy': polishing }"
+                          aria-hidden="true"
+                        >{{ polishing ? POLISH_BUSY_EMOJI : POLISH_IDLE_EMOJI }}</span>
+                      </Transition>
+                    </span>
+                    <span class="composer-polish-btn__label-slot">
+                      <Transition name="polish-label" mode="out-in">
+                        <span :key="polishing ? 'busy' : 'idle'" class="composer-polish-btn__label">
+                          <template v-if="polishing">
+                            {{ POLISH_BUSY_LABEL }}
+                            <span class="composer-polish-btn__wave" aria-hidden="true"><i /><i /><i /></span>
+                          </template>
+                          <template v-else>{{ POLISH_ACTION_LABEL }}</template>
+                        </span>
+                      </Transition>
+                    </span>
+                  </span>
                 </button>
                 <span class="composer-hint">Ctrl + Enter 发送</span>
               </div>
@@ -633,6 +657,17 @@ import { uploadImage, uploadVideo, getFileExt } from "@/request/oss"
 import logoMark from "@/assets/images/logo.svg"
 import ProductLibraryPickerDialog from "./ProductLibraryPickerDialog.vue"
 import VendorBadge from "@/components/vendor-badge/index.vue"
+import {
+  modelConstraints,
+  modelAllowsReferenceVideo as checkModelAllowsRefVideo,
+  modelAllowsReferenceImage as checkModelAllowsRefImage,
+  pruneAttachmentsForModel,
+  modelCapabilityTags,
+  outputDurationChoices,
+  clampOutputDuration,
+  refVideoDurationMin,
+  refVideoDurationMax,
+} from "@/utils/videoModelConstraints"
 
 /** 懒加载图片组件：进入可视区域后才加载 */
 const LazyImage = defineComponent({
@@ -753,10 +788,6 @@ const VC_ASPECT_STORAGE_KEY = "wan-ai-video-chat-aspect"
 const VC_DURATION_STORAGE_KEY = "wan-ai-video-chat-duration"
 const VC_RESOLUTION_STORAGE_KEY = "wan-ai-video-chat-resolution"
 
-/** 与后端 videoChat normalize 及方舟 Seedance 文档常见区间对齐 */
-const VIDEO_GEN_DURATION_MIN = 4
-const VIDEO_GEN_DURATION_MAX = 15
-
 const VALID_RESOLUTIONS = ["720p", "1080p"]
 
 const videoAspectRatio = ref("9:16")
@@ -765,11 +796,6 @@ const videoResolution = ref("720p")
 
 const authStore = useAuthStore()
 const isAdmin = computed(() => authStore.roles?.includes(1))
-const videoDurationChoices = computed(() => {
-  const list = []
-  for (let s = VIDEO_GEN_DURATION_MIN; s <= VIDEO_GEN_DURATION_MAX; s++) list.push(s)
-  return list
-})
 
 const pendingVideoDialogVisible = ref(false)
 const pendingVideoPreviewUrl = ref("")
@@ -791,11 +817,12 @@ function readStoredAspectRatio() {
   return null
 }
 
-function readStoredDurationSec() {
+function readStoredDurationSec(fallbackChoices = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]) {
   try {
     const r = sessionStorage.getItem(VC_DURATION_STORAGE_KEY)
     const n = parseInt(String(r || ""), 10)
-    if (Number.isFinite(n) && n >= VIDEO_GEN_DURATION_MIN && n <= VIDEO_GEN_DURATION_MAX) return n
+    const choices = fallbackChoices.length ? fallbackChoices : [5]
+    if (Number.isFinite(n) && choices.includes(n)) return n
   } catch (_) {
     /* ignore */
   }
@@ -875,14 +902,7 @@ const IMAGE_EXTS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"])
 /** 参考视频：仅 MP4 / MOV（扩展名或小写 MIME） */
 const REFERENCE_VIDEO_EXTS = new Set(["mp4", "mov"])
 
-/** 参考附件总数上限：图 + 视 + 音（当前仅图/视，音留作同上限计数） */
-const REF_ATTACHMENT_MAX_TOTAL = 12
-/** 参考视频条数上限 */
-const REF_VIDEO_MAX_COUNT = 3
-/** 参考视频总时长（秒）：所有参考视频时长之和 */
-const REF_VIDEO_DURATION_SUM_MIN = 2
-const REF_VIDEO_DURATION_SUM_MAX = 15
-/** 参考视频体积：单文件与总和均须 < 此值（字节） */
+/** 参考附件上限由当前模型 constraints 驱动（list-enabled 返回） */
 const REF_VIDEO_MAX_BYTES = 50 * 1024 * 1024
 /** 单路参考视频像素数（宽×高）；上限兼容 1080p（1920×1080 = 2073600） */
 const REF_VIDEO_PIXELS_MIN = 409_600
@@ -890,11 +910,21 @@ const REF_VIDEO_PIXELS_MAX = 2_073_600
 
 /** 输入框字数上限（与 Element 计数器一致） */
 const INPUT_MAX_LENGTH = 20000
+const POLISH_ACTION_LABEL = "AI 优化"
+const POLISH_BUSY_LABEL = "思考中"
+const POLISH_IDLE_EMOJI = "🧐"
+const POLISH_BUSY_EMOJI = "🤔"
+const POLISH_SUCCESS_MESSAGE = "提示词已优化"
 
 /**
- * 存在「生成中」助手消息时的列表轮询间隔（毫秒）。
- * 固定 4s 对 1～3 分钟级视频偏密，徒增请求与日志；8～12s 对完成态延迟通常可接受，可按业务微调。
+ * 对话创作 HTTP 超时（毫秒）
+ * - SEND：/send 同步等 DMXAPI 创建任务，多模态可能 >2min
+ * - MESSAGES：轮询含「查状态 + 同步转存 TOS」，需大于后端 VIDEO_TOS_MIRROR_TIMEOUT_MS（默认 5min）
  */
+const VIDEO_CHAT_SEND_TIMEOUT_MS = 300000
+const VIDEO_CHAT_MESSAGES_TIMEOUT_MS = 360000
+const VIDEO_CHAT_JOB_SYNC_TIMEOUT_MS = 120000
+const VIDEO_CHAT_POLISH_TIMEOUT_MS = 120000
 const VIDEO_CHAT_POLL_INTERVAL_MS = 8000
 
 function truncatePromptPreview(raw, maxLen = 96) {
@@ -903,9 +933,93 @@ function truncatePromptPreview(raw, maxLen = 96) {
   return `${s.slice(0, maxLen)}…`
 }
 
-/** 参考视频是否允许：以「模型管理」中「支持参考视频」开关为准（见 /admin-api/video/model/list-enabled） */
+/** 参考视频是否允许：以模型 constraints 为准 */
 function modelAllowsReferenceVideo(m) {
-  return !!(m && m.supportsReferenceVideo)
+  return checkModelAllowsRefVideo(m)
+}
+
+function modelAllowsReferenceImage(m) {
+  return checkModelAllowsRefImage(m)
+}
+
+/** 按当前模型裁剪附件；notify 时弹出说明（与切换模型时行为一致） */
+function applyAttachmentsForCurrentModel(rawImages, rawVideos, rawVideosMeta, { notify = false } = {}) {
+  const pruned = pruneAttachmentsForModel(
+    selectedModel.value,
+    rawImages || [],
+    rawVideos || [],
+    rawVideosMeta || [],
+  )
+  if (notify && pruned.notes.length) {
+    ElMessage.info(pruned.notes.join("；"))
+  }
+  return pruned
+}
+
+function attachmentEmptyMessage() {
+  return "当前模型无法使用该消息的参考素材，请切换模型或编辑内容后再试"
+}
+
+/** 将裁剪后的内容写入底部输入框（编辑 / 重试降级共用） */
+function fillComposerFromMessage(rawText, pruned) {
+  inputText.value = String(rawText || "").trim()
+  pendingImages.value = [...pruned.images]
+  pendingVideos.value = [...pruned.videos]
+  pendingVideosMeta.value = pruned.videosMeta?.length
+    ? [...pruned.videosMeta]
+    : pruned.videos.map(() => null)
+}
+
+/** 判断历史消息是否可直接用当前模型重试（无需裁剪或改 prompt） */
+function assessMessageForCurrentModel(m) {
+  const rawImages = [...(m.attachments?.images || [])]
+  const rawVideos = [...(m.attachments?.videos || [])]
+  const pruned = pruneAttachmentsForModel(
+    selectedModel.value,
+    rawImages,
+    rawVideos,
+    rawVideos.map(() => null),
+  )
+  const text = String(m.text || "").trim()
+  const issues = [...pruned.notes]
+  const c = modelConstraints(selectedModel.value)
+  if (c.requiresImageWithVideo && pruned.videos.length > 0 && pruned.images.length === 0) {
+    issues.push("当前模型使用参考视频时需同时有参考图")
+  }
+  if (!text && pruned.images.length === 0 && pruned.videos.length === 0) {
+    issues.push(attachmentEmptyMessage())
+  }
+  const fits = issues.length === 0
+  return { fits, pruned, text, issues }
+}
+
+function deferToComposerAfterRegenerateMismatch(issues, rawText, pruned) {
+  fillComposerFromMessage(rawText, pruned)
+  const tip = issues.length
+    ? `${issues.join("；")}。已填入输入框，请确认后手动发送`
+    : "当前模型无法直接重试该消息，已填入输入框，请确认后手动发送"
+  ElMessage.warning(tip)
+  nextTick(() => {
+    scrollBottom()
+    composerInputRef.value?.focus?.()
+  })
+}
+
+const activeConstraints = computed(() => modelConstraints(selectedModel.value))
+function maxRefTotal() {
+  return activeConstraints.value.maxRefTotal ?? 12
+}
+function maxRefVideos() {
+  return activeConstraints.value.maxRefVideos ?? 0
+}
+function refVideoDurMin() {
+  return refVideoDurationMin(activeConstraints.value)
+}
+function refVideoDurMax() {
+  return refVideoDurationMax(activeConstraints.value)
+}
+function maxRefImages() {
+  return activeConstraints.value.maxRefImages ?? 9
 }
 
 const sessions = ref([])
@@ -1270,6 +1384,7 @@ function messageFeedTimePart(m) {
 const uploadBusy = computed(() => uploadCount.value > 0)
 
 const selectedModel = computed(() => models.value.find((x) => x.id === selectedModelId.value) || null)
+const videoDurationChoices = computed(() => outputDurationChoices(modelConstraints(selectedModel.value)))
 
 const referenceVideoAllowed = computed(() => modelAllowsReferenceVideo(selectedModel.value))
 
@@ -1334,18 +1449,23 @@ function bindMsgTextEl(id, el) {
 
 function reEditMessage(m) {
   if (m.role !== "user") return
-  inputText.value = m.text || ""
-  pendingImages.value = [...(m.attachments?.images || [])]
-  pendingVideos.value = [...(m.attachments?.videos || [])]
-  pendingVideosMeta.value = pendingVideos.value.map(() => null)
-  ElMessage.success("已导入到输入框，可修改后发送")
+  const pruned = applyAttachmentsForCurrentModel(
+    m.attachments?.images,
+    m.attachments?.videos,
+    (m.attachments?.videos || []).map(() => null),
+    { notify: true },
+  )
+  fillComposerFromMessage(m.text, pruned)
+  ElMessage.success(
+    pruned.notes.length ? "已导入到输入框（已按当前模型调整附件）" : "已导入到输入框，可修改后发送",
+  )
 }
 
 async function postChatSendPayload(payload) {
   return request({
     url: "/admin-api/video/chat/send",
     method: "POST",
-    timeout: 120000,
+    timeout: VIDEO_CHAT_SEND_TIMEOUT_MS,
     data: {
       sessionId: activeSessionId.value,
       videoModelId: selectedModelId.value,
@@ -1363,36 +1483,44 @@ async function regenerateMessage(m) {
     ElMessage.warning("请先选择会话和模型")
     return
   }
-  const text = String(m.text || "").trim()
-  const imageUrls = [...(m.attachments?.images || [])]
-  const videoUrls = [...(m.attachments?.videos || [])]
-  if (!text && imageUrls.length === 0 && videoUrls.length === 0) {
-    ElMessage.warning("该条消息没有可发送的内容")
+  if (sending.value) return
+
+  const { fits, pruned, text, issues } = assessMessageForCurrentModel(m)
+  if (!fits) {
+    deferToComposerAfterRegenerateMismatch(issues, m.text, pruned)
     return
   }
-  if (videoUrls.length && !referenceVideoAllowed.value) {
-    ElMessage.warning("当前模型不支持参考视频，无法按原参考视频再次生成")
-    return
-  }
-  if (imageUrls.length + videoUrls.length > REF_ATTACHMENT_MAX_TOTAL) {
-    ElMessage.warning(`参考文件（图+视+音）最多 ${REF_ATTACHMENT_MAX_TOTAL} 个`)
-    return
-  }
-  if (videoUrls.length > REF_VIDEO_MAX_COUNT) {
-    ElMessage.warning(`参考视频最多 ${REF_VIDEO_MAX_COUNT} 个`)
-    return
-  }
+
+  const imageUrls = pruned.images
+  const videoUrls = pruned.videos
   if (videoUrls.length) {
     const vOk = await resolveAndValidateVideoUrlsForSend(videoUrls, videoUrls.map(() => null))
-    if (!vOk) return
+    if (!vOk) {
+      deferToComposerAfterRegenerateMismatch(
+        ["参考视频校验未通过"],
+        m.text,
+        pruned,
+      )
+      return
+    }
   }
-  if (sending.value) return
+
   sending.value = true
   try {
     const res = await postChatSendPayload({ text, imageUrls, videoUrls })
     if (res.code !== 0) {
       ElMessage.error(res.msg || "发送失败")
       return
+    }
+    if (res.data?.jobId) {
+      await request({
+        url: "/admin-api/video/jobs/get",
+        method: "GET",
+        timeout: VIDEO_CHAT_JOB_SYNC_TIMEOUT_MS,
+        params: { id: res.data.jobId },
+      }).catch((e) => {
+        console.warn("[video-chat] regenerate job sync", e)
+      })
     }
     await loadMessages({ scrollToBottom: true })
     await loadSessions()
@@ -1499,46 +1627,97 @@ function parsePolishSseBlock(block) {
   }
 }
 
-function createPolishTextPlayer() {
-  let target = ""
-  let pos = 0
-  let timer = null
-  const stepMs = 14
+function splitTextGraphemes(text) {
+  const raw = String(text ?? "")
+  if (typeof Intl !== "undefined" && Intl.Segmenter) {
+    return [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(raw)].map((s) => s.segment)
+  }
+  return Array.from(raw)
+}
 
-  function stopTimer() {
-    if (timer) {
-      clearInterval(timer)
-      timer = null
+function longestCommonGraphemePrefix(a, b) {
+  let i = 0
+  while (i < a.length && i < b.length && a[i] === b[i]) i += 1
+  return i
+}
+
+/** 流式润色播放器：按最长公共前缀先删后打，避免整段跳变与乱码 */
+function createPolishTextPlayer(initialText) {
+  let displayed = String(initialText ?? "")
+  let target = displayed
+  let rafId = 0
+  let active = false
+
+  function render(nextDisplayed) {
+    displayed = nextDisplayed
+    inputText.value = displayed
+  }
+
+  function step() {
+    rafId = 0
+    if (!active) return
+
+    const shown = splitTextGraphemes(displayed)
+    const goal = splitTextGraphemes(target)
+    const prefixLen = longestCommonGraphemePrefix(shown, goal)
+
+    if (shown.length > prefixLen) {
+      const deleteCount = Math.min(3, shown.length - prefixLen)
+      render(shown.slice(0, shown.length - deleteCount).join(""))
+    } else if (shown.length < goal.length) {
+      const typeCount = Math.min(1, goal.length - shown.length)
+      render(goal.slice(0, shown.length + typeCount).join(""))
+    }
+
+    if (active && displayed !== target) {
+      rafId = requestAnimationFrame(step)
     }
   }
 
-  function tick() {
-    if (pos < target.length) {
-      pos += 1
-      inputText.value = target.slice(0, pos)
-    }
-    if (pos >= target.length) stopTimer()
+  function kick() {
+    if (!active) return
+    if (!rafId) rafId = requestAnimationFrame(step)
+  }
+
+  function waitUntilCaughtUp() {
+    return new Promise((resolve) => {
+      const wait = () => {
+        if (!active || displayed === target) {
+          resolve()
+          return
+        }
+        requestAnimationFrame(wait)
+      }
+      kick()
+      wait()
+    })
   }
 
   return {
+    start() {
+      active = true
+      target = String(initialText ?? "")
+      render(target)
+    },
     push(next) {
-      target = String(next || "")
-      if (pos < target.length && !timer) {
-        timer = setInterval(tick, stepMs)
-      }
+      target = String(next ?? "")
+      kick()
     },
     async drain(finalText) {
       target = String(finalText ?? target)
-      stopTimer()
-      while (pos < target.length) {
-        pos += 1
-        inputText.value = target.slice(0, pos)
-        await new Promise((resolve) => setTimeout(resolve, stepMs))
-      }
-      inputText.value = target
+      await waitUntilCaughtUp()
+      render(target)
     },
     stop() {
-      stopTimer()
+      active = false
+      if (rafId) {
+        cancelAnimationFrame(rafId)
+        rafId = 0
+      }
+    },
+    snap(next) {
+      target = String(next ?? "")
+      render(target)
     },
   }
 }
@@ -1556,7 +1735,7 @@ async function requestPolishStream(sourceText, onText) {
   })
 
   if (!res.ok) {
-    let msg = "润色失败"
+    let msg = "优化失败"
     try {
       const body = await res.json()
       msg = body.msg || body.message || msg
@@ -1567,7 +1746,7 @@ async function requestPolishStream(sourceText, onText) {
   }
 
   const reader = res.body?.getReader()
-  if (!reader) throw new Error("润色失败")
+  if (!reader) throw new Error("优化失败")
 
   const decoder = new TextDecoder()
   let buffer = ""
@@ -1596,7 +1775,7 @@ async function requestPolishStream(sourceText, onText) {
           onText(finalText)
           return finalText
         } else if (parsed.event === "error") {
-          throw new Error(parsed.data?.msg || "润色失败")
+          throw new Error(parsed.data?.msg || "优化失败")
         }
       }
       sep = buffer.indexOf("\n\n")
@@ -1604,29 +1783,18 @@ async function requestPolishStream(sourceText, onText) {
   }
 
   if (!gotDelta && !finalText) {
-    throw new Error("润色失败")
+    throw new Error("优化失败")
   }
 
   return finalText
 }
 
-async function animateReplaceText(fromText, toText, stepMs = 12) {
-  const from = String(fromText || "")
-  const target = String(toText || "")
-  if (!target) return
-
-  const deleteStride = Math.max(1, Math.ceil(from.length / 28))
-  for (let len = from.length; len > 0; len -= deleteStride) {
-    inputText.value = from.slice(0, Math.max(0, len - deleteStride))
-    await new Promise((resolve) => setTimeout(resolve, stepMs))
-  }
-
-  const typeStride = Math.max(1, Math.ceil(target.length / 120))
-  for (let i = typeStride; i <= target.length; i += typeStride) {
-    inputText.value = target.slice(0, Math.min(i, target.length))
-    await new Promise((resolve) => setTimeout(resolve, stepMs))
-  }
-  inputText.value = target
+async function animateReplaceText(fromText, toText) {
+  const player = createPolishTextPlayer(fromText)
+  player.start()
+  player.push(toText)
+  await player.drain(toText)
+  player.stop()
 }
 
 async function polishPromptFallback(originalText) {
@@ -1634,14 +1802,14 @@ async function polishPromptFallback(originalText) {
     url: "/admin-api/video/chat/polish-prompt",
     method: "POST",
     data: { text: originalText },
-    timeout: 90000,
+    timeout: VIDEO_CHAT_POLISH_TIMEOUT_MS,
   })
   if (res.code === 0 && res.data?.text) {
     await animateReplaceText(originalText, res.data.text)
-    ElMessage.success("已润色")
+    ElMessage.success(POLISH_SUCCESS_MESSAGE)
     return true
   }
-  ElMessage.error(res.msg || "润色失败")
+  ElMessage.error(res.msg || "优化失败")
   return false
 }
 
@@ -1655,7 +1823,11 @@ async function polishPrompt() {
 
   const originalText = inputText.value
   polishing.value = true
-  const player = createPolishTextPlayer()
+  await nextTick()
+  await new Promise((resolve) => setTimeout(resolve, 220))
+
+  const player = createPolishTextPlayer(originalText)
+  player.start()
   let succeeded = false
 
   try {
@@ -1664,7 +1836,7 @@ async function polishPrompt() {
     })
     await player.drain(finalText)
     succeeded = true
-    ElMessage.success("已润色")
+    ElMessage.success(POLISH_SUCCESS_MESSAGE)
   } catch (err) {
     player.stop()
     inputText.value = originalText
@@ -1673,7 +1845,7 @@ async function polishPrompt() {
       succeeded = ok
     } catch (_) {
       inputText.value = originalText
-      ElMessage.error(err?.message || "润色失败")
+      ElMessage.error(err?.message || "优化失败")
     }
   } finally {
     player.stop()
@@ -1691,13 +1863,13 @@ function openProductLibraryPicker() {
 }
 
 /**
- * 将产品库图片并入待发参考图；总数受 REF_ATTACHMENT_MAX_TOTAL 与当前视频条数约束，超出则从队列头部剔除较早图片。
+ * 将产品库图片并入待发参考图；总数受 maxRefTotal() 与当前视频条数约束，超出则从队列头部剔除较早图片。
  */
 function mergeProductLibraryImages(urls) {
-  const cap = REF_ATTACHMENT_MAX_TOTAL - pendingVideos.value.length
+  const cap = maxRefTotal() - pendingVideos.value.length
   if (cap <= 0) {
     ElMessage.warning(
-      `参考文件（图+视+音）最多 ${REF_ATTACHMENT_MAX_TOTAL} 个，请先移除部分参考视频或图片`,
+      `参考文件（图+视+音）最多 ${maxRefTotal()} 个，请先移除部分参考视频或图片`,
     )
     return
   }
@@ -1730,7 +1902,7 @@ function mergeProductLibraryImages(urls) {
   pendingImages.value = merged
   if (evicted > 0) {
     ElMessage.info(
-      `参考图已达上限（当前最多 ${cap} 张图片，与视频合计不超过 ${REF_ATTACHMENT_MAX_TOTAL} 个），已自动移除较早的图片`,
+      `参考图已达上限（当前最多 ${cap} 张图片，与视频合计不超过 ${maxRefTotal()} 个），已自动移除较早的图片`,
     )
   } else {
     ElMessage.success("已从产品库添加参考图")
@@ -1889,8 +2061,8 @@ async function fetchUrlContentLength(url) {
  */
 function validateReferenceVideoRules(items, { prefixError }) {
   const pre = prefixError ? `${prefixError}` : ""
-  if (items.length > REF_VIDEO_MAX_COUNT) {
-    ElMessage.warning(`${pre}参考视频最多 ${REF_VIDEO_MAX_COUNT} 个`)
+  if (items.length > maxRefVideos()) {
+    ElMessage.warning(`${pre}参考视频最多 ${maxRefVideos()} 个`)
     return false
   }
   let sumDur = 0
@@ -1911,9 +2083,9 @@ function validateReferenceVideoRules(items, { prefixError }) {
     sumDur += it.duration
     sumSize += it.size
   }
-  if (sumDur < REF_VIDEO_DURATION_SUM_MIN - 1e-3 || sumDur > REF_VIDEO_DURATION_SUM_MAX + 1e-3) {
+  if (sumDur < refVideoDurMin() - 1e-3 || sumDur > refVideoDurMax() + 1e-3) {
     ElMessage.warning(
-      `${pre}参考视频总时长须在 ${REF_VIDEO_DURATION_SUM_MIN}～${REF_VIDEO_DURATION_SUM_MAX} 秒之间（当前合计 ${sumDur.toFixed(1)} 秒）`,
+      `${pre}参考视频总时长须在 ${refVideoDurMin()}～${refVideoDurMax()} 秒之间（当前合计 ${sumDur.toFixed(1)} 秒）`,
     )
     return false
   }
@@ -1932,8 +2104,8 @@ function validateReferenceVideoRules(items, { prefixError }) {
 async function resolveAndValidateVideoUrlsForSend(videoUrls, metaList) {
   const urls = Array.isArray(videoUrls) ? videoUrls.map((u) => String(u || "").trim()).filter(Boolean) : []
   if (urls.length === 0) return true
-  if (urls.length > REF_VIDEO_MAX_COUNT) {
-    ElMessage.warning(`参考视频最多 ${REF_VIDEO_MAX_COUNT} 个`)
+  if (urls.length > maxRefVideos()) {
+    ElMessage.warning(`参考视频最多 ${maxRefVideos()} 个`)
     return false
   }
   const meta = Array.isArray(metaList) ? [...metaList] : []
@@ -1961,12 +2133,25 @@ async function resolveAndValidateVideoUrlsForSend(videoUrls, metaList) {
 async function validateComposerAttachmentsForSend() {
   const ni = pendingImages.value.length
   const nv = pendingVideos.value.length
-  if (ni + nv > REF_ATTACHMENT_MAX_TOTAL) {
-    ElMessage.warning(`参考文件（图+视+音）最多 ${REF_ATTACHMENT_MAX_TOTAL} 个`)
+  if (nv > 0 && !referenceVideoAllowed.value) {
+    ElMessage.warning("当前模型不支持参考视频，请移除视频或切换模型")
     return false
   }
-  if (nv > REF_VIDEO_MAX_COUNT) {
-    ElMessage.warning(`参考视频最多 ${REF_VIDEO_MAX_COUNT} 个`)
+  if (ni > 0 && !modelAllowsReferenceImage(selectedModel.value)) {
+    ElMessage.warning("当前模型不支持参考图，请移除图片或切换模型")
+    return false
+  }
+  const c = modelConstraints(selectedModel.value)
+  if (c.requiresImageWithVideo && nv > 0 && ni === 0) {
+    ElMessage.warning("当前模型使用参考视频时需同时上传参考图")
+    return false
+  }
+  if (ni + nv > maxRefTotal()) {
+    ElMessage.warning(`参考文件（图+视+音）最多 ${maxRefTotal()} 个`)
+    return false
+  }
+  if (nv > maxRefVideos()) {
+    ElMessage.warning(`参考视频最多 ${maxRefVideos()} 个`)
     return false
   }
   if (nv === 0) return true
@@ -1987,8 +2172,8 @@ function classifyDroppedFile(file) {
 }
 
 async function addUploadedImageFile(file) {
-  if (refAttachmentTotalCount() >= REF_ATTACHMENT_MAX_TOTAL) {
-    ElMessage.warning(`参考文件（图+视+音）最多 ${REF_ATTACHMENT_MAX_TOTAL} 个`)
+  if (refAttachmentTotalCount() >= maxRefTotal()) {
+    ElMessage.warning(`参考文件（图+视+音）最多 ${maxRefTotal()} 个`)
     return
   }
   const raw = rawUploadFile(file)
@@ -2022,12 +2207,12 @@ async function addUploadedVideoFile(file) {
     ElMessage.warning("参考视频仅支持 MP4、MOV 格式")
     return
   }
-  if (pendingVideos.value.length >= REF_VIDEO_MAX_COUNT) {
-    ElMessage.warning(`参考视频最多 ${REF_VIDEO_MAX_COUNT} 个`)
+  if (pendingVideos.value.length >= maxRefVideos()) {
+    ElMessage.warning(`参考视频最多 ${maxRefVideos()} 个`)
     return
   }
-  if (refAttachmentTotalCount() >= REF_ATTACHMENT_MAX_TOTAL) {
-    ElMessage.warning(`参考文件（图+视+音）最多 ${REF_ATTACHMENT_MAX_TOTAL} 个`)
+  if (refAttachmentTotalCount() >= maxRefTotal()) {
+    ElMessage.warning(`参考文件（图+视+音）最多 ${maxRefTotal()} 个`)
     return
   }
   if (raw.size >= REF_VIDEO_MAX_BYTES) {
@@ -2061,11 +2246,11 @@ async function addUploadedVideoFile(file) {
     pendingVideosMeta.value.reduce((acc, x) => acc + (x && Number.isFinite(x.duration) ? x.duration : 0), 0) +
     dim.duration
   if (
-    sumDur < REF_VIDEO_DURATION_SUM_MIN - 1e-3 ||
-    sumDur > REF_VIDEO_DURATION_SUM_MAX + 1e-3
+    sumDur < refVideoDurMin() - 1e-3 ||
+    sumDur > refVideoDurMax() + 1e-3
   ) {
     ElMessage.warning(
-      `参考视频总时长须在 ${REF_VIDEO_DURATION_SUM_MIN}～${REF_VIDEO_DURATION_SUM_MAX} 秒之间（当前合计 ${sumDur.toFixed(1)} 秒）`,
+      `参考视频总时长须在 ${refVideoDurMin()}～${refVideoDurMax()} 秒之间（当前合计 ${sumDur.toFixed(1)} 秒）`,
     )
     return
   }
@@ -2338,6 +2523,16 @@ async function loadModels() {
   if (res.code !== 0) return
   models.value = res.data || []
   selectedModelId.value = pickInitialModelId(models.value)
+  syncOutputDurationForModel(selectedModel.value)
+}
+
+function syncOutputDurationForModel(model) {
+  const c = modelConstraints(model)
+  const choices = outputDurationChoices(c)
+  videoDurationSec.value = clampOutputDuration(c, videoDurationSec.value)
+  if (!choices.includes(videoDurationSec.value)) {
+    videoDurationSec.value = choices[0]
+  }
 }
 
 watch(selectedModelId, (id) => {
@@ -2392,28 +2587,48 @@ async function selectSession(id) {
 }
 
 /**
- * @param {{ scrollToBottom?: boolean }} [opts]
+ * @param {{ scrollToBottom?: boolean, skipJobSync?: boolean }} [opts]
  * - 仅用户点击「发送 / 再次生成」成功后传 scrollToBottom: true；轮询、删消息等刷新不要滚到底，避免打断阅读。
  */
 async function loadMessages(opts = {}) {
   const scrollToBottom = !!opts.scrollToBottom
+  const skipJobSync = !!opts.skipJobSync
   const sessionSnap = activeSessionId.value
   if (!sessionSnap) return
   const seq = ++loadMessagesSeq
-  const res = await request({
-    url: "/admin-api/video/chat/messages/page",
-    method: "GET",
-    params: { sessionId: sessionSnap, pageNo: 1, pageSize: 200 },
-  })
+  let res
+  try {
+    res = await request({
+      url: "/admin-api/video/chat/messages/page",
+      method: "GET",
+      timeout: VIDEO_CHAT_MESSAGES_TIMEOUT_MS,
+      params: {
+        sessionId: sessionSnap,
+        pageNo: 1,
+        pageSize: 200,
+        syncJobs: skipJobSync ? "0" : "1",
+      },
+    })
+  } catch (e) {
+    console.warn("[video-chat] loadMessages", e)
+    setupPoll()
+    return
+  }
   if (seq !== loadMessagesSeq) return
   if (activeSessionId.value !== sessionSnap) return
-  if (res.code !== 0) return
+  if (res.code !== 0) {
+    setupPoll()
+    return
+  }
   // 发送请求进行中时，轮询仍可能先于 /send 返回；服务端列表尚无本轮「生成中」行，整表替换会抹掉乐观更新
   if (!scrollToBottom && sending.value) {
     const keepOptimistic = messages.value.some(
       (m) => m.id < 0 && m.role === "assistant" && assistantStillRunning(m),
     )
-    if (keepOptimistic) return
+    if (keepOptimistic) {
+      setupPoll()
+      return
+    }
   }
   messages.value = res.data?.list || []
   if (scrollToBottom) nextTick(() => scrollBottom())
@@ -2536,6 +2751,16 @@ async function send() {
       )
       return
     }
+    if (res.data?.jobId) {
+      await request({
+        url: "/admin-api/video/jobs/get",
+        method: "GET",
+        timeout: VIDEO_CHAT_JOB_SYNC_TIMEOUT_MS,
+        params: { id: res.data.jobId },
+      }).catch((e) => {
+        console.warn("[video-chat] send job sync", e)
+      })
+    }
     await loadMessages({ scrollToBottom: true })
     await loadSessions()
   } catch (e) {
@@ -2613,6 +2838,22 @@ watch(messages, () => {
   const need = messages.value.some(assistantStillRunning)
   if (need && !pollTimer) setupPoll()
   if (!need) stopPoll()
+})
+
+watch(selectedModelId, () => {
+  const pruned = pruneAttachmentsForModel(
+    selectedModel.value,
+    pendingImages.value,
+    pendingVideos.value,
+    pendingVideosMeta.value,
+  )
+  if (pruned.notes.length) {
+    pendingImages.value = pruned.images
+    pendingVideos.value = pruned.videos
+    pendingVideosMeta.value = pruned.videosMeta
+    ElMessage.info(pruned.notes.join("；"))
+  }
+  syncOutputDurationForModel(selectedModel.value)
 })
 
 watch(referenceVideoAllowed, (allowed) => {
@@ -2868,6 +3109,14 @@ onUnmounted(() => {
     white-space: nowrap;
     font-size: 14px;
     line-height: 20px;
+  }
+
+  &__tags {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-left: auto;
+    flex-shrink: 0;
   }
 }
 
@@ -3813,8 +4062,8 @@ onUnmounted(() => {
     0 10px 44px rgba(15, 23, 42, 0.1),
     0 2px 8px rgba(15, 23, 42, 0.04);
   transition:
-    border-color 0.15s ease,
-    box-shadow 0.15s ease;
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
 
   &--drag {
     border-color: color-mix(in srgb, var(--el-color-primary) 45%, transparent);
@@ -4143,6 +4392,37 @@ onUnmounted(() => {
 
 .composer-input-wrap {
   position: relative;
+  border-radius: 10px;
+  overflow: hidden;
+
+  &--polishing {
+    &::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      border-radius: inherit;
+      pointer-events: none;
+      opacity: 0;
+      background: linear-gradient(
+        110deg,
+        transparent 40%,
+        rgba(64, 158, 255, 0.035) 46%,
+        rgba(147, 197, 253, 0.08) 50%,
+        rgba(64, 158, 255, 0.035) 54%,
+        transparent 60%
+      );
+      background-size: 280% 100%;
+      animation:
+        composer-input-shimmer-in 0.5s ease forwards,
+        composer-input-shimmer 5.8s ease-in-out 0.5s infinite;
+    }
+
+    > .composer-input {
+      position: relative;
+      z-index: 2;
+    }
+  }
 }
 
 :deep(.composer-input.el-textarea) {
@@ -4162,8 +4442,9 @@ onUnmounted(() => {
 
 :deep(.composer-input--polishing.el-textarea) {
   .el-textarea__inner {
-    background: rgba(64, 158, 255, 0.04);
-    caret-color: var(--el-color-primary);
+    caret-color: transparent;
+    opacity: 0.94;
+    transition: opacity 0.45s ease;
   }
 }
 
@@ -4314,31 +4595,128 @@ onUnmounted(() => {
 }
 
 .composer-polish-btn {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 6px;
+  min-width: 86px;
   font-size: 12px;
   font-weight: 500;
   line-height: 1;
-  padding: 0 10px;
+  padding: 0 12px;
   height: 28px;
   border-radius: 999px;
   border: 1px solid rgba(15, 23, 42, 0.08);
   background: rgba(248, 250, 252, 0.92);
   color: var(--el-text-color-regular);
   cursor: pointer;
-  transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+  transition:
+    border-color 0.35s ease,
+    background-color 0.35s ease,
+    color 0.35s ease,
+    transform 0.25s ease,
+    min-width 0.35s ease;
 
-  .composer-polish-btn__emoji {
-    font-size: 14px;
-    line-height: 1;
-    font-style: normal;
+  .composer-polish-btn__content {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 18px;
   }
 
-  .composer-polish-btn__spinner {
-    font-size: 14px;
-    animation: rotating 1.2s linear infinite;
+  .composer-polish-btn__icon-slot {
+    position: relative;
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+  }
+
+  .composer-polish-btn__label-slot {
+    display: inline-flex;
+    align-items: center;
+    min-width: 3.5em;
+  }
+
+  .composer-polish-btn__icon {
+    position: absolute;
+    inset: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    line-height: 1;
+    font-style: normal;
+
+    &--busy {
+      animation: composer-polish-icon-breathe 2.8s ease-in-out infinite;
+    }
+  }
+
+  .composer-polish-btn__label {
+    display: inline-flex;
+    align-items: center;
+    white-space: nowrap;
+    letter-spacing: 0.02em;
+    line-height: 1.2;
+  }
+
+  .composer-polish-btn__wave {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    margin-left: 4px;
+    height: 10px;
+
+    i {
+      display: block;
+      width: 3px;
+      height: 3px;
+      border-radius: 50%;
+      background: currentColor;
+      opacity: 0.32;
+      animation: composer-polish-wave 1.25s ease-in-out infinite;
+
+      &:nth-child(2) {
+        animation-delay: 0.16s;
+      }
+
+      &:nth-child(3) {
+        animation-delay: 0.32s;
+      }
+    }
+  }
+
+  &--thinking {
+    min-width: 88px;
+    border-color: rgba(64, 158, 255, 0.26);
+    background: rgba(255, 255, 255, 0.92);
+    color: rgba(37, 99, 235, 0.92);
+    box-shadow: none;
+    animation: composer-polish-btn-premium-breathe 2.8s ease-in-out infinite;
+
+    &::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      border-radius: inherit;
+      pointer-events: none;
+      opacity: 0;
+      animation: composer-polish-btn-inner-mist 2.8s ease-in-out infinite;
+      background: radial-gradient(circle at 28% 50%, rgba(64, 158, 255, 0.1), transparent 58%);
+    }
+
+    &:disabled {
+      opacity: 1;
+      cursor: default;
+    }
+  }
+
+  &:active:not(:disabled) {
+    transform: scale(0.98);
   }
 
   &:hover:not(:disabled) {
@@ -4353,13 +4731,133 @@ onUnmounted(() => {
   }
 }
 
-@keyframes rotating {
+@keyframes composer-input-shimmer-in {
   from {
-    transform: rotate(0deg);
+    opacity: 0;
   }
 
   to {
-    transform: rotate(360deg);
+    opacity: 1;
+  }
+}
+
+@keyframes composer-input-shimmer {
+  0% {
+    background-position: 220% 0;
+  }
+
+  100% {
+    background-position: -220% 0;
+  }
+}
+
+@keyframes composer-polish-btn-premium-breathe {
+  0%,
+  100% {
+    border-color: rgba(64, 158, 255, 0.18);
+    background: rgba(255, 255, 255, 0.9);
+  }
+
+  50% {
+    border-color: rgba(64, 158, 255, 0.38);
+    background: rgba(245, 249, 255, 0.98);
+  }
+}
+
+@keyframes composer-polish-btn-inner-mist {
+  0%,
+  100% {
+    opacity: 0.15;
+  }
+
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@keyframes composer-polish-icon-breathe {
+  0%,
+  100% {
+    opacity: 0.82;
+    transform: scale(0.96);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes composer-polish-wave {
+  0%,
+  70%,
+  100% {
+    opacity: 0.28;
+    transform: translateY(0);
+  }
+
+  35% {
+    opacity: 1;
+    transform: translateY(-1px);
+  }
+}
+
+.polish-emoji-enter-active,
+.polish-emoji-leave-active {
+  transition: opacity 0.26s ease, transform 0.26s ease;
+}
+
+.polish-emoji-leave-to {
+  opacity: 0;
+  transform: scale(0.7) rotate(-12deg);
+}
+
+.polish-emoji-enter-from {
+  opacity: 0;
+  transform: scale(0.7) rotate(12deg);
+}
+
+.polish-label-enter-active,
+.polish-label-leave-active {
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+
+.polish-label-leave-to {
+  opacity: 0;
+  transform: translateY(3px);
+}
+
+.polish-label-enter-from {
+  opacity: 0;
+  transform: translateY(-3px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-input-wrap--polishing::before,
+  .composer-polish-btn--thinking,
+  .composer-polish-btn--thinking::before,
+  .composer-polish-btn__icon--busy,
+  .composer-polish-btn__wave i {
+    animation: none !important;
+  }
+
+  .composer-input-wrap--polishing::before {
+    opacity: 1;
+  }
+
+  .composer-polish-btn--thinking::before {
+    opacity: 0.25;
+  }
+
+  .composer-polish-btn__wave i {
+    opacity: 0.72;
+  }
+
+  .polish-emoji-enter-active,
+  .polish-emoji-leave-active,
+  .polish-label-enter-active,
+  .polish-label-leave-active {
+    transition: none !important;
   }
 }
 

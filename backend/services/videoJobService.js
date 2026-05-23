@@ -2,6 +2,13 @@
  * 创建 Seedance 视频任务（供 REST /chat/send 与 POST /video/jobs 复用）
  */
 const seedance = require('./seedanceClient')
+const transport = require('./videoApiTransport')
+const {
+  resolveVideoProfile,
+  preflightVideoTask,
+  mergeConstraints,
+  getProfileById,
+} = require('./videoApiProfiles')
 
 /** 每分钟每用户最大创建任务数 */
 const RATE_PER_MINUTE = Math.min(120, Math.max(6, Number(process.env.VIDEO_JOB_RATE_PER_MIN || 24)))
@@ -78,6 +85,12 @@ function resolveModelRow(dbi, videoModelId) {
   return modelRow
 }
 
+function resolveModelProfile(modelRow) {
+  const apiProfile = String(modelRow?.api_profile || '').trim()
+  const arkModelId = String(modelRow?.api_model_id || '').trim()
+  return resolveVideoProfile(arkModelId, apiProfile)
+}
+
 /**
  * @param {import('better-sqlite3').Database} dbi
  * @param {object} opts
@@ -115,29 +128,17 @@ async function createVideoJob(dbi, opts) {
     if (hasImg && storeMode === 'text' && !hasVid) storeMode = 'image'
   }
 
-  if (storeMode === 'text' && !hasImg && !hasVid && !rawPrompt) {
-    return { ok: false, code: 400, message: '请填写提示词或上传参考图/视频' }
-  }
-  if (storeMode === 'image' && !hasImg) {
-    return { ok: false, code: 400, message: '图生视频需要可访问的图片 URL（可先上传至对象存储）' }
-  }
-
-  let prompt = rawPrompt
-  if (!prompt && hasImg && !hasVid) prompt = '根据参考图生成视频'
-  if (!prompt && hasVid && !hasImg) prompt = '根据参考视频生成视频'
-  if (!prompt && (hasImg || hasVid)) prompt = '根据参考素材生成视频'
-
   const modelRow = resolveModelRow(dbi, opts.videoModelId)
   if (!modelRow) {
     return { ok: false, code: 400, message: '没有可用的视频模型，请先在「模型管理」中添加并启用' }
   }
 
-  const modelAllowsRefVideo = modelRow.supports_reference_video === 1
-  if (hasVid && !modelAllowsRefVideo) {
+  const profile = resolveModelProfile(modelRow)
+  if (!profile) {
     return {
       ok: false,
       code: 400,
-      message: '当前视频模型未开启「参考视频」，请在「模型管理」中打开该开关，或移除参考视频后重试',
+      message: `无法识别视频模型「${modelRow.api_model_id}」的 API Profile，请在模型目录配置后重新发布`,
     }
   }
 
@@ -145,7 +146,7 @@ async function createVideoJob(dbi, opts) {
     return {
       ok: false,
       code: 503,
-      message: '服务端未配置视频 API Key（ARK_API_KEY / DMXAPI_API_KEY），无法调用 Seedance',
+      message: '服务端未配置视频 API Key（ARK_API_KEY / DMXAPI_API_KEY），无法调用视频 API',
     }
   }
 
@@ -158,12 +159,30 @@ async function createVideoJob(dbi, opts) {
   }
 
   const extra = sanitizeArkExtra({ ...parseDefaultParams(modelRow.default_params), ...options })
+  extra.watermark = false
 
   let arkModelId = String(modelRow.api_model_id || '').trim()
-  if (hasImg && hasVid) {
+  if (hasImg && hasVid && profile.id === 'seedance-multimodal') {
     const multimodalOverride = String(process.env.ARK_MULTIMODAL_MODEL_ID || '').trim()
     if (multimodalOverride) arkModelId = multimodalOverride
   }
+
+  const capsOverride = mergeConstraints(profile)
+  const preflight = preflightVideoTask(profile, {
+    prompt: rawPrompt,
+    imageUrls: hasImg ? imgList : [],
+    videoUrls: hasVid ? vidList : [],
+    extra,
+    constraintsOverride: capsOverride,
+  })
+  if (!preflight.ok) {
+    return { ok: false, code: 400, message: preflight.message }
+  }
+
+  let prompt = rawPrompt
+  if (!prompt && hasImg && !hasVid) prompt = '根据参考图生成视频'
+  if (!prompt && hasVid && !hasImg) prompt = '根据参考视频生成视频'
+  if (!prompt && (hasImg || hasVid)) prompt = '根据参考素材生成视频'
 
   let payload
   try {
@@ -173,6 +192,7 @@ async function createVideoJob(dbi, opts) {
       extra,
       imageUrls: hasImg ? imgList : [],
       videoUrls: hasVid ? vidList : [],
+      profile: profile.id,
     })
   } catch (e) {
     if (e.code === 'E_ARK_PAYLOAD') {
@@ -183,13 +203,12 @@ async function createVideoJob(dbi, opts) {
 
   let remote
   try {
-    remote = await seedance.createContentsGenerationTask(payload)
+    remote = await seedance.createContentsGenerationTask(payload, profile.id)
   } catch (e) {
     console.error(`[videoJobService] create task arkModelId=${arkModelId} video_models.id=${modelRow.id}`, e.message)
     const code = e.code === 'E_ARK_CONFIG' ? 503 : 502
     let msg = e.message || `创建${seedance.providerLabel()}视频任务失败`
     const raw = String(msg)
-    /** 图+视频同任务被拒的常见表述 */
     const multimodalRejected =
       /first[/\\]last frame.*reference media/i.test(raw) ||
       /参考图.*参考视频|参考视频.*参考图/.test(raw) ||
@@ -198,14 +217,29 @@ async function createVideoJob(dbi, opts) {
     if (code === 502 && hasImg && hasVid && multimodalRejected) {
       msg =
         `视频 API 拒绝了「参考图 + 参考视频」同任务（本次请求 model=${arkModelId}，对应后台视频模型 id=${modelRow.id}）。\n` +
-        `说明：并未传错后台条目的 api_model_id；部分模型（如 Seedance 2.0 Fast）仍可能对多模态参有限制，请以 DMXAPI/方舟文档为准。\n` +
+        `说明：并未传错后台条目的 api_model_id；部分模型仍可能对多模态参有限制，请以 DMXAPI/方舟文档为准。\n` +
         `可选：换支持多模态参考的模型（如 doubao-seedance-2-0-260128）、或单任务只传图或只传视频、或在 .env 设置 ARK_MULTIMODAL_MODEL_ID 覆盖模型。\n` +
         `—— 接口原文：${raw}`
     }
     return { ok: false, code, message: msg }
   }
 
-  const tid = seedance.pickTaskId(remote)
+  const wrapped = transport.unwrapCreateResponse(profile, remote)
+  let tid = seedance.pickTaskId(wrapped, profile.id)
+  if (profile.responseParser === 'kling') {
+    const kling = require('./klingVideoClient')
+    tid = kling.pickKlingTaskId(remote) || tid
+    const requestId = String(remote?.request_id || '').trim()
+    if (!tid || tid === requestId) {
+      console.error('[videoJobService] kling create missing poll id', JSON.stringify(remote).slice(0, 800))
+      return {
+        ok: false,
+        code: 502,
+        message:
+          '可灵创建成功但未从 output JSON 解析到 task_id。请确认 DMXAPI 返回含 output[0].content[0].text 的 task_id（见 kling-v3 官方文档）。',
+      }
+    }
+  }
   if (!tid) {
     console.error('[videoJobService] unexpected create response', JSON.stringify(remote).slice(0, 500))
     return { ok: false, code: 502, message: '视频 API 返回中缺少任务 id，请核对接口版本与 VIDEO_API_PROVIDER' }
@@ -215,8 +249,8 @@ async function createVideoJob(dbi, opts) {
   const sourceVideosJson = hasVid ? JSON.stringify(vidList) : null
 
   const ins = dbi.prepare(
-    `INSERT INTO video_jobs (user_id, project_id, video_model_id, external_task_id, status, mode, source_image_url, source_video_urls, prompt, request_payload)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO video_jobs (user_id, project_id, video_model_id, external_task_id, status, mode, source_image_url, source_video_urls, prompt, request_payload, api_profile)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
   const info = ins.run(
     userId,
@@ -228,7 +262,13 @@ async function createVideoJob(dbi, opts) {
     sourceImageCol,
     sourceVideosJson,
     prompt,
-    JSON.stringify({ payload, remotePreview: { id: tid } })
+    JSON.stringify({
+      payload,
+      remotePreview: { id: tid },
+      createRemote: remote,
+      apiProfile: profile.id,
+    }),
+    profile.id,
   )
 
   return {
@@ -238,6 +278,7 @@ async function createVideoJob(dbi, opts) {
     status: 'processing',
     mode: storeMode,
     prompt,
+    apiProfile: profile.id,
   }
 }
 
@@ -245,5 +286,8 @@ module.exports = {
   createVideoJob,
   parseDefaultParams,
   resolveModelRow,
+  resolveModelProfile,
   allowVideoJobRate,
+  mergeConstraints,
+  getProfileById,
 }

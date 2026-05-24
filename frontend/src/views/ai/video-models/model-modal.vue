@@ -42,7 +42,7 @@
           <el-option label="文本" value="text" />
           <el-option label="未分类" value="unknown" />
         </el-select>
-        <div class="form-item-tip">对话创作 / 画布生成视频时，仅加载「视频」类模型。</div>
+        <div class="form-item-tip">视频生成 / 工作流生成视频时，仅加载「视频」类模型；对话创作加载「文本」类模型。</div>
       </el-form-item>
       <el-form-item v-if="formData.modality === 'video'" label="参考视频">
         <div class="form-item-control">
@@ -52,7 +52,7 @@
             inactive-text="不支持"
           />
           <div class="form-item-tip form-item-tip--inline">
-            开启后，对话创作/画布等可上传「参考视频」。Seedance 2.0 支持智能参考；可灵为动作控制，需同时上传参考图。
+            开启后，视频生成/工作流等可上传「参考视频」。Seedance 2.0 支持智能参考；可灵为动作控制，需同时上传参考图。
           </div>
         </div>
       </el-form-item>

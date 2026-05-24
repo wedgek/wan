@@ -57,7 +57,7 @@
         <el-table-column prop="sort" label="排序" width="72" align="center" fixed="left" />
         <el-table-column prop="status" label="启用" width="72" align="center" fixed="left">
           <template #default="{ row }">
-            <el-tooltip content="关闭后不会在对话创作模型列表中出现" placement="top" :show-after="300">
+            <el-tooltip content="关闭后不会在视频生成模型列表中出现" placement="top" :show-after="300">
               <el-switch
                 v-model="row.status"
                 :active-value="0"

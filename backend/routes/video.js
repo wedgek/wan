@@ -92,7 +92,7 @@ function parseDefaultParams(text) {
   }
 }
 
-/** 画布 / 对话创作：仅返回视频类启用模型 */
+/** 画布 / 视频生成：仅返回视频类启用模型 */
 router.get('/model/list-enabled', (req, res) => {
   try {
     const rows = database()

@@ -84,9 +84,9 @@ export const addDynamicRoutes = (menus, { force = false } = {}) => {
         keepAlive: menu.keepAlive || false,
         visible: menu.visible,
         status: menu.status,
-        /** 对话创作：宽屏 meta 保留；无外层 content padding，与侧栏/顶栏直接接壤 */
-        wideContent: hasPermission && menu.componentName === "aiVideoChat",
-        noPadding: hasPermission && menu.componentName === "aiVideoChat",
+        /** 视频生成 / 对话创作：宽屏 meta；无外层 content padding */
+        wideContent: hasPermission && (menu.componentName === "aiVideoChat" || menu.componentName === "aiTextChat"),
+        noPadding: hasPermission && (menu.componentName === "aiVideoChat" || menu.componentName === "aiTextChat"),
       },
     })
     addedRouteNames.push(routeName)

@@ -54,10 +54,11 @@
           </el-select>
         </div>
         <div class="video-chat__toolbar-end">
+          <router-link to="/ai/text-chat" class="toolbar-link">对话创作</router-link>
           <el-button type="primary" :icon="$icons.Plus" @click="createSession">新建对话</el-button>
           <el-button @click="sessionsDrawer = true">
             <el-icon class="video-chat__toolbar-ic"><component :is="$icons.ChatLineRound" /></el-icon>
-            对话记录
+            生成记录
           </el-button>
         </div>
       </header>
@@ -917,7 +918,7 @@ const POLISH_BUSY_EMOJI = "🤔"
 const POLISH_SUCCESS_MESSAGE = "提示词已优化"
 
 /**
- * 对话创作 HTTP 超时（毫秒）
+ * 视频生成 HTTP 超时（毫秒）
  * - SEND：/send 同步等 DMXAPI 创建任务，多模态可能 >2min
  * - MESSAGES：轮询含「查状态 + 同步转存 TOS」，需大于后端 VIDEO_TOS_MIRROR_TIMEOUT_MS（默认 5min）
  */
@@ -3089,6 +3090,18 @@ onUnmounted(() => {
   justify-content: flex-end;
   flex-wrap: wrap;
   min-width: 0;
+  gap: 8px;
+}
+
+.toolbar-link {
+  font-size: 13px;
+  color: var(--el-color-primary);
+  text-decoration: none;
+  white-space: nowrap;
+
+  &:hover {
+    text-decoration: underline;
+  }
 }
 
 .video-chat__toolbar-ic {
@@ -4393,7 +4406,8 @@ onUnmounted(() => {
 .composer-input-wrap {
   position: relative;
   border-radius: 10px;
-  overflow: hidden;
+  /* 下拉需显示在输入框上方（bottom: 100%），不可 hidden 否则会裁切 @ 素材菜单 */
+  overflow: visible;
 
   &--polishing {
     &::before {

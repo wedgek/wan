@@ -1,5 +1,5 @@
 /**
- * 对话创作：当前选中模型的上传/生成约束（优先用 list-enabled 返回的 constraints）
+ * 视频生成：当前选中模型的上传/生成约束（优先用 list-enabled 返回的 constraints）
  */
 
 export const DEFAULT_VIDEO_CONSTRAINTS = {

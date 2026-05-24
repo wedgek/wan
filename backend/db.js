@@ -67,6 +67,9 @@ function applySchemaPatches(dbi) {
     ensureAiStudioPatch(dbi)
     ensureVideoChatSchema(dbi)
     ensureVideoChatMenu(dbi)
+    syncVideoChatMenuTitle(dbi)
+    ensureTextChatSchema(dbi)
+    ensureTextChatMenu(dbi)
     ensureAiVideoManageMenu(dbi)
     syncAiVideoManageMenuTitle(dbi)
     ensureProductLibrarySchema(dbi)
@@ -245,6 +248,44 @@ function ensureVideoChatSchema(dbi) {
   ensureColumn(dbi, 'video_chat_messages', 'video_model_name', 'TEXT')
 }
 
+/** 对话创作（文本/图片多模态 LLM 会话） */
+function ensureTextChatSchema(dbi) {
+  dbi.exec(`
+    CREATE TABLE IF NOT EXISTS text_chat_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      title TEXT NOT NULL DEFAULT '新对话',
+      model_id INTEGER,
+      summary TEXT NOT NULL DEFAULT '',
+      summary_updated_at TEXT,
+      context_budget_tokens INTEGER,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_tchat_sess_user ON text_chat_sessions(user_id);
+    CREATE TABLE IF NOT EXISTS text_chat_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      role TEXT NOT NULL,
+      text TEXT NOT NULL DEFAULT '',
+      attachments_json TEXT,
+      token_estimate INTEGER NOT NULL DEFAULT 0,
+      included_in_summary INTEGER NOT NULL DEFAULT 0,
+      model_name TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (session_id) REFERENCES text_chat_sessions(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_tchat_msg_session ON text_chat_messages(session_id);
+    CREATE INDEX IF NOT EXISTS idx_tchat_msg_user ON text_chat_messages(user_id);
+  `)
+  ensureColumn(dbi, 'text_chat_sessions', 'image_model_id', 'INTEGER')
+  ensureColumn(dbi, 'text_chat_messages', 'generation_mode', "TEXT DEFAULT 'reply'")
+  ensureColumn(dbi, 'text_chat_messages', 'status', 'TEXT')
+  ensureColumn(dbi, 'text_chat_messages', 'result_urls_json', 'TEXT')
+  ensureColumn(dbi, 'text_chat_messages', 'error_message', 'TEXT')
+}
+
 /** 登录会话持久化（access / refresh），进程重启后仍有效 */
 function ensureAuthSessionsSchema(dbi) {
   dbi.exec(`
@@ -294,8 +335,62 @@ function ensureVideoChatMenu(dbi) {
     INSERT INTO menus (id, parent_id, type, name, path, component_name, icon, sort, permission, status, visible, keep_alive)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
-  ins.run(id, parentId, 2, '对话创作', 'video-chat', 'aiVideoChat', 'ChatDotRound', 2, 'ai:canvas:access', 0, 1, 0)
+  ins.run(id, parentId, 2, '视频生成', 'video-chat', 'aiVideoChat', 'VideoCamera', 2, 'ai:canvas:access', 0, 1, 0)
   dbi.prepare(`UPDATE menus SET sort = 3 WHERE component_name = 'aiPromptManage' AND parent_id = ?`).run(parentId)
+  const ir = dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (?, ?)')
+  ir.run(1, id)
+  try {
+    dbi.prepare('INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES (?, ?)').run('menus', id)
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+/** 已存在的库：侧栏「对话创作」(video-chat) 统一为「视频生成」 */
+function syncVideoChatMenuTitle(dbi) {
+  try {
+    dbi
+      .prepare(`UPDATE menus SET name = ?, icon = ? WHERE component_name = ?`)
+      .run('视频生成', 'VideoCamera', 'aiVideoChat')
+  } catch (e) {
+    console.error('[db] syncVideoChatMenuTitle', e.message)
+  }
+}
+
+/** AI 应用 · 对话创作（文本/图片 LLM 多轮对话） */
+function ensureTextChatMenu(dbi) {
+  if (dbi.prepare('SELECT 1 FROM menus WHERE component_name = ? LIMIT 1').get('aiTextChat')) return
+  const videoRow = dbi
+    .prepare(`SELECT id, parent_id, sort FROM menus WHERE component_name = 'aiVideoChat' LIMIT 1`)
+    .get()
+  if (!videoRow) return
+  const parentId = videoRow.parent_id
+  const targetSort = (videoRow.sort ?? 2) + 1
+  dbi
+    .prepare(
+      `UPDATE menus SET sort = sort + 1 WHERE parent_id = ? AND sort >= ? AND component_name != 'aiTextChat'`,
+    )
+    .run(parentId, targetSort)
+  const maxRow = dbi.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM menus').get()
+  const id = maxRow.m + 1
+  const ins = dbi.prepare(`
+    INSERT INTO menus (id, parent_id, type, name, path, component_name, icon, sort, permission, status, visible, keep_alive)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+  ins.run(
+    id,
+    parentId,
+    2,
+    '对话创作',
+    'text-chat',
+    'aiTextChat',
+    'ChatDotRound',
+    targetSort,
+    'ai:text-chat:access',
+    0,
+    1,
+    0,
+  )
   const ir = dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (?, ?)')
   ir.run(1, id)
   try {

@@ -500,8 +500,11 @@ router.post('/polish-prompt/stream', async (req, res) => {
   sendEvent('start', { ok: true })
 
   const abortController = new AbortController()
-  const onClose = () => abortController.abort()
-  req.on('close', onClose)
+  const onClientDisconnect = () => {
+    if (!res.writableEnded) abortController.abort()
+  }
+  req.on('aborted', onClientDisconnect)
+  res.on('close', onClientDisconnect)
 
   try {
     const result = await polishPromptStream(
@@ -528,7 +531,8 @@ router.post('/polish-prompt/stream', async (req, res) => {
       res.end()
     }
   } finally {
-    req.off('close', onClose)
+    req.off('aborted', onClientDisconnect)
+    res.off('close', onClientDisconnect)
   }
 })
 

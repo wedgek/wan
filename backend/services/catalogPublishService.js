@@ -38,7 +38,7 @@ function publishCatalogToStore(dbi, catalogId, b = {}) {
   if (isQueryModelId(catRow.api_model_id)) {
     return {
       ok: false,
-      msg: '查询类模型（*-get）仅用于轮询任务结果，不能上架到对话创作',
+      msg: '查询类模型（*-get）仅用于轮询任务结果，不能上架到视频生成',
     }
   }
 

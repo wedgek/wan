@@ -1,5 +1,5 @@
 /**
- * 对话创作：提示词润色（调用默认文本模型）
+ * 视频生成：提示词润色（调用默认文本模型）
  */
 const { resolveDefaultTextModel } = require('./textModelService')
 const { chatCompletion, streamChatCompletion } = require('./dmxapiChatClient')

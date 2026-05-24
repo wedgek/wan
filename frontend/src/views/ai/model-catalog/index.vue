@@ -133,7 +133,7 @@
                 </template>
                 <el-tooltip
                   v-else
-                  content="添加到模型商店；对话创作仅使用视频类模型"
+                  content="添加到模型商店；视频生成仅使用视频类模型，对话创作使用文本类模型"
                   placement="top"
                   :show-after="300"
                 >

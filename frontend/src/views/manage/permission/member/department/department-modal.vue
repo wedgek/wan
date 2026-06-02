@@ -7,7 +7,7 @@
         @closed="handleClosed"
     >
         <el-form :model="formData" label-width="90px" v-loading="modalLoading">
-            <el-form-item label="上级部门" v-required-dot>
+            <el-form-item label="上级" v-required-dot>
                 <el-tree-select
                     v-model="formData.parentId"
                     :data="deptTreeData"
@@ -16,7 +16,7 @@
                     default-expand-all
                     clearable
                     clear-icon="Close"
-                    placeholder="请选择上级部门"
+                    placeholder="请选择上级"
                 />
             </el-form-item>
 
@@ -92,7 +92,7 @@ const getDeptTreeData = async () => {
     try {
         const result = await getDepartmentApi()
         if (result.code === 0) {
-            deptTreeData.value = [{ id: 0, name: "顶级部门", children: createTree(result.data || []) }]
+            deptTreeData.value = [{ id: 0, name: "全部", children: createTree(result.data || []) }]
         } else {
             ElMessage.error(result.msg)
         }
@@ -132,7 +132,7 @@ const handleClosed = () => {
 // 表单验证
 const validateForm = () => {
     if (formData.parentId === '' || formData.parentId === null || formData.parentId === undefined) {
-        ElMessage('请选择上级部门')
+        ElMessage('请选择上级')
         return false
     }
     if (!formData.name?.trim()) {

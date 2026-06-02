@@ -57,7 +57,7 @@ const props = defineProps({
     showSearch: { type: Boolean, default: true },
     showAll: { type: Boolean, default: true },
     placeholder: { type: String, default: '搜索部门' },
-    allText: { type: String, default: '全部部门' },
+    allText: { type: String, default: '全部' },
     emptyText: { type: String, default: '暂无数据' },
     nodeKey: { type: String, default: 'id' },
     props: { type: Object, default: () => ({ children: 'children', label: 'name' }) },
@@ -323,7 +323,7 @@ Props 说明
 | showSearch       | Boolean        | true                                | 显示搜索框       |
 | showAll          | Boolean        | true                                | 显示"全部"选项   |
 | placeholder      | String         | '搜索部门'                           | 搜索框占位符     |
-| allText          | String         | '全部部门'                           | "全部"选项文字   |
+| allText          | String         | '全部'                               | "全部"选项文字   |
 | emptyText        | String         | '暂无数据'                           | 空状态文字       |
 | nodeKey          | String         | 'id'                                | 节点唯一标识字段  |
 | props            | Object         | { children: 'children', label: 'name' } | 树节点配置  |

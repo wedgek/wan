@@ -905,9 +905,11 @@ const REFERENCE_VIDEO_EXTS = new Set(["mp4", "mov"])
 
 /** 参考附件上限由当前模型 constraints 驱动（list-enabled 返回） */
 const REF_VIDEO_MAX_BYTES = 50 * 1024 * 1024
-/** 单路参考视频像素数（宽×高）；上限兼容 1080p（1920×1080 = 2073600） */
+/** 单路参考视频像素数（宽×高）；下限约 480p */
 const REF_VIDEO_PIXELS_MIN = 409_600
-const REF_VIDEO_PIXELS_MAX = 2_073_600
+/** 参考视频最长边 / 最短边（横竖屏均须落在 1280×720 内，即最高 720P） */
+const REF_VIDEO_MAX_LONG_EDGE = 1280
+const REF_VIDEO_MAX_SHORT_EDGE = 720
 
 /** 输入框字数上限（与 Element 计数器一致） */
 const INPUT_MAX_LENGTH = 20000
@@ -2057,6 +2059,30 @@ async function fetchUrlContentLength(url) {
   }
 }
 
+/** 参考视频分辨率是否不超过 720P（支持横屏与竖屏） */
+function isReferenceVideoWithin720p(width, height) {
+  const w = Math.round(Number(width)) || 0
+  const h = Math.round(Number(height)) || 0
+  if (!w || !h) return false
+  return (
+    (w <= REF_VIDEO_MAX_LONG_EDGE && h <= REF_VIDEO_MAX_SHORT_EDGE) ||
+    (w <= REF_VIDEO_MAX_SHORT_EDGE && h <= REF_VIDEO_MAX_LONG_EDGE)
+  )
+}
+
+function referenceVideoResolutionWarning(width, height) {
+  const w = Math.round(Number(width)) || 0
+  const h = Math.round(Number(height)) || 0
+  if (w && h && !isReferenceVideoWithin720p(w, h)) {
+    return `参考视频分辨率不能超过 720P，当前为 ${w}×${h}`
+  }
+  const pixels = w * h
+  if (pixels < REF_VIDEO_PIXELS_MIN) {
+    return `参考视频分辨率过低：总像素须不少于 ${REF_VIDEO_PIXELS_MIN.toLocaleString()}（约 480p）`
+  }
+  return ""
+}
+
 /**
  * @param {Array<{ size: number, duration: number, width: number, height: number }>} items
  */
@@ -2070,11 +2096,9 @@ function validateReferenceVideoRules(items, { prefixError }) {
   let sumSize = 0
   for (let i = 0; i < items.length; i++) {
     const it = items[i]
-    const pixels = it.width * it.height
-    if (pixels < REF_VIDEO_PIXELS_MIN || pixels > REF_VIDEO_PIXELS_MAX) {
-      ElMessage.warning(
-        `${pre}第 ${i + 1} 个参考视频分辨率不合要求：总像素须在 ${REF_VIDEO_PIXELS_MIN.toLocaleString()}～${REF_VIDEO_PIXELS_MAX.toLocaleString()} 之间（约 480p～1080p）`,
-      )
+    const resWarn = referenceVideoResolutionWarning(it.width, it.height)
+    if (resWarn) {
+      ElMessage.warning(`${pre}第 ${i + 1} 个${resWarn}`)
       return false
     }
     if (it.size >= REF_VIDEO_MAX_BYTES) {
@@ -2235,11 +2259,9 @@ async function addUploadedVideoFile(file) {
     return
   }
 
-  const pixels = dim.width * dim.height
-  if (pixels < REF_VIDEO_PIXELS_MIN || pixels > REF_VIDEO_PIXELS_MAX) {
-    ElMessage.warning(
-      `参考视频分辨率不合要求：总像素须在 ${REF_VIDEO_PIXELS_MIN.toLocaleString()}～${REF_VIDEO_PIXELS_MAX.toLocaleString()} 之间（约 480p～1080p）`,
-    )
+  const resWarn = referenceVideoResolutionWarning(dim.width, dim.height)
+  if (resWarn) {
+    ElMessage.warning(resWarn)
     return
   }
 

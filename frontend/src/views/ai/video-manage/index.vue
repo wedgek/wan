@@ -11,6 +11,7 @@
           clear-icon="Close"
         />
         <el-select
+          v-if="showCreatorFilter"
           v-model="tableParams.userId"
           placeholder="选择创建人"
           class="filter-select-user"
@@ -140,7 +141,7 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="modelName" label="模型" min-width="120" align="center" show-overflow-tooltip />
+        <el-table-column prop="modelName" label="模型" min-width="168" align="center" show-overflow-tooltip />
         <el-table-column label="参数" width="100" align="center">
           <template #default="{ row }">
             <span v-if="row.aspectRatio || row.durationSec != null">
@@ -206,6 +207,11 @@ import { useTable } from "@/hooks/useTable"
 import CzPagination from "@/components/cz-pagination/index.vue"
 import request from "@/request"
 import { debounce } from "@/utils"
+import { useAuthStore } from "@/stores/auth.js"
+
+const authStore = useAuthStore()
+/** 仅本人数据范围时无需筛选创建人（只能看自己的任务） */
+const showCreatorFilter = computed(() => authStore.dataScopeInfo?.mode !== "self")
 
 /** 懒加载视频组件：进入可视区域后才加载 metadata */
 const LazyVideo = defineComponent({
@@ -248,8 +254,12 @@ const LazyVideo = defineComponent({
 })
 
 onMounted(() => {
+  if (!showCreatorFilter.value) {
+    tableParams.userId = ""
+  } else {
+    loadUserOptions("")
+  }
   getTableData()
-  loadUserOptions("")
 })
 
 const userOptions = ref([])
@@ -310,7 +320,11 @@ const { tableParams, tableData, tableTotal, tableLoading, getTableData, tableSea
 function onReset() {
   resetTable()
   expandedPromptById.value = {}
-  loadUserOptions("")
+  if (showCreatorFilter.value) {
+    loadUserOptions("")
+  } else {
+    tableParams.userId = ""
+  }
 }
 
 /** 缓存每行的媒体数据，避免重复计算 */

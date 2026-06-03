@@ -16,11 +16,18 @@
 
             <el-form-item label="权限范围">
                 <el-select v-model="formData.dataScope" style="width: 100%">
-                    <el-option label="全部数据权限" :value="1" />
-                    <el-option label="指定部门数据权限" :value="2" />
-                    <el-option label="部门数据权限" :value="3" />
-                    <el-option label="部门及以下数据权限" :value="4" />
-                    <el-option label="仅本人数据权限" :value="5" />
+                    <el-option
+                        v-for="opt in DATA_SCOPE_OPTIONS"
+                        :key="opt.value"
+                        :label="opt.label"
+                        :value="opt.value"
+                    />
+                    <el-option
+                        v-if="formData.dataScope === 3"
+                        label="本部门（旧配置，请调整）"
+                        :value="3"
+                        disabled
+                    />
                 </el-select>
             </el-form-item>
 
@@ -76,6 +83,7 @@
 import request from "@/request"
 import { getDepartmentApi } from "@/api/system.js"
 import { createTree } from "@/utils/tree.js"
+import { DATA_SCOPE_OPTIONS } from "@/utils/dataScope.js"
 
 const emit = defineEmits(['success'])
 

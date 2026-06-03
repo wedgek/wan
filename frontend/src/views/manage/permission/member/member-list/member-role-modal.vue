@@ -43,6 +43,9 @@
 <script setup>
 import request from "@/request"
 import { getRoleApi } from "@/api/system.js"
+import { useAuthStore } from '@/stores/auth.js'
+
+const authStore = useAuthStore()
 
 const emit = defineEmits(['success'])
 
@@ -87,7 +90,10 @@ const show = async (row) => {
         // 获取角色列表
         const roleResult = await getRoleApi()
         if (roleResult.code === 0) {
-            roleList.value = roleResult.data || []
+            const list = roleResult.data || []
+            roleList.value = authStore.isSuperAdmin
+                ? list
+                : list.filter((r) => Number(r.id) !== 1)
         } else {
             ElMessage.error(roleResult.msg)
         }

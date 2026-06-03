@@ -7,6 +7,7 @@ const { ok, fail } = require('../utils/response')
 const modelCatalogRouter = require('./modelCatalog')
 const { rowToCatalog, parseJsonField, normalizeVendor, resolveStoreModality, isStoreModalityUnset } = require('../services/modelCatalogService')
 const { publishCatalogToStore, clearOtherDefaults } = require('../services/catalogPublishService')
+const dataScope = require('../services/dataScopeService')
 
 const router = express.Router()
 router.use(requireAuth)
@@ -252,6 +253,13 @@ function deptRowsWithLeader(whereSql, params) {
     .all(...params)
 }
 
+function filterDeptRowsByScope(rows, userId) {
+  const visible = dataScope.visibleDeptIdsForUser(userId)
+  if (visible === null) return rows
+  const allow = new Set(visible)
+  return rows.filter((r) => allow.has(Number(r.id)))
+}
+
 router.get('/dept/list', (req, res) => {
   const name = (req.query.name || '').trim()
   const status = req.query.status
@@ -265,16 +273,20 @@ router.get('/dept/list', (req, res) => {
     conds.push('d.status = ?')
     params.push(Number(status))
   }
-  const rows = deptRowsWithLeader(conds.join(' AND '), params)
+  let rows = deptRowsWithLeader(conds.join(' AND '), params)
+  rows = filterDeptRowsByScope(rows, req.userId)
   res.json(ok(rows.map((r) => db.rowToDept(r))))
 })
 
 router.get('/dept/list-all-simple', (req, res) => {
-  const rows = deptRowsWithLeader('1=1', [])
+  let rows = deptRowsWithLeader('1=1', [])
+  rows = filterDeptRowsByScope(rows, req.userId)
   res.json(ok(rows.map((r) => db.rowToDept(r))))
 })
 
 router.post('/dept/create', (req, res) => {
+  const perm = dataScope.assertCanManageDepts(req.userId)
+  if (!perm.ok) return res.json(fail(403, perm.msg))
   const b = req.body || {}
   const info = database()
     .prepare(
@@ -294,6 +306,8 @@ router.post('/dept/create', (req, res) => {
 })
 
 router.put('/dept/update', (req, res) => {
+  const perm = dataScope.assertCanManageDepts(req.userId)
+  if (!perm.ok) return res.json(fail(403, perm.msg))
   const b = req.body || {}
   const id = Number(b.id)
   if (!id) return res.json(fail(400, '缺少 id'))
@@ -316,6 +330,8 @@ router.put('/dept/update', (req, res) => {
 })
 
 router.delete('/dept/delete', (req, res) => {
+  const perm = dataScope.assertCanManageDepts(req.userId)
+  if (!perm.ok) return res.json(fail(403, perm.msg))
   const id = Number(req.query.id)
   if (!id) return res.json(fail(400, '缺少 id'))
   if (id === 1) return res.json(fail(400, '根部门不可删除'))
@@ -360,6 +376,16 @@ router.get('/role/page', (req, res) => {
     const base = db.roleRow(r)
     const ds = database().prepare('SELECT dept_id FROM role_data_scope_depts WHERE role_id = ?').all(base.id)
     base.dataScopeDeptIds = ds.map((x) => x.dept_id)
+    if (Number(base.dataScope) === 2 && base.dataScopeDeptIds.length) {
+      const ph = base.dataScopeDeptIds.map(() => '?').join(',')
+      base.dataScopeDeptNames = database()
+        .prepare(`SELECT name FROM departments WHERE id IN (${ph}) ORDER BY id ASC`)
+        .all(...base.dataScopeDeptIds)
+        .map((x) => x.name)
+        .filter(Boolean)
+    } else {
+      base.dataScopeDeptNames = []
+    }
     return base
   })
   res.json(ok({ list, total }))
@@ -451,6 +477,9 @@ router.get('/user/page', (req, res) => {
   const deptId = req.query.deptId
   const conds = ['1=1']
   const params = []
+  const scopeClause = dataScope.userListScopeClause(req.userId, 'u')
+  conds.push(`(${scopeClause.sql})`)
+  params.push(...scopeClause.params)
   if (username) {
     conds.push('(u.username LIKE ? OR u.email LIKE ? OR u.nickname LIKE ?)')
     const p = `%${username}%`
@@ -461,8 +490,13 @@ router.get('/user/page', (req, res) => {
     params.push(Number(status))
   }
   if (deptId !== undefined && deptId !== '') {
-    conds.push('u.dept_id = ?')
-    params.push(Number(deptId))
+    const filterDeptIds = dataScope.userListDeptFilterIds(Number(deptId), scopeClause.scope)
+    if (!filterDeptIds.length) {
+      return res.json(ok({ list: [], total: 0 }))
+    }
+    const ph = filterDeptIds.map(() => '?').join(',')
+    conds.push(`u.dept_id IN (${ph})`)
+    params.push(...filterDeptIds)
   }
   const where = conds.join(' AND ')
   const total = database().prepare(`SELECT COUNT(*) as c FROM users u WHERE ${where}`).get(...params).c
@@ -487,15 +521,18 @@ router.get('/user/list-all-simple', (req, res) => {
   const nickname = (req.query.nickname || '').trim()
   const conds = ['1=1']
   const params = []
+  const scopeClause = dataScope.userListScopeClause(req.userId, 'u')
+  conds.push(`(${scopeClause.sql})`)
+  params.push(...scopeClause.params)
   if (nickname) {
-    conds.push('(nickname LIKE ? OR username LIKE ?)')
+    conds.push('(u.nickname LIKE ? OR u.username LIKE ?)')
     const p = `%${nickname}%`
     params.push(p, p)
   }
   const where = conds.join(' AND ')
   const rows = database()
     .prepare(
-      `SELECT id, nickname, username, dept_id as deptId FROM users WHERE ${where} ORDER BY id ASC LIMIT 50`
+      `SELECT u.id, u.nickname, u.username, u.dept_id as deptId FROM users u WHERE ${where} ORDER BY u.id ASC LIMIT 50`
     )
     .all(...params)
   res.json(ok(rows))
@@ -504,6 +541,8 @@ router.get('/user/list-all-simple', (req, res) => {
 router.post('/user/create', (req, res) => {
   const b = req.body || {}
   if (!b.username || !b.password) return res.json(fail(400, '缺少账号或密码'))
+  const deptCheck = dataScope.assertDeptInScope(req.userId, Number(b.deptId) || 0)
+  if (!deptCheck.ok) return res.json(fail(403, deptCheck.msg))
   const exists = database().prepare('SELECT 1 FROM users WHERE username = ?').get(b.username)
   if (exists) return res.json(fail(400, '用户名已存在'))
   try {
@@ -532,6 +571,10 @@ router.put('/user/update', (req, res) => {
   const b = req.body || {}
   const id = Number(b.id)
   if (!id) return res.json(fail(400, '缺少 id'))
+  const userCheck = dataScope.assertUserInScope(req.userId, id)
+  if (!userCheck.ok) return res.json(fail(403, userCheck.msg))
+  const deptCheck = dataScope.assertDeptInScope(req.userId, Number(b.deptId) || 0)
+  if (!deptCheck.ok) return res.json(fail(403, deptCheck.msg))
   database()
     .prepare(
       `UPDATE users SET nickname = ?, dept_id = ?, mobile = ?, email = ?, sex = ?, remark = ? WHERE id = ?`
@@ -552,6 +595,8 @@ router.put('/user/update-status', (req, res) => {
   const { id, status } = req.body || {}
   if (id == null) return res.json(fail(400, '缺少 id'))
   if (Number(id) === 1) return res.json(fail(400, '内置管理员状态不可修改'))
+  const userCheck = dataScope.assertUserInScope(req.userId, id)
+  if (!userCheck.ok) return res.json(fail(403, userCheck.msg))
   database().prepare('UPDATE users SET status = ? WHERE id = ?').run(Number(status), Number(id))
   res.json(ok(true))
 })
@@ -559,6 +604,8 @@ router.put('/user/update-status', (req, res) => {
 router.put('/user/update-password', (req, res) => {
   const { id, password } = req.body || {}
   if (id == null || !password) return res.json(fail(400, '参数不完整'))
+  const userCheck = dataScope.assertUserInScope(req.userId, id)
+  if (!userCheck.ok) return res.json(fail(403, userCheck.msg))
   const r = database().prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(db.hashPassword(password), Number(id))
   if (!r.changes) return res.json(fail(404, '用户不存在'))
   res.json(ok(true))
@@ -577,6 +624,8 @@ router.delete('/user/delete', (req, res) => {
   const id = Number(req.query.id)
   if (!id) return res.json(fail(400, '缺少 id'))
   if (id === 1) return res.json(fail(400, '内置管理员不可删除'))
+  const userCheck = dataScope.assertUserInScope(req.userId, id)
+  if (!userCheck.ok) return res.json(fail(403, userCheck.msg))
   database().prepare('DELETE FROM user_roles WHERE user_id = ?').run(id)
   database().prepare('DELETE FROM users WHERE id = ?').run(id)
   res.json(ok(true))
@@ -591,12 +640,15 @@ router.get('/user/qcCode', (req, res) => {
 })
 
 router.get('/user/export', (req, res) => {
+  const scopeClause = dataScope.userListScopeClause(req.userId, 'u')
   const rows = database()
     .prepare(
       `SELECT u.username, u.nickname, d.name as dept_name, u.status, u.mobile, u.email, datetime(u.created_at, 'localtime') as create_time
-       FROM users u LEFT JOIN departments d ON u.dept_id = d.id ORDER BY u.id`
+       FROM users u LEFT JOIN departments d ON u.dept_id = d.id
+       WHERE (${scopeClause.sql})
+       ORDER BY u.id`
     )
-    .all()
+    .all(...scopeClause.params)
   const bom = '\ufeff'
   const head = '用户名,昵称,部门,状态,手机,邮箱,创建时间\n'
   const body = rows
@@ -647,6 +699,10 @@ router.post('/permission/assign-user-role', (req, res) => {
   if (Number(userId) === 1 && (!roleIds || !roleIds.includes(1))) {
     return res.json(fail(400, '内置管理员须保留超级管理员角色'))
   }
+  const userCheck = dataScope.assertUserInScope(req.userId, userId)
+  if (!userCheck.ok) return res.json(fail(403, userCheck.msg))
+  const roleCheck = dataScope.assertCanAssignRoles(req.userId, roleIds)
+  if (!roleCheck.ok) return res.json(fail(403, roleCheck.msg))
   const dbi = database()
   const tx = dbi.transaction(() => {
     dbi.prepare('DELETE FROM user_roles WHERE user_id = ?').run(Number(userId))

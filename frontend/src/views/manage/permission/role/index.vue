@@ -48,6 +48,11 @@
                     </template>
                 </el-table-column>
                 <el-table-column prop="code" label="角色标识" min-width="120" align="center" />
+                <el-table-column label="权限范围" min-width="200" align="center" show-overflow-tooltip>
+                    <template #default="{ row }">
+                        <span>{{ formatRoleDataScopeText(row) }}</span>
+                    </template>
+                </el-table-column>
                 <el-table-column prop="sort" label="排序" width="80" align="center" />
                 <el-table-column prop="status" label="状态" width="80" align="center">
                     <template #default="{ row }">
@@ -100,6 +105,7 @@ import CzPagination from '@/components/cz-pagination/index.vue'
 import RoleModal from './role-modal.vue'
 import RoleMenuModal from './role-menu-modal.vue'
 import RoleDataModal from './role-data-modal.vue'
+import { formatRoleDataScopeText } from '@/utils/dataScope.js'
 
 onMounted(() => {
     getTableData()

@@ -3,6 +3,7 @@ const db = require('../db')
 const session = require('../session')
 const { buildTree } = require('../utils/tree')
 const { rowToUser, rowToMenu } = require('../db')
+const dataScope = require('../services/dataScopeService')
 
 const router = express.Router()
 
@@ -100,6 +101,7 @@ router.get('/get-permission-info', requireAuth, (req, res) => {
   const menuRows = menuRowsForUser(req.userId)
   const menus = buildMenuTree(menuRows)
   const permissions = collectPermissions(menuRows)
+  const scope = dataScope.resolveDataScope(req.userId)
 
   res.json({
     code: 0,
@@ -109,6 +111,12 @@ router.get('/get-permission-info', requireAuth, (req, res) => {
       roles: roleIds,
       roleNames,
       menus,
+      dataScope: {
+        mode: scope.mode,
+        deptIds: scope.deptIds,
+        isSuperAdmin: scope.isSuperAdmin,
+        canManageDepts: scope.isSuperAdmin,
+      },
     },
   })
 })

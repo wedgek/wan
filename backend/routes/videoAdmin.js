@@ -5,6 +5,7 @@ const express = require('express')
 const { requireAuth } = require('./auth')
 const { ok, fail } = require('../utils/response')
 const db = require('../db')
+const dataScope = require('../services/dataScopeService')
 
 const router = express.Router()
 router.use(requireAuth)
@@ -162,7 +163,16 @@ router.get('/jobs/page', (req, res) => {
 
     const conds = ['1=1']
     const params = []
+    const scopePart = dataScope.videoJobsScopeClause(req.userId)
+    if (scopePart.sql) {
+      conds.push(scopePart.sql)
+      params.push(...scopePart.params)
+    }
     if (userIdFilter > 0) {
+      const userCheck = dataScope.assertUserInScope(req.userId, userIdFilter)
+      if (!userCheck.ok) {
+        return res.json(ok({ list: [], total: 0 }))
+      }
       conds.push('j.user_id = ?')
       params.push(userIdFilter)
     }

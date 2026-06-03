@@ -12,6 +12,8 @@ export const useAuthStore = defineStore("auth", () => {
   const permissions = ref([])
   const roles = ref([])
   const roleNames = ref([])
+  /** @type {import('vue').Ref<{ mode: string, deptIds: number[], isSuperAdmin: boolean, canManageDepts: boolean } | null>} */
+  const dataScopeInfo = ref(null)
 
   /** 清会话与动态路由，不跳转（供路由未 install 时复用） */
   const clearSession = () => {
@@ -21,6 +23,7 @@ export const useAuthStore = defineStore("auth", () => {
     permissions.value = []
     roles.value = []
     roleNames.value = []
+    dataScopeInfo.value = null
 
     removeStorage("token")
     removeStorage("refreshToken")
@@ -28,6 +31,7 @@ export const useAuthStore = defineStore("auth", () => {
     removeStorage("permissions")
     removeStorage("roles")
     removeStorage("roleNames")
+    removeStorage("dataScope")
 
     const menuStore = useMenuStore()
     menuStore.clearMenus()
@@ -41,6 +45,7 @@ export const useAuthStore = defineStore("auth", () => {
     const savedPermissions = getStorage("permissions")
     const savedRoles = getStorage("roles")
     const savedRoleNames = getStorage("roleNames")
+    const savedDataScope = getStorage("dataScope")
 
     const menuStore = useMenuStore()
 
@@ -52,6 +57,7 @@ export const useAuthStore = defineStore("auth", () => {
       permissions.value = savedPermissions || []
       roles.value = savedRoles || []
       roleNames.value = savedRoleNames || []
+      dataScopeInfo.value = savedDataScope || null
     } else {
       menuStore.clearMenus()
     }
@@ -83,11 +89,13 @@ export const useAuthStore = defineStore("auth", () => {
         permissions.value = result.data.permissions || []
         roles.value = result.data.roles || []
         roleNames.value = result.data.roleNames || []
+        dataScopeInfo.value = result.data.dataScope || null
 
         setStorage("user", result.data.user)
         setStorage("permissions", result.data.permissions || [])
         setStorage("roles", result.data.roles || [])
         setStorage("roleNames", result.data.roleNames || [])
+        setStorage("dataScope", result.data.dataScope || null)
 
         // 同步菜单数据
         const menuStore = useMenuStore()
@@ -123,6 +131,12 @@ export const useAuthStore = defineStore("auth", () => {
   const isLoggedIn = computed(() => !!token.value)
   const hasPermission = (permission) => permissions.value.includes(permission)
   const hasRole = (role) => roles.value.includes(role)
+  const isSuperAdmin = computed(
+    () => dataScopeInfo.value?.isSuperAdmin === true || roles.value.includes(1),
+  )
+  const canManageDepts = computed(
+    () => dataScopeInfo.value?.canManageDepts === true || isSuperAdmin.value,
+  )
 
   return {
     user,
@@ -131,6 +145,7 @@ export const useAuthStore = defineStore("auth", () => {
     permissions,
     roles,
     roleNames,
+    dataScopeInfo,
     initAuth,
     clearSession,
     setTokenPair,
@@ -140,5 +155,7 @@ export const useAuthStore = defineStore("auth", () => {
     isLoggedIn,
     hasPermission,
     hasRole,
+    isSuperAdmin,
+    canManageDepts,
   }
 })

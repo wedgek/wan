@@ -29,7 +29,7 @@
             <!-- 操作区域 -->
             <div class="page-table-header">
                 <div class="header-left">
-                    <el-button type="primary" @click="deptModalRef?.showAdd()" :icon="$icons.Plus">新增部门</el-button>
+                    <el-button v-if="canManageDepts" type="primary" @click="deptModalRef?.showAdd()" :icon="$icons.Plus">新增部门</el-button>
                 </div>
                 <div class="header-right">
                     <el-button link type="primary" @click="toggleExpandAll" :icon="expandAll ? $icons.FolderOpened : $icons.Folder">
@@ -64,7 +64,7 @@
                     </el-table-column>
                     <el-table-column prop="sort" label="排序" width="150" align="center" />
                     <el-table-column prop="createTime" label="创建时间" min-width="180" align="center" />
-                    <el-table-column label="操作" width="180" fixed="right" align="center">
+                    <el-table-column v-if="canManageDepts" label="操作" width="180" fixed="right" align="center">
                         <template #default="{ row }">
                         <el-button type="primary" link :icon="$icons.Edit" @click="deptModalRef?.showEdit(row)">编辑</el-button>
                         <el-button type="danger" link :icon="$icons.Delete" @click="handleDelete(row.id)">删除</el-button>
@@ -86,6 +86,10 @@ import { useCellClick } from '@/hooks/useCellClick'
 import { shortcuts } from "@/utils/public.js"
 import { createTree } from "@/utils/tree.js"
 import DepartmentModal from './department-modal.vue'
+import { useAuthStore } from '@/stores/auth.js'
+
+const authStore = useAuthStore()
+const canManageDepts = computed(() => authStore.canManageDepts)
 
 onMounted(() => {
     getTableData()

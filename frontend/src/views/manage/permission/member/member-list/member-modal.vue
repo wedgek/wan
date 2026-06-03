@@ -11,14 +11,14 @@
                 <el-input v-model="formData.nickname" maxlength="30" placeholder="请输入姓名" clearable clear-icon="Close" />
             </el-form-item>
 
-            <el-form-item label="归属部门" v-required-dot>
+            <el-form-item label="归属" v-required-dot>
                 <el-tree-select
                     v-model="formData.deptId"
                     :data="deptTreeData"
                     :props="{ children: 'children', label: 'name', value: 'id' }"
                     check-strictly
                     default-expand-all
-                    placeholder="请选择归属部门"
+                    placeholder="请选择归属"
                     clearable
                     clear-icon="Close"
                 />
@@ -127,7 +127,7 @@ const validateForm = () => {
         return false
     }
     if (!formData.deptId) {
-        ElMessage('请选择归属部门')
+        ElMessage('请选择归属')
         return false
     }
     if (modalMode.value === 'add') {

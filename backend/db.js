@@ -67,11 +67,9 @@ function applySchemaPatches(dbi) {
     ensureAiStudioPatch(dbi)
     ensureVideoChatSchema(dbi)
     ensureVideoChatMenu(dbi)
-    syncVideoChatMenuTitle(dbi)
     ensureTextChatSchema(dbi)
     ensureTextChatMenu(dbi)
     ensureAiVideoManageMenu(dbi)
-    syncAiVideoManageMenuTitle(dbi)
     ensureProductLibrarySchema(dbi)
     ensureProductLibraryMenu(dbi)
     ensureAiVideoModelMenuInSidebar(dbi)
@@ -306,19 +304,10 @@ function ensureAuthSessionsSchema(dbi) {
   `)
 }
 
-/**
- * 工作流（Studio）：路由固定为 /ai/studio；历史库中误填 path=video / name=视频创作 时纠正。
- * 若运营已在菜单管理改名，只要名称不是「视频创作」「创意画布」，则保留名称，仅校正 path。
- */
+/** 工作流（Studio）：仅校正 path，不改菜单名称（名称由菜单管理维护）。 */
 function ensureWorkflowMenuSync(dbi) {
   try {
     dbi.prepare(`UPDATE menus SET path = 'studio' WHERE component_name = 'aiVideoStudio'`).run()
-    dbi
-      .prepare(
-        `UPDATE menus SET name = '工作流', icon = 'Grid'
-         WHERE component_name = 'aiVideoStudio' AND name IN ('视频创作', '创意画布')`
-      )
-      .run()
   } catch (e) {
     console.error('[db] ensureWorkflowMenuSync', e.message)
   }
@@ -343,17 +332,6 @@ function ensureVideoChatMenu(dbi) {
     dbi.prepare('INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES (?, ?)').run('menus', id)
   } catch (_) {
     /* ignore */
-  }
-}
-
-/** 已存在的库：侧栏「对话创作」(video-chat) 统一为「视频生成」 */
-function syncVideoChatMenuTitle(dbi) {
-  try {
-    dbi
-      .prepare(`UPDATE menus SET name = ?, icon = ? WHERE component_name = ?`)
-      .run('视频生成', 'VideoCamera', 'aiVideoChat')
-  } catch (e) {
-    console.error('[db] syncVideoChatMenuTitle', e.message)
   }
 }
 
@@ -419,15 +397,6 @@ function ensureAiVideoManageMenu(dbi) {
     dbi.prepare('INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES (?, ?)').run('menus', id)
   } catch (_) {
     /* ignore */
-  }
-}
-
-/** 已存在的库：侧栏名称从「视频管理」等处统一为「创作日志」 */
-function syncAiVideoManageMenuTitle(dbi) {
-  try {
-    dbi.prepare(`UPDATE menus SET name = ? WHERE component_name = ?`).run('创作日志', 'aiVideoManage')
-  } catch (e) {
-    console.error('[db] syncAiVideoManageMenuTitle', e.message)
   }
 }
 
@@ -507,11 +476,6 @@ function ensureAiVideoModelMenuInSidebar(dbi) {
       return
     }
     dbi.prepare(`UPDATE menus SET visible = 1, sort = 99 WHERE component_name = 'aiVideoModelManage'`).run()
-    dbi
-      .prepare(
-        `UPDATE menus SET name = '模型商店' WHERE component_name = 'aiVideoModelManage' AND name IN ('视频模型配置', '视频模型', '模型管理')`,
-      )
-      .run()
   } catch (e) {
     console.error('[db] ensureAiVideoModelMenuInSidebar', e.message)
   }
@@ -532,9 +496,7 @@ function ensureModelCatalogMenu(dbi) {
   try {
     const row = dbi.prepare(`SELECT id FROM menus WHERE component_name = ?`).get('aiModelCatalog')
     if (row) {
-      dbi
-        .prepare(`UPDATE menus SET visible = 1, name = '模型目录', sort = 100 WHERE component_name = 'aiModelCatalog'`)
-        .run()
+      dbi.prepare(`UPDATE menus SET visible = 1, sort = 100 WHERE component_name = 'aiModelCatalog'`).run()
       dbi.prepare(`UPDATE menus SET sort = 99 WHERE component_name = 'aiVideoModelManage'`).run()
       return
     }
@@ -600,7 +562,7 @@ function ensureAiStudioPatch(dbi) {
       } else {
         dbi
           .prepare(
-            `UPDATE menus SET component_name = 'aiVideoStudio', name = '工作流', path = 'studio', icon = 'Grid'
+            `UPDATE menus SET component_name = 'aiVideoStudio', path = 'studio', icon = 'Grid'
              WHERE component_name = 'aiVideoCanvas'`
           )
           .run()

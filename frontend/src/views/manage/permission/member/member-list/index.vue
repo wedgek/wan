@@ -18,7 +18,7 @@
                 <!-- 查询区域 -->
                 <div class="page-filter-box">
                     <div class="page-filter-left">
-                        <el-input v-model="tableParams.username" placeholder="搜索用户名/邮箱" :suffix-icon="$icons.Search" clearable clear-icon="Close" />
+                        <el-input v-model="tableParams.username" placeholder="搜索用户名/昵称" :suffix-icon="$icons.Search" clearable clear-icon="Close" />
                         <el-select v-model="tableParams.status" placeholder="选择状态" clearable clear-icon="Close" style="width: 120px;">
                             <el-option label="激活" value="0" />
                             <el-option label="锁定" value="1" />
@@ -57,6 +57,14 @@
                         <el-table-column prop="username" label="用户名" min-width="100" align="center" show-overflow-tooltip />
                         <el-table-column prop="nickname" label="昵称" min-width="100" align="center" show-overflow-tooltip />
                         <el-table-column prop="deptName" label="部门" min-width="100" align="center" show-overflow-tooltip />
+                        <el-table-column label="角色" min-width="160" align="center">
+                            <template #default="{ row }">
+                                <div v-if="row.roleNames?.length" class="role-tags">
+                                    <el-tag v-for="name in row.roleNames" :key="name" size="small" type="info">{{ name }}</el-tag>
+                                </div>
+                                <span v-else>—</span>
+                            </template>
+                        </el-table-column>
                         <el-table-column prop="status" label="状态" width="70" align="center">
                             <template #default="{ row }">
                                 <el-switch 
@@ -68,7 +76,6 @@
                             </template>
                         </el-table-column>
                         <el-table-column prop="mobile" label="电话" min-width="100" align="center" />
-                        <el-table-column prop="email" label="邮箱" min-width="120" align="center" show-overflow-tooltip />
                         <el-table-column prop="createTime" label="创建时间" width="160" align="center" />
                         <el-table-column label="操作" width="280" fixed="right" align="center">
                             <template #default="{ row }">
@@ -309,6 +316,13 @@ const memberRoleModalRef = ref()
     .page-pagination-box {
         margin-top: 12px;
     }
+}
+
+.role-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    justify-content: center;
 }
 
 </style>

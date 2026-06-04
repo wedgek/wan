@@ -468,6 +468,28 @@ router.get('/role/export-excel', (req, res) => {
   res.send(buf)
 })
 
+/** @param {import('better-sqlite3').Database} dbi */
+function loadRoleNamesByUserIds(dbi, userIds) {
+  const ids = [...new Set(userIds.map((id) => Number(id)).filter((id) => id > 0))]
+  const map = new Map()
+  if (!ids.length) return map
+  const ph = ids.map(() => '?').join(',')
+  const rows = dbi
+    .prepare(
+      `SELECT ur.user_id, r.name
+       FROM user_roles ur
+       INNER JOIN roles r ON r.id = ur.role_id
+       WHERE ur.user_id IN (${ph})
+       ORDER BY r.sort ASC, r.id ASC`,
+    )
+    .all(...ids)
+  for (const r of rows) {
+    if (!map.has(r.user_id)) map.set(r.user_id, [])
+    map.get(r.user_id).push(r.name)
+  }
+  return map
+}
+
 /* ---------- 用户 ---------- */
 router.get('/user/page', (req, res) => {
   const pageNo = Math.max(1, parseInt(req.query.pageNo, 10) || 1)
@@ -510,9 +532,11 @@ router.get('/user/page', (req, res) => {
        ORDER BY u.id ASC LIMIT ? OFFSET ?`
     )
     .all(...params, pageSize, offset)
+  const roleMap = loadRoleNamesByUserIds(database(), rows.map((r) => r.id))
   const list = rows.map((r) => ({
     ...db.rowToUser(r),
     deptName: r.dept_name || '',
+    roleNames: roleMap.get(r.id) || [],
   }))
   res.json(ok({ list, total }))
 })

@@ -164,6 +164,9 @@ function ensureVideoSchema(dbi) {
   ensureColumn(dbi, 'video_models', 'tags', 'TEXT')
   ensureColumn(dbi, 'video_models', 'api_profile', 'TEXT')
   ensureColumn(dbi, 'video_jobs', 'api_profile', 'TEXT')
+  ensureColumn(dbi, 'video_jobs', 'usage_input_tokens', 'INTEGER')
+  ensureColumn(dbi, 'video_jobs', 'usage_output_tokens', 'INTEGER')
+  ensureColumn(dbi, 'video_jobs', 'cost_yuan', 'REAL')
 }
 
 /** 模型目录：DMXAPI 同步 / 手动维护的候选模型库 */

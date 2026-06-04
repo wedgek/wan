@@ -4,6 +4,7 @@
 const seedance = require('./seedanceClient')
 const { getProfileById } = require('./videoApiProfiles')
 const { maybeMirrorSeedanceVideoToTos } = require('./videoResultTosMirror')
+const { mergeAndPersistJobUsage } = require('./videoJobBilling')
 const kling = require('./klingVideoClient')
 
 function resolveExternalTaskId(externalTaskId, requestPayloadJson = '', apiProfile = '') {
@@ -51,6 +52,15 @@ async function pullArkJobStateAndStableResultUrl(
     }
   }
   const remote = await seedance.getContentsGenerationTask(taskId, createModelId, profileId)
+  if (jobId) {
+    try {
+      await mergeAndPersistJobUsage(require('../db').getDb(), jobId, remote, {
+        apiModelId: createModelId,
+      })
+    } catch (e) {
+      console.warn('[videoJobArkSync] persist usage', jobId, e.message)
+    }
+  }
   let { status, resultUrl, errorMessage } = seedance.mapRemoteToJobUpdate(remote, profileId)
 
   if (status === 'succeeded' && resultUrl) {

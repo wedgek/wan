@@ -98,8 +98,32 @@ function parsePriceInfoTable(priceInfo) {
   return null
 }
 
+/** @returns {object|null} pricingEntry.price_info.default.default */
+function pickPriceInfoDefault(pricingEntry) {
+  const pi = pricingEntry?.price_info?.default?.default
+  return pi && typeof pi === 'object' ? pi : null
+}
+
+/**
+ * Token 按量计费（元），与 DMXAPI 使用日志公式一致；quota_type=0 按次价返回 null
+ */
+function computeTokenCostYuan(pi, inputTokens, outputTokens, groupRatio = 1, userDiscount = 1) {
+  if (!pi || pi.quota_type === 0) return null
+  const ratio = Number(pi.model_ratio) || 0
+  const completion = Number(pi.model_completion_ratio) || 0
+  if (ratio <= 0 && completion <= 0) return null
+  const gr = Number(groupRatio) || 1
+  const ud = Number(userDiscount) || 1
+  const inputPerM = ratio * 2 * gr
+  const outputPerM = ratio * completion * 2 * gr
+  const inTok = Math.max(0, Number(inputTokens) || 0)
+  const outTok = Math.max(0, Number(outputTokens) || 0)
+  const cost = ((inTok * inputPerM + outTok * outputPerM) / 1e6) * ud
+  return Number.isFinite(cost) ? cost : null
+}
+
 function buildDmxapiPriceDisplay(entry, groupRatio = 1, apiModelId = '') {
-  const pi = entry?.price_info?.default?.default
+  const pi = pickPriceInfoDefault(entry)
 
   const fromInfo = parsePriceInfoTable(pi?.priceInfo)
   if (fromInfo) return fromInfo
@@ -227,6 +251,8 @@ module.exports = {
   fetchDmxapiPricingMap,
   formatDmxapiPriceText,
   formatDmxapiPriceSummary,
+  pickPriceInfoDefault,
+  computeTokenCostYuan,
   buildDmxapiPriceDisplay,
   inferDmxapiTags,
   buildSyncRemark,

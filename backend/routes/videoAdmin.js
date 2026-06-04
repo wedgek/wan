@@ -142,6 +142,7 @@ function rowToAdminJob(r) {
     fromChat: r.from_chat === 1,
     aspectRatio: extra.aspectRatio || '',
     durationSec: extra.duration,
+    costYuan: r.cost_yuan != null && Number.isFinite(Number(r.cost_yuan)) ? Number(r.cost_yuan) : null,
     createTime: r.create_time ? String(r.create_time).replace('T', ' ').slice(0, 19) : '',
     updateTime: r.update_time ? String(r.update_time).replace('T', ' ').slice(0, 19) : '',
   }
@@ -211,6 +212,7 @@ router.get('/jobs/page', (req, res) => {
       .prepare(
         `SELECT j.id, j.user_id, j.project_id, j.video_model_id, j.mode, j.source_image_url, j.source_video_urls,
                 j.external_task_id, j.status, j.prompt, j.result_url, j.error_message, j.request_payload,
+                j.usage_input_tokens, j.usage_output_tokens, j.cost_yuan,
                 datetime(j.created_at, 'localtime') as create_time, datetime(j.updated_at, 'localtime') as update_time,
                 u.username, u.nickname,
                 TRIM(COALESCE(vm.name, '')) as model_name,

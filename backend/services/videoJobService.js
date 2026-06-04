@@ -9,6 +9,7 @@ const {
   mergeConstraints,
   getProfileById,
 } = require('./videoApiProfiles')
+const { mergeAndPersistJobUsage } = require('./videoJobBilling')
 
 /** 每分钟每用户最大创建任务数 */
 const RATE_PER_MINUTE = Math.min(120, Math.max(6, Number(process.env.VIDEO_JOB_RATE_PER_MIN || 24)))
@@ -271,9 +272,19 @@ async function createVideoJob(dbi, opts) {
     profile.id,
   )
 
+  const jobId = Number(info.lastInsertRowid)
+  try {
+    await mergeAndPersistJobUsage(dbi, jobId, remote, {
+      apiModelId: arkModelId,
+      catalogId: modelRow.catalog_id,
+    })
+  } catch (e) {
+    console.warn('[videoJobService] persist usage', jobId, e.message)
+  }
+
   return {
     ok: true,
-    id: Number(info.lastInsertRowid),
+    id: jobId,
     externalTaskId: tid,
     status: 'processing',
     mode: storeMode,

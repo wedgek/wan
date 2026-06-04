@@ -150,6 +150,12 @@
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
+        <el-table-column label="花费" width="110" align="center">
+          <template #default="{ row }">
+            <span v-if="row.costYuan != null">{{ formatCostYuan(row.costYuan) }}</span>
+            <span v-else class="muted">—</span>
+          </template>
+        </el-table-column>
         <el-table-column label="状态" width="100" align="center">
           <template #default="{ row }">
             <el-tag v-if="statusKind(row.status) === 'run'" type="warning" size="small">{{ statusLabel(row.status) }}</el-tag>
@@ -392,6 +398,12 @@ function openRefVideo(url) {
 
 function onResultDialogClose() {
   resultPlayUrl.value = ""
+}
+
+function formatCostYuan(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return "—"
+  return `¥${n.toFixed(6)}`
 }
 
 /** @returns {'run'|'ok'|'bad'|'other'} */

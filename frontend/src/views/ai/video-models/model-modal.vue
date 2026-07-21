@@ -44,6 +44,21 @@
         </el-select>
         <div class="form-item-tip">视频生成 / 工作流生成视频时，仅加载「视频」类模型；对话创作加载「文本」类模型。</div>
       </el-form-item>
+      <el-form-item v-if="formData.modality === 'video'" label="API 来源">
+        <el-select
+          v-model="formData.apiProvider"
+          placeholder="自动（Seedance→官方，其他→DMXAPI）"
+          clearable
+          style="width: 100%"
+        >
+          <el-option label="自动（Seedance→官方，其他→DMXAPI）" value="" />
+          <el-option label="火山方舟官方" value="ark" />
+          <el-option label="DMXAPI 第三方" value="dmxapi" />
+        </el-select>
+        <div class="form-item-tip">
+          从目录选择时会自动带入；Seedance 2.0 须走官方 API，其他模型默认 DMXAPI。
+        </div>
+      </el-form-item>
       <el-form-item v-if="formData.modality === 'video'" label="参考视频">
         <div class="form-item-control">
           <el-switch
@@ -94,7 +109,7 @@
 <script setup>
 import request from "@/request"
 import { resetState, cloneDeep } from "@/utils/lodash"
-import { inferSupportsReferenceVideo } from "@/utils/catalogCapabilities"
+import { inferSupportsReferenceVideo, inferApiProvider } from "@/utils/catalogCapabilities"
 
 const emit = defineEmits(["success"])
 
@@ -111,6 +126,7 @@ const defaultFormData = () => ({
   apiModelId: "",
   modality: "video",
   supportsReferenceVideo: false,
+  apiProvider: "",
   sort: 0,
   status: 0,
   isDefault: false,
@@ -144,6 +160,7 @@ function applyCatalogSelection(catalogId) {
   formData.apiModelId = item.apiModelId || ""
   formData.modality = item.modality || "unknown"
   formData.supportsReferenceVideo = !!item.capabilities?.supportsReferenceVideo
+  formData.apiProvider = item.apiProvider || item.capabilities?.apiProvider || inferApiProvider(item.apiModelId, item.apiProfile) || ""
   formData.remark = item.remark || ""
   if (item.defaultParams == null) {
     formData.defaultParamsStr = ""
@@ -163,6 +180,9 @@ watch(
   ([id, modality, mode]) => {
     if (mode === "add" && modality === "video" && id) {
       formData.supportsReferenceVideo = inferSupportsReferenceVideo(id)
+      if (!formData.apiProvider) {
+        formData.apiProvider = inferApiProvider(id) || ""
+      }
     }
   },
 )
@@ -186,6 +206,7 @@ const showEdit = (row) => {
   formData.apiModelId = row.apiModelId || ""
   formData.modality = row.modality || "video"
   formData.supportsReferenceVideo = !!row.supportsReferenceVideo
+  formData.apiProvider = row.apiProvider || inferApiProvider(row.apiModelId, row.apiProfile) || ""
   formData.sort = row.sort ?? 0
   formData.status = row.status ?? 0
   formData.isDefault = !!row.isDefault

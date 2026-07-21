@@ -5,7 +5,8 @@ const { requireAuth, menuRowsForUser } = auth
 const { buildTree } = require('../utils/tree')
 const { ok, fail } = require('../utils/response')
 const modelCatalogRouter = require('./modelCatalog')
-const { rowToCatalog, parseJsonField, normalizeVendor, resolveStoreModality, isStoreModalityUnset } = require('../services/modelCatalogService')
+const { rowToCatalog, parseJsonField, normalizeVendor, resolveStoreModality, isStoreModalityUnset, resolveCatalogApiProvider, inferApiProfile } = require('../services/modelCatalogService')
+const { providerLabel } = require('../services/videoApiProfiles')
 const { publishCatalogToStore, clearOtherDefaults } = require('../services/catalogPublishService')
 const dataScope = require('../services/dataScopeService')
 
@@ -886,6 +887,10 @@ function rowToVideoModel(r) {
       defaultParams = r.default_params
     }
   }
+  const apiProfile =
+    String(r.api_profile || '').trim() || inferApiProfile(r.api_model_id) || ''
+  const apiProvider =
+    resolveCatalogApiProvider(r.api_model_id, r.modality || 'video', apiProfile, r.api_provider) || ''
   return {
     id: r.id,
     name: r.name || '',
@@ -900,6 +905,9 @@ function rowToVideoModel(r) {
     status: r.status ?? 0,
     isDefault: r.is_default === 1,
     remark: r.remark || '',
+    apiProfile,
+    apiProvider,
+    apiProviderLabel: apiProvider ? providerLabel(apiProvider) : '自动',
     supportsReferenceVideo: r.supports_reference_video === 1,
     defaultParams,
     createTime: formatTime(r.create_time),
@@ -954,7 +962,8 @@ router.get('/video-model/page', (req, res) => {
   const rows = d
     .prepare(
       `SELECT vm.id, vm.name, vm.api_model_id, vm.catalog_id, vm.modality, vm.tags, vm.sort, vm.status, vm.is_default, vm.remark,
-              vm.default_params, vm.supports_reference_video, mc.vendor AS catalog_vendor, mc.tags AS catalog_tags,
+              vm.default_params, vm.supports_reference_video, vm.api_profile, vm.api_provider,
+              mc.vendor AS catalog_vendor, mc.tags AS catalog_tags,
               datetime(vm.created_at, 'localtime') AS create_time, datetime(vm.updated_at, 'localtime') AS update_time
        FROM video_models vm
        LEFT JOIN model_catalog mc ON mc.id = vm.catalog_id
@@ -986,7 +995,8 @@ router.get('/video-model/get', (req, res) => {
   const row = database()
     .prepare(
       `SELECT vm.id, vm.name, vm.api_model_id, vm.catalog_id, vm.modality, vm.tags, vm.sort, vm.status, vm.is_default, vm.remark,
-              vm.default_params, vm.supports_reference_video, mc.vendor AS catalog_vendor, mc.tags AS catalog_tags,
+              vm.default_params, vm.supports_reference_video, vm.api_profile, vm.api_provider,
+              mc.vendor AS catalog_vendor, mc.tags AS catalog_tags,
               datetime(vm.created_at, 'localtime') AS create_time, datetime(vm.updated_at, 'localtime') AS update_time
        FROM video_models vm
        LEFT JOIN model_catalog mc ON mc.id = vm.catalog_id
@@ -1017,11 +1027,19 @@ router.post('/video-model/create', (req, res) => {
   const d = database()
   const modality = resolveVideoModelModality(d, b)
   const storeRefVid = modality === 'video' ? refVid : 0
+  const apiProfile =
+    String(b.apiProfile || '').trim() || (modality === 'video' ? inferApiProfile(String(b.apiModelId).trim()) : '') || null
+  const apiProvider = resolveCatalogApiProvider(
+    String(b.apiModelId).trim(),
+    modality,
+    apiProfile || '',
+    String(b.apiProvider || '').trim(),
+  )
   const newId = d.transaction(() => {
     const info = d
       .prepare(
-        `INSERT INTO video_models (name, api_model_id, catalog_id, modality, tags, sort, status, is_default, remark, default_params, supports_reference_video)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO video_models (name, api_model_id, catalog_id, modality, tags, sort, status, is_default, remark, default_params, supports_reference_video, api_profile, api_provider)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         String(b.name).trim(),
@@ -1034,7 +1052,9 @@ router.post('/video-model/create', (req, res) => {
         isDef,
         String(b.remark || '').trim() || null,
         defaultParamsJson,
-        storeRefVid
+        storeRefVid,
+        apiProfile,
+        apiProvider,
       )
     const id = Number(info.lastInsertRowid)
     if (isDef) {
@@ -1068,10 +1088,18 @@ router.put('/video-model/update', (req, res) => {
   const d = database()
   const modality = resolveVideoModelModality(d, b)
   const storeRefVid = modality === 'video' ? refVid : 0
+  const apiProfile =
+    String(b.apiProfile || '').trim() || (modality === 'video' ? inferApiProfile(String(b.apiModelId).trim()) : '') || null
+  const apiProvider = resolveCatalogApiProvider(
+    String(b.apiModelId).trim(),
+    modality,
+    apiProfile || '',
+    String(b.apiProvider || '').trim(),
+  )
   d.transaction(() => {
     d.prepare(
       `UPDATE video_models SET name = ?, api_model_id = ?, catalog_id = ?, modality = ?, tags = ?, sort = ?, status = ?, is_default = ?, remark = ?,
-       default_params = ?, supports_reference_video = ?, updated_at = datetime('now') WHERE id = ?`
+       default_params = ?, supports_reference_video = ?, api_profile = ?, api_provider = ?, updated_at = datetime('now') WHERE id = ?`
     ).run(
       String(b.name).trim(),
       String(b.apiModelId).trim(),
@@ -1084,6 +1112,8 @@ router.put('/video-model/update', (req, res) => {
       String(b.remark || '').trim() || null,
       defaultParamsJson,
       storeRefVid,
+      apiProfile,
+      apiProvider,
       id
     )
     if (isDef) {

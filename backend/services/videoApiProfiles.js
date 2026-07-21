@@ -5,6 +5,52 @@ const seedance = require('./seedanceClient')
 
 const DMXAPI_QUERY_MODEL = (process.env.DMXAPI_QUERY_MODEL || 'seedance-2-0-get').trim()
 
+/** 全局默认 transport（.env VIDEO_API_PROVIDER）；混用模式下非 Seedance 模型回退到此值 */
+const DEFAULT_GLOBAL_PROVIDER =
+  (process.env.VIDEO_API_PROVIDER || 'dmxapi').trim().toLowerCase() === 'ark' ? 'ark' : 'dmxapi'
+
+/** 未显式指定 api_provider 时，以下 Profile 走火山方舟官方 */
+const ARK_PREFERRED_PROFILES = new Set(['seedance-multimodal'])
+
+function normalizeApiProvider(raw) {
+  const v = String(raw || '').trim().toLowerCase()
+  if (v === 'ark' || v === 'official' || v === 'volc' || v === '火山' || v === '火山方舟') return 'ark'
+  if (v === 'dmxapi' || v === 'dmx') return 'dmxapi'
+  return ''
+}
+
+function providerLabel(provider) {
+  return normalizeApiProvider(provider) === 'ark' ? '火山方舟' : 'DMXAPI'
+}
+
+/** 按模型 ID / Profile 推断默认 api_provider（空表示跟随 resolveEffectiveProvider 规则） */
+function inferApiProvider(apiModelId, apiProfile = '') {
+  const profileId = String(apiProfile || '').trim() || inferApiProfile(apiModelId)
+  if (profileId === 'seedance-multimodal') return 'ark'
+  return ''
+}
+
+/**
+ * 解析任务实际使用的 transport provider。
+ * 1. 模型/任务显式 api_provider
+ * 2. seedance-multimodal → ark（Seedance 2.0 官方）
+ * 3. 其他 → DEFAULT_GLOBAL_PROVIDER（默认 dmxapi，兼容现有部署）
+ */
+function resolveEffectiveProvider(profile, apiProviderOverride = '') {
+  const explicit = normalizeApiProvider(apiProviderOverride)
+  if (explicit) return explicit
+  if (profile?.id && ARK_PREFERRED_PROFILES.has(profile.id)) return 'ark'
+  return DEFAULT_GLOBAL_PROVIDER
+}
+
+function listProviderOptions() {
+  return [
+    { id: '', label: '自动（Seedance→官方，其他→DMXAPI）' },
+    { id: 'ark', label: '火山方舟官方' },
+    { id: 'dmxapi', label: 'DMXAPI 第三方' },
+  ]
+}
+
 const DEFAULT_CONSTRAINTS = {
   supportsReferenceImage: true,
   supportsReferenceVideo: false,
@@ -339,7 +385,7 @@ function resolveVideoProfile(apiModelId, profileOverride = '') {
   if (inferred && PROFILE_BY_ID.has(inferred)) {
     return { ...PROFILE_BY_ID.get(inferred), apiModelId: String(apiModelId || '').trim() }
   }
-  if (seedance.PROVIDER === 'ark') {
+  if (DEFAULT_GLOBAL_PROVIDER === 'ark') {
     return {
       ...PROFILE_BY_ID.get('seedance-multimodal'),
       apiModelId: String(apiModelId || '').trim(),
@@ -576,7 +622,13 @@ function buildCatalogCapabilitiesFromProfile(apiModelId, profileId, modality, hi
 module.exports = {
   PROFILE_REGISTRY,
   DEFAULT_CONSTRAINTS,
+  DEFAULT_GLOBAL_PROVIDER,
   inferApiProfile,
+  inferApiProvider,
+  normalizeApiProvider,
+  resolveEffectiveProvider,
+  providerLabel,
+  listProviderOptions,
   getProfileById,
   resolveVideoProfile,
   mergeConstraints,

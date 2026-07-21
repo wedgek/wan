@@ -61,3 +61,16 @@ export function inferSupportsReferenceVideo(apiModelId, _hint = "") {
 
   return false
 }
+
+/** Seedance 2.0 默认走火山方舟官方；其他留空表示自动 */
+export function inferApiProvider(apiModelId, apiProfile = "") {
+  const profile = String(apiProfile || "").trim() || inferApiProfile(apiModelId)
+  if (profile === "seedance-multimodal") return "ark"
+  return ""
+}
+
+export function apiProviderLabel(value) {
+  if (value === "ark") return "火山方舟"
+  if (value === "dmxapi") return "DMXAPI"
+  return "自动"
+}

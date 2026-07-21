@@ -3,11 +3,26 @@
  */
 const { mergeRemoteMeta } = require('./dmxapiModelMeta')
 const {
+  buildArkSeedancePriceDisplay,
+  formatArkSeedancePriceSummary,
+} = require('./arkSeedanceBilling')
+const {
   inferApiProfile,
+  inferApiProvider,
+  normalizeApiProvider,
   getProfileById,
   mergeConstraints,
   buildCatalogCapabilitiesFromProfile,
 } = require('./videoApiProfiles')
+
+function resolveCatalogApiProvider(apiModelId, modality, apiProfile = '', apiProviderRaw = '') {
+  const explicit = normalizeApiProvider(apiProviderRaw)
+  if (explicit) return explicit
+  if (modality === 'video') {
+    return inferApiProvider(apiModelId, apiProfile) || null
+  }
+  return null
+}
 
 function inferModality(apiModelId, hint = '') {
   const id = String(apiModelId || '').toLowerCase()
@@ -374,6 +389,17 @@ function rowToCatalog(r) {
     capabilities.apiProfile ||
     inferApiProfile(r.api_model_id) ||
     ''
+  const apiProvider =
+    normalizeApiProvider(r.api_provider) ||
+    capabilities.apiProvider ||
+    inferApiProvider(r.api_model_id, apiProfile) ||
+    ''
+  let dmxapiPrice = priceJsonFromText(r.dmxapi_price_json)
+  let dmxapiPriceText = r.dmxapi_price_text || ''
+  if (modality === 'video' && apiProvider === 'ark') {
+    dmxapiPrice = buildArkSeedancePriceDisplay(false)
+    dmxapiPriceText = formatArkSeedancePriceSummary(false)
+  }
   return {
     id: r.id,
     apiModelId: r.api_model_id || '',
@@ -384,12 +410,13 @@ function rowToCatalog(r) {
     status: r.status ?? 0,
     tags: r.tags || '',
     apiProfile,
+    apiProvider,
     capabilities,
     supportsReferenceVideo: modality === 'video' && !!capabilities.supportsReferenceVideo,
     defaultParams,
     remark: r.remark || '',
-    dmxapiPriceText: r.dmxapi_price_text || '',
-    dmxapiPrice: priceJsonFromText(r.dmxapi_price_json),
+    dmxapiPriceText,
+    dmxapiPrice,
     publishedToStore: !!(r.store_id),
     storeId: r.store_id ? Number(r.store_id) : null,
     syncedAt: formatTime(r.synced_at),
@@ -435,8 +462,51 @@ function normalizeModelCatalogApiProfiles(dbi) {
     if (changed > 0) {
       console.log(`[db] normalized ${changed} api_profile rows`)
     }
+    normalizeModelCatalogApiProviders(dbi)
   } catch (e) {
     console.error('[db] normalizeModelCatalogApiProfiles', e.message)
+  }
+}
+
+/** 回填 model_catalog / video_models 的 api_provider（Seedance → ark） */
+function normalizeModelCatalogApiProviders(dbi) {
+  try {
+    const catRows = dbi
+      .prepare(`SELECT id, api_model_id, modality, api_profile, api_provider FROM model_catalog`)
+      .all()
+    const updCat = dbi.prepare('UPDATE model_catalog SET api_provider = ? WHERE id = ?')
+    const updVm = dbi.prepare(
+      'UPDATE video_models SET api_provider = ? WHERE catalog_id = ? AND (api_provider IS NULL OR TRIM(api_provider) = \'\')',
+    )
+    let changed = 0
+    for (const r of catRows) {
+      if (r.modality !== 'video') continue
+      const next = resolveCatalogApiProvider(r.api_model_id, r.modality, r.api_profile, r.api_provider)
+      if (next && next !== (r.api_provider || '')) {
+        updCat.run(next, r.id)
+        updVm.run(next, r.id)
+        changed++
+      }
+    }
+    const vmRows = dbi
+      .prepare(
+        `SELECT vm.id, vm.api_model_id, vm.api_profile, vm.api_provider, vm.catalog_id
+         FROM video_models vm WHERE vm.modality = 'video' AND (vm.api_provider IS NULL OR TRIM(vm.api_provider) = '')`,
+      )
+      .all()
+    const updVmDirect = dbi.prepare('UPDATE video_models SET api_provider = ? WHERE id = ?')
+    for (const r of vmRows) {
+      const next = resolveCatalogApiProvider(r.api_model_id, 'video', r.api_profile, r.api_provider)
+      if (next) {
+        updVmDirect.run(next, r.id)
+        changed++
+      }
+    }
+    if (changed > 0) {
+      console.log(`[db] normalized ${changed} api_provider rows`)
+    }
+  } catch (e) {
+    console.error('[db] normalizeModelCatalogApiProviders', e.message)
   }
 }
 
@@ -463,6 +533,7 @@ module.exports = {
   inferVendor,
   inferSupportsReferenceVideo,
   inferApiProfile,
+  resolveCatalogApiProvider,
   isQueryModelId,
   buildCatalogCapabilities,
   capabilitiesToJson,
@@ -481,6 +552,7 @@ module.exports = {
   normalizeModelCatalogSyncMeta,
   normalizeVideoModelsModality,
   normalizeModelCatalogApiProfiles,
+  normalizeModelCatalogApiProviders,
   mergeConstraints,
   getProfileById,
 }

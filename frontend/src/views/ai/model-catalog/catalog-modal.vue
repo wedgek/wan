@@ -48,6 +48,24 @@
           决定 DMXAPI 请求协议与对话页上传约束；留空则按模型 ID 自动推断。同 Profile 内换 model 无需改代码。
         </div>
       </el-form-item>
+      <el-form-item v-if="formData.modality === 'video'" label="API 来源">
+        <el-select
+          v-model="formData.apiProvider"
+          placeholder="自动（Seedance→官方，其他→DMXAPI）"
+          clearable
+          style="width: 100%"
+        >
+          <el-option
+            v-for="p in providerOptions"
+            :key="p.id || 'auto'"
+            :label="p.label"
+            :value="p.id"
+          />
+        </el-select>
+        <div class="form-item-tip">
+          Seedance 2.0 须走火山方舟官方 API；可灵/Vidu 等继续走 DMXAPI。留空则按 Profile 自动推断。
+        </div>
+      </el-form-item>
       <el-form-item v-if="formData.modality === 'video'" label="参考视频">
         <el-switch v-model="supportsReferenceVideo" active-text="支持" inactive-text="不支持" />
         <div class="form-item-tip">
@@ -77,9 +95,10 @@
 <script setup>
 import request from "@/request"
 import { resetState, cloneDeep } from "@/utils/lodash"
-import { inferSupportsReferenceVideo, inferApiProfile } from "@/utils/catalogCapabilities"
+import { inferSupportsReferenceVideo, inferApiProfile, inferApiProvider } from "@/utils/catalogCapabilities"
 
 const profileOptions = ref([])
+const providerOptions = ref([])
 
 async function loadProfileOptions() {
   try {
@@ -89,7 +108,17 @@ async function loadProfileOptions() {
     profileOptions.value = []
   }
 }
+
+async function loadProviderOptions() {
+  try {
+    const res = await request({ url: "/admin-api/system/model-catalog/provider-options", method: "GET" })
+    if (res.code === 0 && Array.isArray(res.data)) providerOptions.value = res.data
+  } catch (_) {
+    providerOptions.value = []
+  }
+}
 loadProfileOptions()
+loadProviderOptions()
 
 const emit = defineEmits(["success"])
 
@@ -107,6 +136,7 @@ const defaultFormData = () => ({
   remark: "",
   defaultParamsStr: "",
   apiProfile: "",
+  apiProvider: "",
 })
 const formData = reactive(defaultFormData())
 
@@ -115,6 +145,7 @@ watch(
   ([id, modality, mode]) => {
     if (mode === "add" && modality === "video" && id) {
       if (!formData.apiProfile) formData.apiProfile = inferApiProfile(id) || ""
+      if (!formData.apiProvider) formData.apiProvider = inferApiProvider(id, formData.apiProfile) || ""
       supportsReferenceVideo.value = inferSupportsReferenceVideo(id)
     }
   },
@@ -138,6 +169,7 @@ const showEdit = (row) => {
   formData.tags = row.tags || ""
   formData.remark = row.remark || ""
   formData.apiProfile = row.apiProfile || row.capabilities?.apiProfile || inferApiProfile(row.apiModelId) || ""
+  formData.apiProvider = row.apiProvider || row.capabilities?.apiProvider || inferApiProvider(row.apiModelId, formData.apiProfile) || ""
   supportsReferenceVideo.value = !!row.supportsReferenceVideo || !!row.capabilities?.supportsReferenceVideo
   if (row.defaultParams == null) {
     formData.defaultParamsStr = ""
@@ -187,9 +219,11 @@ const handleSubmit = async () => {
   if (formData.modality === "video") {
     capabilities.supportsReferenceVideo = supportsReferenceVideo.value
     if (formData.apiProfile) capabilities.apiProfile = formData.apiProfile
+    if (formData.apiProvider) capabilities.apiProvider = formData.apiProvider
   }
   data.capabilities = capabilities
   data.apiProfile = formData.apiProfile || null
+  data.apiProvider = formData.apiProvider || null
 
   modalLoading.value = true
   try {

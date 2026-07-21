@@ -1,5 +1,5 @@
 /**
- * 视频 API 传输层：按 Profile 创建/查询/解析响应
+ * 视频 API 传输层：按 Profile + Provider 创建/查询/解析响应
  */
 const hailuo = require('./hailuoVideoClient')
 const kling = require('./klingVideoClient')
@@ -9,11 +9,15 @@ function seedanceClient() {
   return require('./seedanceClient')
 }
 
-function payloadForProvider(body) {
-  return seedanceClient().payloadForProvider(body)
+function resolveTransportProvider(provider) {
+  return seedanceClient().resolveProvider(provider)
 }
 
-async function createVideoTask(profile, payload) {
+function payloadForProvider(body, provider) {
+  return seedanceClient().payloadForProvider(body, provider)
+}
+
+async function createVideoTask(profile, payload, provider) {
   if (!profile) {
     const err = new Error('缺少 video API profile')
     err.code = 'E_ARK_PAYLOAD'
@@ -23,20 +27,29 @@ async function createVideoTask(profile, payload) {
     return hailuo.createVideoGenerationTask(payload)
   }
   const client = seedanceClient()
-  if (client.PROVIDER === 'dmxapi') {
-    return client.apiFetch('/responses', {
-      method: 'POST',
-      body: payloadForProvider(payload),
-      authBearer: false,
-    })
+  const p = resolveTransportProvider(provider)
+  if (p === 'dmxapi') {
+    return client.apiFetch(
+      '/responses',
+      {
+        method: 'POST',
+        body: payloadForProvider(payload, p),
+        authBearer: false,
+        provider: p,
+      },
+    )
   }
-  return client.apiFetch('/contents/generations/tasks', { method: 'POST', body: payload })
+  return client.apiFetch('/contents/generations/tasks', {
+    method: 'POST',
+    body: payload,
+    provider: p,
+  })
 }
 
-async function getVideoTaskStatus(profile, taskId, apiModelId = '') {
+async function getVideoTaskStatus(profile, taskId, apiModelId = '', provider) {
   const id = String(taskId).trim()
   if (!profile) {
-    return seedanceClient().getContentsGenerationTask(id, apiModelId)
+    return seedanceClient().getContentsGenerationTask(id, apiModelId, '', provider)
   }
   if (profile.transport === 'dmxapi-hailuo') {
     const remote = await hailuo.queryVideoGenerationTask(id)
@@ -53,7 +66,8 @@ async function getVideoTaskStatus(profile, taskId, apiModelId = '') {
     return { ...remote, _transportMapped: mapped }
   }
   const client = seedanceClient()
-  if (client.PROVIDER === 'dmxapi') {
+  const p = resolveTransportProvider(provider)
+  if (p === 'dmxapi') {
     if (profile?.responseParser === 'kling') {
       return kling.queryKlingTask(resolveQueryModel(profile, apiModelId), id)
     }
@@ -64,9 +78,13 @@ async function getVideoTaskStatus(profile, taskId, apiModelId = '') {
         input: id,
       },
       authBearer: false,
+      provider: p,
     })
   }
-  return client.apiFetch(`/contents/generations/tasks/${encodeURIComponent(id)}`, { method: 'GET' })
+  return client.apiFetch(`/contents/generations/tasks/${encodeURIComponent(id)}`, {
+    method: 'GET',
+    provider: p,
+  })
 }
 
 function unwrapCreateResponse(profile, remote) {
@@ -115,7 +133,7 @@ function pickTaskIdForProfile(profile, remote) {
   return String(remote.id || remote.task_id || remote.data?.id || remote.request_id || '').trim()
 }
 
-function mapRemoteToJobUpdateForProfile(profile, remote) {
+function mapRemoteToJobUpdateForProfile(profile, remote, provider) {
   if (profile?.transport === 'dmxapi-hailuo') {
     if (remote?._transportMapped) {
       const m = remote._transportMapped
@@ -125,7 +143,7 @@ function mapRemoteToJobUpdateForProfile(profile, remote) {
   }
   const client = seedanceClient()
   let normalized = remote
-  if (client.PROVIDER === 'dmxapi') {
+  if (resolveTransportProvider(provider) === 'dmxapi') {
     normalized = client.unwrapDmxapiQueryPayload(remote)
   }
   if (profile?.responseParser === 'vidu') {
@@ -180,7 +198,13 @@ function mapRemoteToJobUpdateForProfile(profile, remote) {
       errorMessage: status === 'failed' ? client.pickErrorMessage(normalized) : '',
     }
   }
-  return client.mapRemoteToJobUpdate(normalized)
+  const status = client.normalizeRemoteStatus(normalized)
+  const resultUrl = status === 'succeeded' ? client.pickResultUrl(normalized) : ''
+  const err =
+    status === 'failed' || status === 'cancelled'
+      ? client.pickErrorMessage(normalized) || status
+      : ''
+  return { status, resultUrl, errorMessage: err }
 }
 
 module.exports = {

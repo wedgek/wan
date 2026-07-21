@@ -1,7 +1,15 @@
 /**
- * 视频任务 Token 用量解析与 DMXAPI Token 计费落库
+ * 视频任务 Token 用量解析与计费落库
+ * - DMXAPI 模型：沿用 model_ratio / model_completion_ratio（原有逻辑）
+ * - 方舟 Seedance 2.0 官方：按公示单价 × total tokens
  */
 const { fetchDmxapiPricingMap, pickPriceInfoDefault, computeTokenCostYuan } = require('./dmxapiModelMeta')
+const {
+  shouldUseArkSeedanceBilling,
+  computeArkSeedanceCostYuan,
+  jobHasReferenceVideo,
+} = require('./arkSeedanceBilling')
+const { resolveEffectiveProvider, getProfileById } = require('./videoApiProfiles')
 
 function parseJsonField(raw) {
   if (raw == null || raw === '') return null
@@ -15,7 +23,7 @@ function parseJsonField(raw) {
 
 /**
  * @param {object} remote API 响应
- * @returns {{ input: number, output: number }|null}
+ * @returns {{ input: number, output: number, total?: number }|null}
  */
 function extractUsageFromRemote(remote) {
   if (!remote || typeof remote !== 'object') return null
@@ -29,12 +37,21 @@ function extractUsageFromRemote(remote) {
 
   const inN = Number(input)
   const outN = Number(output)
-  if (!Number.isFinite(inN) && !Number.isFinite(outN)) return null
+  const totalRaw = Number(u.total_tokens)
 
-  return {
-    input: Number.isFinite(inN) ? Math.max(0, Math.floor(inN)) : 0,
-    output: Number.isFinite(outN) ? Math.max(0, Math.floor(outN)) : 0,
+  if (!Number.isFinite(inN) && !Number.isFinite(outN) && !Number.isFinite(totalRaw)) return null
+
+  const inputTok = Number.isFinite(inN) ? Math.max(0, Math.floor(inN)) : 0
+  const outputTok = Number.isFinite(outN) ? Math.max(0, Math.floor(outN)) : 0
+  let total = inputTok + outputTok
+  if (Number.isFinite(totalRaw) && totalRaw > 0) {
+    total = Math.max(total, Math.floor(totalRaw))
+    if (outputTok === 0 && inputTok === 0) {
+      return { input: 0, output: Math.floor(totalRaw), total: Math.floor(totalRaw) }
+    }
   }
+
+  return { input: inputTok, output: outputTok, total }
 }
 
 function pricingFromCatalogRow(row) {
@@ -93,23 +110,54 @@ async function resolvePriceInfo(dbi, apiModelId, catalogId) {
 function resolveBillingContext(dbi, jobId, ctx = {}) {
   let apiModelId = String(ctx.apiModelId || '').trim()
   let catalogId = ctx.catalogId
+  let apiProvider = String(ctx.apiProvider || '').trim()
+  let apiProfile = String(ctx.apiProfile || '').trim()
+  let sourceVideoUrls = ctx.sourceVideoUrls
+  let requestPayload = ctx.requestPayload
 
-  if ((!apiModelId || catalogId == null) && jobId) {
-    const row = dbi
-      .prepare(
-        `SELECT vm.api_model_id, vm.catalog_id
-         FROM video_jobs j
-         LEFT JOIN video_models vm ON vm.id = j.video_model_id
-         WHERE j.id = ?`,
-      )
-      .get(jobId)
-    if (row) {
-      if (!apiModelId) apiModelId = String(row.api_model_id || '').trim()
-      if (catalogId == null) catalogId = row.catalog_id
+  if (jobId) {
+    const needRow =
+      !apiModelId ||
+      catalogId == null ||
+      !apiProvider ||
+      !apiProfile ||
+      sourceVideoUrls == null ||
+      requestPayload == null
+    if (needRow) {
+      const row = dbi
+        .prepare(
+          `SELECT vm.api_model_id, vm.catalog_id, vm.api_provider, j.api_provider AS job_api_provider,
+                  j.api_profile, j.source_video_urls, j.request_payload
+           FROM video_jobs j
+           LEFT JOIN video_models vm ON vm.id = j.video_model_id
+           WHERE j.id = ?`,
+        )
+        .get(jobId)
+      if (row) {
+        if (!apiModelId) apiModelId = String(row.api_model_id || '').trim()
+        if (catalogId == null) catalogId = row.catalog_id
+        if (!apiProvider) {
+          apiProvider = String(row.job_api_provider || row.api_provider || '').trim()
+        }
+        if (!apiProfile) apiProfile = String(row.api_profile || '').trim()
+        if (sourceVideoUrls == null) sourceVideoUrls = row.source_video_urls
+        if (requestPayload == null) requestPayload = row.request_payload
+      }
     }
   }
 
-  return { apiModelId, catalogId }
+  const profile = getProfileById(apiProfile) || null
+  const effectiveProvider = resolveEffectiveProvider(profile, apiProvider)
+  const hasReferenceVideo = jobHasReferenceVideo(sourceVideoUrls, requestPayload)
+
+  return {
+    apiModelId,
+    catalogId,
+    apiProvider: effectiveProvider,
+    apiProfile,
+    hasReferenceVideo,
+    useArkSeedanceBilling: shouldUseArkSeedanceBilling(apiProvider, apiProfile),
+  }
 }
 
 /**
@@ -131,16 +179,21 @@ async function mergeAndPersistJobUsage(dbi, jobId, remote, ctx = {}) {
   const prevIn = Number(row.usage_input_tokens) || 0
   const prevOut = Number(row.usage_output_tokens) || 0
   const prevTotal = prevIn + prevOut
-  const newTotal = usage.input + usage.output
+  const newTotal = (usage.total != null ? usage.total : usage.input + usage.output) || 0
   if (newTotal <= prevTotal) return
 
-  const { apiModelId, catalogId } = resolveBillingContext(dbi, id, ctx)
-  const { pi, groupRatio } = await resolvePriceInfo(dbi, apiModelId, catalogId)
-
+  const billing = resolveBillingContext(dbi, id, ctx)
   let costYuan = row.cost_yuan
-  if (pi) {
-    const computed = computeTokenCostYuan(pi, usage.input, usage.output, groupRatio, 1)
+
+  if (billing.useArkSeedanceBilling) {
+    const computed = computeArkSeedanceCostYuan(usage, billing.hasReferenceVideo)
     if (computed != null) costYuan = computed
+  } else {
+    const { pi, groupRatio } = await resolvePriceInfo(dbi, billing.apiModelId, billing.catalogId)
+    if (pi) {
+      const computed = computeTokenCostYuan(pi, usage.input, usage.output, groupRatio, 1)
+      if (computed != null) costYuan = computed
+    }
   }
 
   dbi
@@ -154,6 +207,7 @@ module.exports = {
   extractUsageFromRemote,
   resolvePriceInfoFromDb,
   resolvePriceInfo,
+  resolveBillingContext,
   mergeAndPersistJobUsage,
   computeTokenCostYuan,
 }

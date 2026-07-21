@@ -28,7 +28,7 @@ function testBuildBodyMultimodal() {
   assert.strictEqual(body.content[1].role, 'reference_image')
   assert.strictEqual(body.content[2].role, 'reference_video')
 
-  const dmxPayload = dmx.payloadForProvider(body)
+  const dmxPayload = dmx.payloadForProvider(body, 'dmxapi')
   assert.ok(Array.isArray(dmxPayload.input))
   assert.strictEqual(dmxPayload.input.length, body.content.length)
   assert.strictEqual(dmxPayload.content, undefined)
@@ -175,7 +175,7 @@ function testKlingActionControlBody() {
   assert.strictEqual(body.duration, 10)
   assert.strictEqual(typeof body.input, 'string')
 
-  const payload = dmx.payloadForProvider(body)
+  const payload = dmx.payloadForProvider(body, 'dmxapi')
   assert.strictEqual(payload.input, body.input)
   assert.strictEqual(payload.content, undefined)
 }
@@ -244,7 +244,7 @@ function testWanR2vMultimodalBody() {
   assert.strictEqual(body.parameters.duration, 4)
   assert.strictEqual(body.content, undefined)
 
-  const payload = dmx.payloadForProvider(body)
+  const payload = dmx.payloadForProvider(body, 'dmxapi')
   assert.deepStrictEqual(payload.input, body.input)
   assert.ok(!Array.isArray(payload.input))
   assert.strictEqual(payload.parameters.size, '720*1280')
@@ -277,7 +277,7 @@ function testHappyHorseR2vBody() {
   assert.strictEqual(body.parameters.ratio, '9:16')
   assert.strictEqual(body.parameters.duration, 4)
 
-  const payload = dmx.payloadForProvider(body)
+  const payload = dmx.payloadForProvider(body, 'dmxapi')
   assert.ok(Array.isArray(payload.input))
   assert.strictEqual(payload.input[0].media[0].type, 'reference_image')
 

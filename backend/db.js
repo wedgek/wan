@@ -10,6 +10,7 @@ const {
   normalizeModelCatalogSyncMeta,
   normalizeVideoModelsModality,
   normalizeModelCatalogApiProfiles,
+  normalizeModelCatalogApiProviders,
 } = require('./services/modelCatalogService')
 
 function hashPassword(password) {
@@ -85,6 +86,7 @@ function applySchemaPatches(dbi) {
     normalizeModelCatalogSyncMeta(dbi)
     normalizeVideoModelsModality(dbi)
     normalizeModelCatalogApiProfiles(dbi)
+    normalizeModelCatalogApiProviders(dbi)
     ensureModelMenuOrder(dbi)
     dedupeMenusByComponentName(dbi)
     ensureSuperAdminAllMenuIds(dbi)
@@ -163,7 +165,9 @@ function ensureVideoSchema(dbi) {
   ensureColumn(dbi, 'video_models', 'modality', "TEXT NOT NULL DEFAULT 'video'")
   ensureColumn(dbi, 'video_models', 'tags', 'TEXT')
   ensureColumn(dbi, 'video_models', 'api_profile', 'TEXT')
+  ensureColumn(dbi, 'video_models', 'api_provider', 'TEXT')
   ensureColumn(dbi, 'video_jobs', 'api_profile', 'TEXT')
+  ensureColumn(dbi, 'video_jobs', 'api_provider', 'TEXT')
   ensureColumn(dbi, 'video_jobs', 'usage_input_tokens', 'INTEGER')
   ensureColumn(dbi, 'video_jobs', 'usage_output_tokens', 'INTEGER')
   ensureColumn(dbi, 'video_jobs', 'cost_yuan', 'REAL')
@@ -195,6 +199,7 @@ function ensureModelCatalogSchema(dbi) {
   ensureColumn(dbi, 'model_catalog', 'dmxapi_price_text', 'TEXT')
   ensureColumn(dbi, 'model_catalog', 'dmxapi_price_json', 'TEXT')
   ensureColumn(dbi, 'model_catalog', 'api_profile', 'TEXT')
+  ensureColumn(dbi, 'model_catalog', 'api_provider', 'TEXT')
 }
 
 /** 视频创作 Hub：项目表 + 任务字段；幂等 */

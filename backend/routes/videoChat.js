@@ -150,7 +150,7 @@ async function syncJobsForSession(dbi, userId, sessionIds) {
   const placeholders = sessionIds.map(() => '?').join(',')
   const jobs = dbi
     .prepare(
-      `SELECT DISTINCT j.id, j.external_task_id, j.status, vm.api_model_id, j.api_profile, j.request_payload
+      `SELECT DISTINCT j.id, j.external_task_id, j.status, vm.api_model_id, j.api_profile, j.api_provider, j.request_payload
        FROM video_jobs j
        INNER JOIN video_chat_messages m ON m.video_job_id = j.id
        LEFT JOIN video_models vm ON vm.id = j.video_model_id
@@ -168,6 +168,7 @@ async function syncJobsForSession(dbi, userId, sessionIds) {
         j.api_model_id || '',
         j.api_profile || '',
         j.request_payload || '',
+        j.api_provider || '',
       )
       if (status !== j.status || resultUrl || errorMessage) {
         dbi

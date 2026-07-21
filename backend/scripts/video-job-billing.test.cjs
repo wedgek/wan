@@ -52,4 +52,18 @@ const fixedPi = pickPriceInfoDefault({
 })
 assert.strictEqual(computeTokenCostYuan(fixedPi, 100, 100, 1, 1), null)
 
+const {
+  computeArkSeedanceCostYuan,
+  jobHasReferenceVideo,
+  shouldUseArkSeedanceBilling,
+} = require('../services/arkSeedanceBilling')
+
+assert.strictEqual(computeArkSeedanceCostYuan({ output: 1_000_000, total: 1_000_000 }, false), 46)
+assert.strictEqual(computeArkSeedanceCostYuan({ output: 308_880, total: 308_880 }, false), 14.20848)
+assert.strictEqual(computeArkSeedanceCostYuan({ output: 308_880, total: 308_880 }, true), 8.64864)
+assert.strictEqual(shouldUseArkSeedanceBilling('ark', 'seedance-multimodal'), true)
+assert.strictEqual(shouldUseArkSeedanceBilling('dmxapi', 'kling-v2'), false)
+assert.strictEqual(jobHasReferenceVideo(JSON.stringify(['https://example.com/a.mp4'])), true)
+assert.strictEqual(jobHasReferenceVideo(null), false)
+
 console.log('[video-job-billing.test] OK')

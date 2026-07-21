@@ -203,7 +203,7 @@ function mapKlingRemoteToJobUpdate(remote) {
 }
 
 async function queryKlingTask(queryModel, taskId) {
-  seedance.assertConfigured()
+  seedance.assertConfigured('dmxapi')
   const id = String(taskId || '').trim()
   const model = String(queryModel || '').trim()
   if (!id || !model) {
@@ -212,13 +212,13 @@ async function queryKlingTask(queryModel, taskId) {
     throw err
   }
 
-  const url = `${seedance.apiBase()}/responses`
+  const url = `${seedance.apiBase('dmxapi')}/responses`
 
   const res = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: seedance.authHeader({ useBearer: false }),
+      Authorization: seedance.authHeader({ useBearer: false, provider: 'dmxapi' }),
     },
     body: JSON.stringify({ model, input: id }),
   })

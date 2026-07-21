@@ -194,7 +194,7 @@ router.get('/jobs/get', async (req, res) => {
   const row = database()
     .prepare(
       `SELECT j.id, j.user_id, j.project_id, j.video_model_id, j.mode, j.source_image_url, j.source_video_urls, j.external_task_id, j.status, j.prompt, j.result_url, j.error_message,
-              j.api_profile, j.request_payload, vm.api_model_id,
+              j.api_profile, j.api_provider, j.request_payload, vm.api_model_id,
               datetime(j.created_at, 'localtime') as create_time, datetime(j.updated_at, 'localtime') as update_time
        FROM video_jobs j
        LEFT JOIN video_models vm ON vm.id = j.video_model_id
@@ -212,6 +212,7 @@ router.get('/jobs/get', async (req, res) => {
         row.api_model_id || '',
         row.api_profile || '',
         row.request_payload || '',
+        row.api_provider || '',
       )
       if (status !== row.status || resultUrl || errorMessage) {
         database()

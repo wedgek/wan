@@ -99,6 +99,16 @@
             {{ sourceLabel(row.source) }}
           </template>
         </el-table-column>
+        <el-table-column label="API 来源" width="108" align="center">
+          <template #default="{ row }">
+            <template v-if="row.modality === 'video'">
+              <el-tag v-if="row.apiProvider === 'ark'" type="warning" size="small">官方</el-tag>
+              <el-tag v-else-if="row.apiProvider === 'dmxapi'" size="small">DMXAPI</el-tag>
+              <span v-else class="muted">自动</span>
+            </template>
+            <span v-else class="muted">—</span>
+          </template>
+        </el-table-column>
         <el-table-column label="参考视频" width="92" align="center">
           <template #default="{ row }">
             <template v-if="row.modality === 'video'">

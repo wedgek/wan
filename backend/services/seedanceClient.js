@@ -18,9 +18,13 @@
  * - ARK_VIDEO_CONTENT_MODE / ARK_VIDEO_MAX_REF_* / ARK_MULTIMODAL_MODEL_ID：见 buildCreateTaskBody
  */
 
-const PROVIDER = (process.env.VIDEO_API_PROVIDER || 'dmxapi').trim().toLowerCase() === 'ark' ? 'ark' : 'dmxapi'
+const DEFAULT_PROVIDER =
+  (process.env.VIDEO_API_PROVIDER || 'dmxapi').trim().toLowerCase() === 'ark' ? 'ark' : 'dmxapi'
 
-const API_KEY =
+/** @deprecated 保留兼容；新代码请用 resolveProvider() 或传入 provider 参数 */
+const PROVIDER = DEFAULT_PROVIDER
+
+const LEGACY_API_KEY =
   process.env.ARK_API_KEY || process.env.SEEDANCE_API_KEY || process.env.DMXAPI_API_KEY || ''
 
 const ARK_BASE = (process.env.ARK_API_BASE || 'https://ark.cn-beijing.volces.com/api/v3').replace(
@@ -33,15 +37,40 @@ const DMXAPI_BASE = (process.env.DMXAPI_API_BASE || 'https://www.dmxapi.cn/v1')
 
 const DMXAPI_QUERY_MODEL = (process.env.DMXAPI_QUERY_MODEL || 'seedance-2-0-get').trim()
 
-/** 项目默认关闭各厂商视频水印（parameters.watermark / 扁平 watermark 字段） */
-const DEFAULT_VIDEO_WATERMARK = false
-
-function apiBase() {
-  return PROVIDER === 'ark' ? ARK_BASE : DMXAPI_BASE
+function normalizeProvider(raw) {
+  const v = String(raw || '').trim().toLowerCase()
+  if (v === 'ark' || v === 'official' || v === 'volc' || v === '火山' || v === '火山方舟') return 'ark'
+  if (v === 'dmxapi' || v === 'dmx') return 'dmxapi'
+  return ''
 }
 
-function providerLabel() {
-  return PROVIDER === 'ark' ? '火山方舟' : 'DMXAPI'
+function resolveProvider(explicit) {
+  const n = normalizeProvider(explicit)
+  return n || DEFAULT_PROVIDER
+}
+
+function getDmxapiKey() {
+  const k = String(process.env.DMXAPI_API_KEY || '').trim()
+  if (k) return k
+  return DEFAULT_PROVIDER === 'dmxapi' ? String(LEGACY_API_KEY).trim() : ''
+}
+
+function getArkKey() {
+  const k = String(process.env.ARK_API_KEY || process.env.SEEDANCE_API_KEY || '').trim()
+  if (k) return k
+  return DEFAULT_PROVIDER === 'ark' ? String(LEGACY_API_KEY).trim() : ''
+}
+
+function getApiKey(provider) {
+  return resolveProvider(provider) === 'ark' ? getArkKey() : getDmxapiKey()
+}
+
+function apiBase(provider) {
+  return resolveProvider(provider) === 'ark' ? ARK_BASE : DMXAPI_BASE
+}
+
+function providerLabel(provider) {
+  return resolveProvider(provider) === 'ark' ? '火山方舟' : 'DMXAPI'
 }
 
 /** Seedance 2.0「全能参考」宣传上限约 9 图 / 3 视频；旧模型请改小环境变量 */
@@ -90,20 +119,37 @@ function transformMediaReferences(prompt, imageCount, videoCount) {
   return text
 }
 
-function assertConfigured() {
-  if (!API_KEY || !String(API_KEY).trim()) {
-    const err = new Error('未配置 ARK_API_KEY / SEEDANCE_API_KEY / DMXAPI_API_KEY')
+/** 项目默认关闭各厂商视频水印（parameters.watermark / 扁平 watermark 字段） */
+const DEFAULT_VIDEO_WATERMARK = false
+
+function assertConfigured(provider) {
+  if (!isProviderConfigured(provider)) {
+    const p = resolveProvider(provider)
+    const err = new Error(
+      p === 'ark'
+        ? '未配置 ARK_API_KEY / SEEDANCE_API_KEY（火山方舟）'
+        : '未配置 DMXAPI_API_KEY（DMXAPI）',
+    )
     err.code = 'E_ARK_CONFIG'
     throw err
   }
 }
 
-function authHeader({ useBearer = true } = {}) {
-  const key = String(API_KEY).trim()
-  if (PROVIDER === 'dmxapi' && !useBearer) {
+function authHeader({ useBearer = true, provider } = {}) {
+  const p = resolveProvider(provider)
+  const key = getApiKey(p)
+  if (p === 'dmxapi' && !useBearer) {
     return key
   }
   return key.startsWith('Bearer ') ? key : `Bearer ${key}`
+}
+
+function isProviderConfigured(provider) {
+  return !!(getApiKey(provider) && String(getApiKey(provider)).trim())
+}
+
+function isConfigured() {
+  return isProviderConfigured('dmxapi') || isProviderConfigured('ark')
 }
 
 function isKlingModel(model) {
@@ -982,8 +1028,8 @@ function buildCreateTaskBody({ model, prompt, extra, imageUrls, videoUrls, profi
   return buildSeedanceMultimodalBody({ model, prompt, extra, imageUrls, videoUrls })
 }
 
-function payloadForProvider(body) {
-  if (PROVIDER !== 'dmxapi') return body
+function payloadForProvider(body, provider) {
+  if (resolveProvider(provider) !== 'dmxapi') return body
   if (!Array.isArray(body.content)) return body
   const { content, ...rest } = body
   return {
@@ -992,14 +1038,15 @@ function payloadForProvider(body) {
   }
 }
 
-async function apiFetch(path, { method = 'GET', body, authBearer = true } = {}) {
-  assertConfigured()
-  const url = `${apiBase()}${path.startsWith('/') ? path : `/${path}`}`
+async function apiFetch(path, { method = 'GET', body, authBearer = true, provider } = {}) {
+  const p = resolveProvider(provider)
+  assertConfigured(p)
+  const url = `${apiBase(p)}${path.startsWith('/') ? path : `/${path}`}`
   const opts = {
     method,
     headers: {
       'Content-Type': 'application/json',
-      Authorization: authHeader({ useBearer: authBearer }),
+      Authorization: authHeader({ useBearer: authBearer, provider: p }),
     },
   }
   if (body !== undefined) opts.body = JSON.stringify(body)
@@ -1026,26 +1073,28 @@ async function apiFetch(path, { method = 'GET', body, authBearer = true } = {}) 
 /**
  * 创建内容生成任务，返回远端原始 JSON（须含 id 或可解析的任务 id）
  */
-async function createContentsGenerationTask(payload, profileOverride = '') {
+async function createContentsGenerationTask(payload, profileOverride = '', provider) {
   const modelId = payload?.model || ''
   const profiles = require('./videoApiProfiles')
   const profile =
     profiles.resolveVideoProfile(modelId, profileOverride) ||
     profiles.getProfileById('seedance-multimodal')
+  const effectiveProvider = profiles.resolveEffectiveProvider(profile, provider)
   const transport = require('./videoApiTransport')
-  return transport.createVideoTask(profile, payload)
+  return transport.createVideoTask(profile, payload, effectiveProvider)
 }
 
 /**
  * 查询任务状态
  */
-async function getContentsGenerationTask(taskId, createModelId = '', profileOverride = '') {
+async function getContentsGenerationTask(taskId, createModelId = '', profileOverride = '', provider) {
   const transport = require('./videoApiTransport')
   const profiles = require('./videoApiProfiles')
   const profile =
     profiles.resolveVideoProfile(createModelId, profileOverride) ||
     profiles.getProfileById('seedance-multimodal')
-  return transport.getVideoTaskStatus(profile, taskId, createModelId)
+  const effectiveProvider = profiles.resolveEffectiveProvider(profile, provider)
+  return transport.getVideoTaskStatus(profile, taskId, createModelId, effectiveProvider)
 }
 
 function pickTaskId(remote, profileOverride = '') {
@@ -1139,12 +1188,13 @@ function pickErrorMessage(remote) {
   return String(remote.error?.message || remote.message || remote.fail_reason || remote.error || '')
 }
 
-function mapRemoteToJobUpdate(remote, profileOverride = '') {
+function mapRemoteToJobUpdate(remote, profileOverride = '', provider) {
   const transport = require('./videoApiTransport')
   const profiles = require('./videoApiProfiles')
   const profile = profileOverride ? profiles.getProfileById(profileOverride) : null
-  if (profile) return transport.mapRemoteToJobUpdateForProfile(profile, remote)
-  const normalized = PROVIDER === 'dmxapi' ? unwrapDmxapiQueryPayload(remote) : remote
+  if (profile) return transport.mapRemoteToJobUpdateForProfile(profile, remote, provider)
+  const normalized =
+    resolveProvider(provider) === 'dmxapi' ? unwrapDmxapiQueryPayload(remote) : remote
   const status = normalizeRemoteStatus(normalized)
   const resultUrl = status === 'succeeded' ? pickResultUrl(normalized) : ''
   const err =
@@ -1156,6 +1206,9 @@ function mapRemoteToJobUpdate(remote, profileOverride = '') {
 
 module.exports = {
   PROVIDER,
+  DEFAULT_PROVIDER,
+  normalizeProvider,
+  resolveProvider,
   providerLabel,
   videoContentMode,
   maxRefImages,
@@ -1188,8 +1241,10 @@ module.exports = {
   normalizeRemoteStatus,
   pickResultUrl,
   pickErrorMessage,
-  isConfigured: () => !!(API_KEY && String(API_KEY).trim()),
+  isConfigured,
+  isProviderConfigured,
   assertConfigured,
   authHeader,
   apiBase,
+  getApiKey,
 }

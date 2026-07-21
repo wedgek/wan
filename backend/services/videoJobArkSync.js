@@ -2,7 +2,7 @@
  * 从视频 API 拉取任务状态；成功时先落库官方 URL，TOS 转存在后台异步完成。
  */
 const seedance = require('./seedanceClient')
-const { getProfileById } = require('./videoApiProfiles')
+const { getProfileById, resolveEffectiveProvider } = require('./videoApiProfiles')
 const { maybeMirrorSeedanceVideoToTos } = require('./videoResultTosMirror')
 const { mergeAndPersistJobUsage } = require('./videoJobBilling')
 const kling = require('./klingVideoClient')
@@ -29,6 +29,7 @@ function resolveExternalTaskId(externalTaskId, requestPayloadJson = '', apiProfi
  * @param {string} [createModelId] 创建任务时的 api_model_id
  * @param {string} [apiProfile] 任务 api_profile
  * @param {string} [requestPayloadJson] video_jobs.request_payload，用于修正历史 UUID task id
+ * @param {string} [apiProvider] 任务 api_provider（dmxapi | ark）
  */
 async function pullArkJobStateAndStableResultUrl(
   externalTaskId,
@@ -36,8 +37,21 @@ async function pullArkJobStateAndStableResultUrl(
   createModelId = '',
   apiProfile = '',
   requestPayloadJson = '',
+  apiProvider = '',
 ) {
   const profileId = String(apiProfile || '').trim()
+  const profile = getProfileById(profileId)
+  let effectiveProvider = resolveEffectiveProvider(profile, apiProvider)
+  if (!effectiveProvider && requestPayloadJson) {
+    try {
+      const stored = JSON.parse(requestPayloadJson)
+      if (stored?.apiProvider) {
+        effectiveProvider = resolveEffectiveProvider(profile, stored.apiProvider)
+      }
+    } catch (_) {
+      /* ignore */
+    }
+  }
   const taskId = resolveExternalTaskId(externalTaskId, requestPayloadJson, profileId)
   if (taskId !== externalTaskId && jobId) {
     try {
@@ -51,7 +65,12 @@ async function pullArkJobStateAndStableResultUrl(
       console.error('[videoJobArkSync] repair external_task_id', jobId, e.message)
     }
   }
-  const remote = await seedance.getContentsGenerationTask(taskId, createModelId, profileId)
+  const remote = await seedance.getContentsGenerationTask(
+    taskId,
+    createModelId,
+    profileId,
+    effectiveProvider,
+  )
   if (jobId) {
     try {
       await mergeAndPersistJobUsage(require('../db').getDb(), jobId, remote, {
@@ -61,7 +80,11 @@ async function pullArkJobStateAndStableResultUrl(
       console.warn('[videoJobArkSync] persist usage', jobId, e.message)
     }
   }
-  let { status, resultUrl, errorMessage } = seedance.mapRemoteToJobUpdate(remote, profileId)
+  let { status, resultUrl, errorMessage } = seedance.mapRemoteToJobUpdate(
+    remote,
+    profileId,
+    effectiveProvider,
+  )
 
   if (status === 'succeeded' && resultUrl) {
     const officialUrl = resultUrl

@@ -5,6 +5,7 @@ const {
   parseJsonField,
   resolveStoreModality,
   inferApiProfile,
+  resolveCatalogApiProvider,
   getProfileById,
   mergeConstraints,
   isQueryModelId,
@@ -27,7 +28,7 @@ function n(v, d = 0) {
 function publishCatalogToStore(dbi, catalogId, b = {}) {
   const catRow = dbi
     .prepare(
-      `SELECT id, api_model_id, display_name, modality, status, tags, capabilities_json, default_params, remark, api_profile
+      `SELECT id, api_model_id, display_name, modality, status, tags, capabilities_json, default_params, remark, api_profile, api_provider
        FROM model_catalog WHERE id = ?`,
     )
     .get(Number(catalogId))
@@ -47,6 +48,12 @@ function publishCatalogToStore(dbi, catalogId, b = {}) {
   const apiProfile =
     String(b.apiProfile || catRow.api_profile || capabilities.apiProfile || '').trim() ||
     inferApiProfile(catRow.api_model_id)
+  const apiProvider = resolveCatalogApiProvider(
+    catRow.api_model_id,
+    modality,
+    apiProfile,
+    String(b.apiProvider || catRow.api_provider || capabilities.apiProvider || '').trim(),
+  )
 
   if (modality === 'video' && !apiProfile) {
     return {
@@ -87,8 +94,8 @@ function publishCatalogToStore(dbi, catalogId, b = {}) {
   const newId = dbi.transaction(() => {
     const info = dbi
       .prepare(
-        `INSERT INTO video_models (name, api_model_id, catalog_id, modality, tags, sort, status, is_default, remark, default_params, supports_reference_video, api_profile)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO video_models (name, api_model_id, catalog_id, modality, tags, sort, status, is_default, remark, default_params, supports_reference_video, api_profile, api_provider)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         name,
@@ -103,6 +110,7 @@ function publishCatalogToStore(dbi, catalogId, b = {}) {
         defaultParamsJson,
         refVid,
         apiProfile || null,
+        apiProvider || null,
       )
     const id = Number(info.lastInsertRowid)
     if (isDef) {

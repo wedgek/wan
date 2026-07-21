@@ -106,6 +106,16 @@ function testPreflight() {
   assert.ok(badKlingVid.message.includes('不支持参考视频'))
 }
 
+function testResolveEffectiveProvider() {
+  const seedanceProfile = profiles.getProfileById('seedance-multimodal')
+  const klingProfile = profiles.getProfileById('kling-v2')
+  assert.strictEqual(profiles.resolveEffectiveProvider(seedanceProfile, ''), 'ark')
+  assert.strictEqual(profiles.resolveEffectiveProvider(seedanceProfile, 'dmxapi'), 'dmxapi')
+  assert.strictEqual(profiles.resolveEffectiveProvider(klingProfile, ''), 'dmxapi')
+  assert.strictEqual(profiles.inferApiProvider('doubao-seedance-2-0-260128'), 'ark')
+  assert.strictEqual(profiles.inferApiProvider('kling-v2-6'), '')
+}
+
 function testLegacyBuildCreateTaskBody() {
   const body = seedance.buildCreateTaskBody({
     model: 'kling-v3-video-generation',
@@ -121,6 +131,7 @@ function run() {
   testInferProfiles()
   testResolveAndBuild()
   testPreflight()
+  testResolveEffectiveProvider()
   testLegacyBuildCreateTaskBody()
   console.log('[video-api-profiles.test] OK')
 }

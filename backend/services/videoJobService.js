@@ -8,6 +8,8 @@ const {
   preflightVideoTask,
   mergeConstraints,
   getProfileById,
+  resolveEffectiveProvider,
+  providerLabel,
 } = require('./videoApiProfiles')
 const { mergeAndPersistJobUsage } = require('./videoJobBilling')
 
@@ -143,11 +145,17 @@ async function createVideoJob(dbi, opts) {
     }
   }
 
-  if (!seedance.isConfigured()) {
+  const apiProvider = resolveEffectiveProvider(profile, modelRow?.api_provider)
+
+  if (!seedance.isProviderConfigured(apiProvider)) {
+    const label = providerLabel(apiProvider)
     return {
       ok: false,
       code: 503,
-      message: '服务端未配置视频 API Key（ARK_API_KEY / DMXAPI_API_KEY），无法调用视频 API',
+      message:
+        apiProvider === 'ark'
+          ? '服务端未配置火山方舟 API Key（ARK_API_KEY），无法调用 Seedance 官方 API'
+          : '服务端未配置 DMXAPI API Key（DMXAPI_API_KEY），无法调用视频 API',
     }
   }
 
@@ -204,11 +212,11 @@ async function createVideoJob(dbi, opts) {
 
   let remote
   try {
-    remote = await seedance.createContentsGenerationTask(payload, profile.id)
+    remote = await seedance.createContentsGenerationTask(payload, profile.id, apiProvider)
   } catch (e) {
     console.error(`[videoJobService] create task arkModelId=${arkModelId} video_models.id=${modelRow.id}`, e.message)
     const code = e.code === 'E_ARK_CONFIG' ? 503 : 502
-    let msg = e.message || `创建${seedance.providerLabel()}视频任务失败`
+    let msg = e.message || `创建${providerLabel(apiProvider)}视频任务失败`
     const raw = String(msg)
     const multimodalRejected =
       /first[/\\]last frame.*reference media/i.test(raw) ||
@@ -250,8 +258,8 @@ async function createVideoJob(dbi, opts) {
   const sourceVideosJson = hasVid ? JSON.stringify(vidList) : null
 
   const ins = dbi.prepare(
-    `INSERT INTO video_jobs (user_id, project_id, video_model_id, external_task_id, status, mode, source_image_url, source_video_urls, prompt, request_payload, api_profile)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO video_jobs (user_id, project_id, video_model_id, external_task_id, status, mode, source_image_url, source_video_urls, prompt, request_payload, api_profile, api_provider)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
   const info = ins.run(
     userId,
@@ -268,8 +276,10 @@ async function createVideoJob(dbi, opts) {
       remotePreview: { id: tid },
       createRemote: remote,
       apiProfile: profile.id,
+      apiProvider,
     }),
     profile.id,
+    apiProvider,
   )
 
   const jobId = Number(info.lastInsertRowid)

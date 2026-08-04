@@ -259,6 +259,29 @@ function videoJobsScopeClause(userId) {
   return { sql, params, scope }
 }
 
+/**
+ * 抖音解析记录 douyin_parse_logs 表别名 j，用户表 u
+ */
+function douyinLogsScopeClause(userId) {
+  const scope = resolveDataScope(userId)
+  const parts = []
+  const params = []
+
+  if (scope.mode === 'self') {
+    parts.push('j.user_id = ?')
+    params.push(Number(userId))
+  } else if (scope.mode === 'depts' && scope.deptIds.length) {
+    const ph = scope.deptIds.map(() => '?').join(',')
+    parts.push(`u.dept_id IN (${ph})`)
+    params.push(...scope.deptIds)
+  } else if (scope.mode === 'depts' && !scope.deptIds.length) {
+    parts.push('1=0')
+  }
+
+  const sql = parts.length ? parts.join(' AND ') : ''
+  return { sql, params, scope }
+}
+
 module.exports = {
   SUPER_ADMIN_ROLE_ID,
   BUILTIN_ADMIN_USER_ID,
@@ -272,5 +295,6 @@ module.exports = {
   assertCanAssignRoles,
   assertCanManageDepts,
   videoJobsScopeClause,
+  douyinLogsScopeClause,
   expandDeptIdsWithAncestors,
 }

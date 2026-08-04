@@ -14,6 +14,8 @@ export const routeComponents = {
   aiModelCatalog: () => import("@/views/ai/model-catalog/index.vue"),
   aiVideoManage: () => import("@/views/ai/video-manage/index.vue"),
   aiProductLibrary: () => import("@/views/ai/product-library/index.vue"),
+  // 工具箱
+  toolsDouyinParse: () => import("@/views/tools/douyin-parse/index.vue"),
 }
 
 
@@ -161,6 +163,17 @@ export const staticRoutes = [
       title: "创作日志",
     },
   },
+  {
+    path: "/tools/douyin-parse",
+    name: "menuToolsDouyinParse",
+    component: () => import("@/views/tools/douyin-parse/index.vue"),
+    meta: {
+      requiresAuth: true,
+      showNavbar: true,
+      showSidebar: true,
+      title: "抖音素材提取",
+    },
+  },
 ]
 
 /** 已由 staticRoutes 注册的路径，addDynamicRoutes 中不再 addRoute，防止重复记录 */
@@ -173,6 +186,7 @@ export const staticMenuRoutePaths = new Set([
   "/ai/video-models",
   "/ai/product-library",
   "/ai/video-manage",
+  "/tools/douyin-parse",
 ])
 
 

@@ -73,6 +73,8 @@ function applySchemaPatches(dbi) {
     ensureAiVideoManageMenu(dbi)
     ensureProductLibrarySchema(dbi)
     ensureProductLibraryMenu(dbi)
+    ensureDouyinParseSchema(dbi)
+    ensureDouyinParseMenu(dbi)
     ensureAiVideoModelMenuInSidebar(dbi)
     ensureModelCatalogSchema(dbi)
     ensureModelCatalogMenu(dbi)
@@ -401,6 +403,104 @@ function ensureAiVideoManageMenu(dbi) {
   ins.run(id, parentId, 2, '创作日志', 'video-manage', 'aiVideoManage', 'Film', 4, 'ai:video-manage:list', 0, 1, 0)
   const ir = dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (?, ?)')
   ir.run(1, id)
+  try {
+    dbi.prepare('INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES (?, ?)').run('menus', id)
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+/** 抖音解析：粘贴分享链接/文案，后端解析原链接素材后落库的记录表 */
+function ensureDouyinParseSchema(dbi) {
+  dbi.exec(`
+    CREATE TABLE IF NOT EXISTS douyin_parse_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      input_text TEXT,
+      douyin_url TEXT,
+      aweme_id TEXT,
+      title TEXT,
+      author TEXT,
+      cover TEXT,
+      media_type TEXT NOT NULL DEFAULT 'video',
+      is_video INTEGER NOT NULL DEFAULT 1,
+      result_url TEXT,
+      images TEXT,
+      source TEXT NOT NULL DEFAULT 'aggregator',
+      status TEXT NOT NULL DEFAULT 'success',
+      error_message TEXT,
+      duration_ms INTEGER,
+      expires_at TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_douyin_logs_user ON douyin_parse_logs(user_id);
+  `)
+}
+
+/** 顶级「AI工具」目录：与「AI 应用」并列，收纳工具/素材类功能。返回其 id */
+function ensureToolsMenu(dbi) {
+  const existing = dbi.prepare(`SELECT id FROM menus WHERE parent_id = 0 AND path = '/tools' LIMIT 1`).get()
+  if (existing) return existing.id
+  const maxRow = dbi.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM menus').get()
+  const id = maxRow.m + 1
+  dbi
+    .prepare(`
+      INSERT INTO menus (id, parent_id, type, name, path, component_name, icon, sort, permission, status, visible, keep_alive)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    .run(id, 0, 1, 'AI工具', '/tools', '', 'Sunset', 6, '', 0, 1, 0)
+  dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (?, ?)').run(1, id)
+  try {
+    dbi.prepare('INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES (?, ?)').run('menus', id)
+  } catch (_) {
+    /* ignore */
+  }
+  return id
+}
+
+/** AI工具 · 抖音素材提取：粘贴抖音链接提取原链接素材（权限 tools:douyin-parse:list） */
+function ensureDouyinParseMenu(dbi) {
+  const toolsId = ensureToolsMenu(dbi)
+  if (!toolsId) return
+  // 兼容旧版：曾以 aiDouyinParse 挂在「AI 应用」下，这里统一迁移到工具箱并改名/换权限
+  const row = dbi
+    .prepare(`SELECT id, component_name, parent_id, permission FROM menus WHERE component_name IN ('aiDouyinParse', 'toolsDouyinParse') LIMIT 1`)
+    .get()
+  if (row) {
+    if (row.component_name === 'aiDouyinParse') {
+      // 仅旧版做一次性结构迁移（含名称/图标默认值）。
+      dbi
+        .prepare(`
+          UPDATE menus SET parent_id = ?, type = 2, name = '抖音素材提取', path = 'douyin-parse',
+            component_name = 'toolsDouyinParse', icon = 'VideoCamera', sort = 1,
+            permission = 'tools:douyin-parse:list', status = 0, visible = 1
+          WHERE id = ?
+        `)
+        .run(toolsId, row.id)
+    } else if (row.parent_id !== toolsId || row.permission !== 'tools:douyin-parse:list') {
+      // 已是新版：仅兜底修正必须与代码一致的结构字段（父级/权限/组件名/路由）。
+      // 不覆盖用户可自定义的展示字段（图标/名称/排序/显隐），避免每次启动重置用户在菜单管理里的修改。
+      dbi
+        .prepare(`
+          UPDATE menus SET parent_id = ?, type = 2, component_name = 'toolsDouyinParse',
+            path = 'douyin-parse', permission = 'tools:douyin-parse:list', status = 0
+          WHERE id = ?
+        `)
+        .run(toolsId, row.id)
+    }
+    dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (1, ?)').run(row.id)
+    return
+  }
+  const maxRow = dbi.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM menus').get()
+  const id = maxRow.m + 1
+  dbi
+    .prepare(`
+      INSERT INTO menus (id, parent_id, type, name, path, component_name, icon, sort, permission, status, visible, keep_alive)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    .run(id, toolsId, 2, '抖音素材提取', 'douyin-parse', 'toolsDouyinParse', 'VideoCamera', 1, 'tools:douyin-parse:list', 0, 1, 0)
+  dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (?, ?)').run(1, id)
   try {
     dbi.prepare('INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES (?, ?)').run('menus', id)
   } catch (_) {
@@ -954,6 +1054,28 @@ function roleRow(r) {
   }
 }
 
+/**
+ * 启动对账：进程重启后，内存里的抖音解析后台任务已丢失，
+ * 把 DB 中残留的 processing/pending 行统一判失败，避免永远卡在「解析中」。
+ */
+function reconcileDouyinProcessingOnBoot() {
+  try {
+    const dbi = getDb()
+    const r = dbi
+      .prepare(
+        `UPDATE douyin_parse_logs
+         SET status = 'failed', error_message = '服务重启，任务已中断，请重新获取', updated_at = datetime('now')
+         WHERE status IN ('processing', 'pending')`,
+      )
+      .run()
+    if (r.changes > 0) {
+      console.info(`[db] 抖音解析启动对账：${r.changes} 条「解析中」任务因重启判失败`)
+    }
+  } catch (e) {
+    console.warn('[db] reconcileDouyinProcessingOnBoot skipped:', e && e.message)
+  }
+}
+
 module.exports = {
   initDb,
   getDb,
@@ -965,4 +1087,5 @@ module.exports = {
   rowToMenu,
   rowToDept,
   roleRow,
+  reconcileDouyinProcessingOnBoot,
 }

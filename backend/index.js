@@ -17,6 +17,7 @@ const rawPort = process.env.PORT
 const hasExplicitPort = rawPort !== undefined && rawPort !== "" && !Number.isNaN(Number(rawPort))
 
 db.initDb()
+db.reconcileDouyinProcessingOnBoot()
 
 const app = express()
 app.disable("x-powered-by")

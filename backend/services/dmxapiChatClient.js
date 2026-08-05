@@ -3,8 +3,9 @@
  * POST {base}/chat/completions
  */
 
+/** DMXAPI 专用：优先 DMXAPI_API_KEY；仅在未配置时回退旧单 Key 变量名 */
 const API_KEY =
-  process.env.ARK_API_KEY || process.env.SEEDANCE_API_KEY || process.env.DMXAPI_API_KEY || ''
+  process.env.DMXAPI_API_KEY || process.env.ARK_API_KEY || process.env.SEEDANCE_API_KEY || ''
 const USER_ID = (process.env.DMXAPI_USER_ID || '').trim()
 const BASE = (process.env.DMXAPI_API_BASE || 'https://www.dmxapi.cn/v1').replace(/\/+$/, '')
 
@@ -16,7 +17,7 @@ const DEFAULT_TIMEOUT_MS = Math.min(
 function authHeaders() {
   const key = String(API_KEY || '').trim()
   if (!key) {
-    const err = new Error('未配置 ARK_API_KEY / DMXAPI_API_KEY，无法调用文本模型')
+    const err = new Error('未配置 DMXAPI_API_KEY，无法调用文本模型')
     err.code = 'E_DMXAPI_CONFIG'
     throw err
   }

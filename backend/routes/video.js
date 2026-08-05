@@ -4,7 +4,11 @@ const { requireAuth } = auth
 const { ok, fail } = require('../utils/response')
 const db = require('../db')
 const seedance = require('../services/seedanceClient')
-const { pullArkJobStateAndStableResultUrl, syncAssistantMessagesForJob } = require('../services/videoJobArkSync')
+const {
+  pullArkJobStateAndStableResultUrl,
+  syncAssistantMessagesForJob,
+  isTerminalRemoteJobError,
+} = require('../services/videoJobArkSync')
 const { createVideoJob, allowVideoJobRate } = require('../services/videoJobService')
 const { normalizeVendor, parseJsonField, getProfileById, mergeConstraints, inferApiProfile } = require('../services/modelCatalogService')
 const videoChatRouter = require('./videoChat')
@@ -227,7 +231,7 @@ router.get('/jobs/get', async (req, res) => {
       }
     } catch (e) {
       console.error('[video] sync job', e.message)
-      if (/task status:\s*FAILED|任务.*失败/i.test(String(e.message || ''))) {
+      if (isTerminalRemoteJobError(e.message)) {
         database()
           .prepare(
             `UPDATE video_jobs SET status = 'failed', error_message = ?, updated_at = datetime('now') WHERE id = ?`,

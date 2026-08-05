@@ -1076,6 +1076,39 @@ function reconcileDouyinProcessingOnBoot() {
   }
 }
 
+/** 启动时清掉超过 3 天仍「生成中」的视频任务，避免对已失效远端 task 死循环拉取 */
+function reconcileStaleVideoJobsOnBoot() {
+  try {
+    const dbi = getDb()
+    const stale = dbi
+      .prepare(
+        `SELECT id FROM video_jobs
+         WHERE status IN ('pending', 'processing')
+           AND datetime(COALESCE(created_at, updated_at)) < datetime('now', '-3 days')`,
+      )
+      .all()
+    if (!stale.length) return
+    const msg = '任务已超时或远端已失效，已自动结束'
+    const upd = dbi.prepare(
+      `UPDATE video_jobs SET status = 'failed', error_message = ?, updated_at = datetime('now') WHERE id = ?`,
+    )
+    const updMsg = dbi.prepare(
+      `UPDATE video_chat_messages SET status = 'failed', error_message = ?
+       WHERE video_job_id = ? AND status IN ('pending', 'processing')`,
+    )
+    const tx = dbi.transaction((rows) => {
+      for (const row of rows) {
+        upd.run(msg, row.id)
+        updMsg.run(msg, row.id)
+      }
+    })
+    tx(stale)
+    console.info(`[db] 视频任务启动对账：${stale.length} 条超过 3 天的「生成中」任务已判失败`)
+  } catch (e) {
+    console.warn('[db] reconcileStaleVideoJobsOnBoot skipped:', e && e.message)
+  }
+}
+
 module.exports = {
   initDb,
   getDb,
@@ -1088,4 +1121,5 @@ module.exports = {
   rowToDept,
   roleRow,
   reconcileDouyinProcessingOnBoot,
+  reconcileStaleVideoJobsOnBoot,
 }

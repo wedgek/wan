@@ -23,6 +23,16 @@ function resolveExternalTaskId(externalTaskId, requestPayloadJson = '', apiProfi
   return id
 }
 
+/** 远端任务已不可恢复（如方舟 resource not found）时应停止本地轮询 */
+function isTerminalRemoteJobError(message) {
+  const m = String(message || '')
+  if (!m) return false
+  if (/task status:\s*FAILED|任务.*失败/i.test(m)) return true
+  if (/not\s*found|resource.+not\s*found|does\s+not\s+exist/i.test(m)) return true
+  if (/InvalidTask|task.*expired|任务不存在|已过期|已失效/i.test(m)) return true
+  return false
+}
+
 /**
  * @param {string} externalTaskId
  * @param {number} jobId video_jobs.id（转存 TOS 时用于 objectKey 与并发去重）
@@ -129,5 +139,6 @@ function syncAssistantMessagesForJob(dbi, jobId) {
 module.exports = {
   pullArkJobStateAndStableResultUrl,
   syncAssistantMessagesForJob,
+  isTerminalRemoteJobError,
   getProfileById,
 }

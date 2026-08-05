@@ -6,8 +6,9 @@ const { inferModality, inferVendor, normalizeVendor, buildCatalogCapabilities, c
 const { catalogDisplayName } = require('./catalogDisplayName')
 const { fetchDmxapiPricingMap, mergeRemoteMeta } = require('./dmxapiModelMeta')
 
+/** DMXAPI 专用：优先 DMXAPI_API_KEY；仅在未配置时回退旧单 Key 变量名 */
 const API_KEY =
-  process.env.ARK_API_KEY || process.env.SEEDANCE_API_KEY || process.env.DMXAPI_API_KEY || ''
+  process.env.DMXAPI_API_KEY || process.env.ARK_API_KEY || process.env.SEEDANCE_API_KEY || ''
 const USER_ID = (process.env.DMXAPI_USER_ID || '').trim()
 const BASE = (process.env.DMXAPI_API_BASE || 'https://www.dmxapi.cn/v1').replace(/\/+$/, '')
 

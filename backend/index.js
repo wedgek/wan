@@ -37,6 +37,7 @@ const hasExplicitPort = rawPort !== undefined && rawPort !== "" && !Number.isNaN
 
 db.initDb()
 db.reconcileDouyinProcessingOnBoot()
+db.reconcileStaleVideoJobsOnBoot()
 
 const app = express()
 app.disable("x-powered-by")

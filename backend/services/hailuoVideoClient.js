@@ -2,8 +2,9 @@
  * 海螺 MiniMax 视频生成 REST API（非 /v1/responses）
  * 文档：https://doc.dmxapi.cn/hailuo-img2video.html
  */
+/** DMXAPI 专用：优先 DMXAPI_API_KEY；仅在未配置时回退旧单 Key 变量名 */
 const API_KEY =
-  process.env.ARK_API_KEY || process.env.SEEDANCE_API_KEY || process.env.DMXAPI_API_KEY || ''
+  process.env.DMXAPI_API_KEY || process.env.ARK_API_KEY || process.env.SEEDANCE_API_KEY || ''
 
 const ORIGIN = (process.env.DMXAPI_API_BASE || 'https://www.dmxapi.cn/v1')
   .replace(/\/+$/, '')

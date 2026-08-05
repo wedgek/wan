@@ -2,7 +2,11 @@ const express = require('express')
 const { ok, fail } = require('../utils/response')
 const db = require('../db')
 const seedance = require('../services/seedanceClient')
-const { pullArkJobStateAndStableResultUrl, syncAssistantMessagesForJob } = require('../services/videoJobArkSync')
+const {
+  pullArkJobStateAndStableResultUrl,
+  syncAssistantMessagesForJob,
+  isTerminalRemoteJobError,
+} = require('../services/videoJobArkSync')
 const { createVideoJob, allowVideoJobRate } = require('../services/videoJobService')
 const { polishPrompt, polishPromptStream } = require('../services/promptPolishService')
 const { getPolishTextModelStatus } = require('../services/textModelService')
@@ -180,7 +184,7 @@ async function syncJobsForSession(dbi, userId, sessionIds) {
       }
     } catch (e) {
       console.error('[videoChat] sync job', j.id, e.message)
-      if (/task status:\s*FAILED|任务.*失败/i.test(String(e.message || ''))) {
+      if (isTerminalRemoteJobError(e.message)) {
         dbi
           .prepare(
             `UPDATE video_jobs SET status = 'failed', error_message = ?, updated_at = datetime('now') WHERE id = ?`,

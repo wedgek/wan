@@ -85,9 +85,8 @@
         <el-table-column prop="id" label="ID" width="72" align="center" fixed="left" />
         <el-table-column label="抖音链接" min-width="220" align="left">
           <template #default="{ row }">
-            <div class="link-cell">
+            <div v-if="douyinLink(row)" class="link-cell">
               <a
-                v-if="douyinLink(row)"
                 :href="douyinLink(row)"
                 target="_blank"
                 rel="noopener"
@@ -96,8 +95,13 @@
               >
                 {{ douyinLink(row) }}
               </a>
-              <span v-else class="muted">—</span>
+              <div class="link-actions">
+                <el-button link type="primary" size="small" :icon="$icons.CopyDocument" @click="copyDouyinLink(row)">
+                  复制
+                </el-button>
+              </div>
             </div>
+            <span v-else class="muted">—</span>
           </template>
         </el-table-column>
         <el-table-column label="作品" min-width="200" align="left">
@@ -435,15 +439,23 @@ function primaryUrl(row) {
   return row.resultUrl || (Array.isArray(row.images) && row.images[0]) || ""
 }
 
-async function copyMaterial(row) {
-  const url = primaryUrl(row)
-  if (!url) return
+async function copyText(text, okMsg = "已复制链接") {
+  const value = String(text || "").trim()
+  if (!value) return
   try {
-    await navigator.clipboard.writeText(url)
-    ElMessage.success("已复制链接")
+    await navigator.clipboard.writeText(value)
+    ElMessage.success(okMsg)
   } catch (e) {
     ElMessage.error("复制失败，请手动复制")
   }
+}
+
+async function copyDouyinLink(row) {
+  await copyText(douyinLink(row), "已复制抖音链接")
+}
+
+async function copyMaterial(row) {
+  await copyText(primaryUrl(row))
 }
 
 /** API 根地址（与 axios 保持一致；为空则同源，dev 走 Vite 代理） */
@@ -650,6 +662,10 @@ function displayNickname(row) {
   flex: 0 0 280px;
 }
 .link-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
   padding: 2px 0;
 }
 .link-a {
@@ -664,6 +680,11 @@ function displayNickname(row) {
 }
 .link-a:hover {
   text-decoration: underline;
+}
+.link-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 .work-cell {
   display: flex;

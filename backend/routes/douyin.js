@@ -134,7 +134,11 @@ function insertPendingLog(userId, inputText) {
   return Number(info.lastInsertRowid)
 }
 
-/** 后台解析并把结果写回指定行（fire-and-forget，内部吞异常，绝不抛出） */
+/**
+ * 后台解析并把结果写回指定行（fire-and-forget，内部吞异常，绝不抛出）。
+ * duration_ms = 任务端到端挂钟时间（进入解析 → 终态），含内部重试与退避。
+ * 对标云厂商「任务耗时」：end_time - start_time，不是把各次请求耗时手工相加。
+ */
 async function runParseIntoRow(id, text) {
   const started = Date.now()
   const d = database()

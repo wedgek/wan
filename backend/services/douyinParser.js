@@ -5,13 +5,14 @@
  */
 
 const AGGREGATOR_API = process.env.DOUYIN_AGG_API || 'https://api.bugpk.com/api/douyin'
-const REQUEST_TIMEOUT_MS = Number(process.env.DOUYIN_TIMEOUT_MS) || 20000
+// 单次请求超时收敛到 12s：IPv4 直连正常 <3s，超过多半是抽风，早失败早重试早让出并发槽
+const REQUEST_TIMEOUT_MS = Number(process.env.DOUYIN_TIMEOUT_MS) || 12000
 const MAX_CONCURRENT = Number(process.env.DOUYIN_MAX_CONCURRENT) || 6
 /**
  * bugpk 聚合接口会随机掐断连接/返回空体（实测单次失败率约 10~15%）。
  * 对这类“抽风”做有限次重试即可把成功率拉到接近 100%；总尝试 = 重试数 + 1。
  */
-const MAX_RETRIES = Math.max(0, Number(process.env.DOUYIN_RETRIES) || 3)
+const MAX_RETRIES = Math.max(0, Number(process.env.DOUYIN_RETRIES) || 2)
 const RETRY_BASE_MS = Number(process.env.DOUYIN_RETRY_BASE_MS) || 600
 
 const DESKTOP_UA =
@@ -273,21 +274,21 @@ function buildFromAggregator(awemeId, douyinUrl, data) {
  */
 async function parse(text) {
   const { awemeId, douyinUrl } = await resolveAwemeId(text)
-  await acquireSlot()
-  try {
-    // 聚合接口抽风时自动重试；素材确实为空则视为不可重试的最终失败
-    const result = await withRetry(async () => {
+  // 并发槽“每次尝试才占、退避等待时释放”：单条卡住/重试不会长期占死并发，突发大批量也能平稳消化
+  return withRetry(async () => {
+    await acquireSlot()
+    try {
       const data = await fetchAggregator(awemeId)
       const built = buildFromAggregator(awemeId, douyinUrl, data)
       if (!built.resultUrl && !built.images.length) {
+        // 素材确实为空（作品已删除/仅本人可见）：不可重试，直接最终失败
         throw new DouyinParseError('未解析到可用素材地址，作品可能已被删除或仅本人可见')
       }
       return built
-    })
-    return result
-  } finally {
-    releaseSlot()
-  }
+    } finally {
+      releaseSlot()
+    }
+  })
 }
 
 module.exports = { parse, splitInputs, DouyinParseError, extractExpiresAt }

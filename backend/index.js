@@ -1,13 +1,20 @@
 /**
- * 强制 DNS 解析优先返回 IPv4，且必须在任何网络请求之前执行。
- * 线上服务器无可用的全局 IPv6，但 Node/undici 默认会先试 IPv6/AAAA，
- * 导致对外 fetch（抖音解析、大模型等）每次都卡到超时（~10s）再失败。
- * 写在代码里最保险：跟随代码部署、不受 PM2 env/系统 gai.conf 是否生效的影响。
+ * 强制对外网络走 IPv4，必须在任何网络请求之前执行。
+ * 线上服务器无可用的全局 IPv6，但 Node/undici 默认会尝试 IPv6/AAAA，
+ * 导致对外 fetch（抖音解析、大模型等）偶发卡到超时（~10s）再失败（表现为“时好时坏”）。
+ * 双管齐下：① DNS 结果优先 IPv4；② 关闭 Happy-Eyeballs 的并行 IPv6 尝试，
+ * 让连接只落在 IPv4 上，从根上杜绝偶发的 IPv6 卡顿。写在代码里最保险，随部署生效。
  */
 try {
   require("node:dns").setDefaultResultOrder("ipv4first")
 } catch (_) {
-  /* 老版本 Node 不支持则忽略 */
+  /* 老版本 Node 不支持 setDefaultResultOrder 则忽略 */
+}
+try {
+  // Node 18.20+/20.13+ 支持；关闭后连接只用 DNS 返回的首个地址（配合上面的 ipv4first 即 IPv4）
+  require("node:net").setDefaultAutoSelectFamily(false)
+} catch (_) {
+  /* 不支持则忽略，仍有 ipv4first 兜底 */
 }
 
 const path = require("path")

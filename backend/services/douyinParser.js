@@ -53,14 +53,20 @@ function sleep(ms) {
  * 有限次重试：仅对可重试错误（网络抖动 / 非 DouyinParseError / retryable=true）重试，指数退避。
  * 素材本身解析不了（作品已删除/仅本人可见等）标记为不可重试，直接失败，不做无谓等待。
  */
-async function withRetry(fn) {
+async function withRetry(fn, ctx = '') {
   let lastErr
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
+    const t0 = Date.now()
     try {
       return await fn(attempt)
     } catch (e) {
       lastErr = e
       const retryable = !(e instanceof DouyinParseError) || e.retryable
+      const cost = Date.now() - t0
+      // 每次尝试都打点：第几次/耗时/是否可重试/错因，方便线上 pm2 logs 直接定位病根
+      console.warn(
+        `[douyin] ${ctx} attempt#${attempt + 1}/${MAX_RETRIES + 1} ${cost}ms retryable=${retryable} err=${e && e.message}`,
+      )
       if (!retryable || attempt === MAX_RETRIES) break
       await sleep(RETRY_BASE_MS * Math.pow(2, attempt))
     }
@@ -281,14 +287,21 @@ async function parse(text) {
       const data = await fetchAggregator(awemeId)
       const built = buildFromAggregator(awemeId, douyinUrl, data)
       if (!built.resultUrl && !built.images.length) {
-        // 素材确实为空（作品已删除/仅本人可见）：不可重试，直接最终失败
-        throw new DouyinParseError('未解析到可用素材地址，作品可能已被删除或仅本人可见')
+        // 已经拿到封面/标题/作者，只差视频地址 → 聚合接口返回残缺（抽风），值得重试；
+        // 连封面/标题都没有才更像作品真被删/仅本人可见，标记不可重试直接失败。
+        const hasMeta = Boolean(built.cover || built.title || built.author)
+        throw new DouyinParseError(
+          hasMeta
+            ? '素材地址暂时为空（接口抽风），请稍后重试'
+            : '未解析到可用素材地址，作品可能已被删除或仅本人可见',
+          { retryable: hasMeta },
+        )
       }
       return built
     } finally {
       releaseSlot()
     }
-  })
+  }, `aweme=${awemeId}`)
 }
 
 module.exports = { parse, splitInputs, DouyinParseError, extractExpiresAt }

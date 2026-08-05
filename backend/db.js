@@ -74,6 +74,7 @@ function applySchemaPatches(dbi) {
     ensureProductLibrarySchema(dbi)
     ensureProductLibraryMenu(dbi)
     ensureDouyinParseSchema(dbi)
+    ensureAppSettingsSchema(dbi)
     ensureDouyinParseMenu(dbi)
     ensureAiVideoModelMenuInSidebar(dbi)
     ensureModelCatalogSchema(dbi)
@@ -436,6 +437,44 @@ function ensureDouyinParseSchema(dbi) {
     );
     CREATE INDEX IF NOT EXISTS idx_douyin_logs_user ON douyin_parse_logs(user_id);
   `)
+}
+
+/** 全局键值配置（如抖音聚合方式）；缺省键用 INSERT OR IGNORE 种子，不覆盖已入库值 */
+function ensureAppSettingsSchema(dbi) {
+  dbi.exec(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY NOT NULL,
+      value TEXT NOT NULL DEFAULT '',
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+  `)
+  const envSide = String(process.env.DOUYIN_AGG_SIDE || 'server').trim().toLowerCase()
+  const seedSide = envSide === 'browser' || envSide === 'client' ? 'browser' : 'server'
+  dbi
+    .prepare(
+      `INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES (?, ?, datetime('now'))`,
+    )
+    .run('douyin.agg_side', seedSide)
+}
+
+function getAppSetting(key, fallback = '') {
+  try {
+    const row = getDb().prepare('SELECT value FROM app_settings WHERE key = ?').get(String(key || ''))
+    return row != null ? String(row.value ?? '') : fallback
+  } catch (_) {
+    return fallback
+  }
+}
+
+function setAppSetting(key, value) {
+  const k = String(key || '').trim()
+  if (!k) throw new Error('setting key required')
+  getDb()
+    .prepare(
+      `INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`,
+    )
+    .run(k, String(value ?? ''))
 }
 
 /** 顶级「AI工具」目录：与「AI 应用」并列，收纳工具/素材类功能。返回其 id */
@@ -1120,6 +1159,8 @@ module.exports = {
   rowToMenu,
   rowToDept,
   roleRow,
+  getAppSetting,
+  setAppSetting,
   reconcileDouyinProcessingOnBoot,
   reconcileStaleVideoJobsOnBoot,
 }

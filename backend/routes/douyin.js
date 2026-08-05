@@ -1,5 +1,6 @@
 /**
- * 抖音解析：粘贴分享链接/文案 → 后端调用聚合接口解析原链接素材并落库。
+ * 抖音解析：粘贴分享链接/文案 → 调用聚合接口解析原链接素材并落库。
+ * 聚合侧（server / browser）入库在 app_settings.douyin.agg_side，仅超级管理员可改，全员生效。
  * 需菜单权限 tools:douyin-parse:list；列表按数据范围过滤（本人 / 部门 / 全部）。
  */
 const express = require('express')
@@ -12,6 +13,26 @@ const douyinParser = require('../services/douyinParser')
 
 const DOWNLOAD_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+
+const SETTING_AGG_SIDE = 'douyin.agg_side'
+
+/** 环境变量仅作库无记录时的种子兜底 */
+const ENV_AGG_SIDE = (() => {
+  const v = String(process.env.DOUYIN_AGG_SIDE || 'server').trim().toLowerCase()
+  return v === 'browser' || v === 'client' ? 'browser' : 'server'
+})()
+
+function parseAggSideStrict(raw) {
+  const v = String(raw || '').trim().toLowerCase()
+  if (v === 'browser' || v === 'client') return 'browser'
+  if (v === 'server' || v === 'backend') return 'server'
+  return null
+}
+
+/** 读取全局聚合侧（入库优先） */
+function getAggSide() {
+  return parseAggSideStrict(db.getAppSetting(SETTING_AGG_SIDE, '')) || ENV_AGG_SIDE
+}
 
 const router = express.Router()
 router.use(requireAuth)
@@ -135,24 +156,25 @@ function insertPendingLog(userId, inputText) {
   return Number(info.lastInsertRowid)
 }
 
-/**
- * 后台解析并把结果写回指定行（fire-and-forget，内部吞异常，绝不抛出）。
- * duration_ms = 任务端到端挂钟时间（进入解析 → 终态），含内部重试与退避。
- * 对标云厂商「任务耗时」：end_time - start_time，不是把各次请求耗时手工相加。
- */
-async function runParseIntoRow(id, text) {
-  const started = Date.now()
-  const d = database()
-  try {
-    const result = await douyinParser.parse(text)
-    const durationMs = Date.now() - started
-    d.prepare(
+function markRowFailed(id, errorMessage, durationMs) {
+  database()
+    .prepare(
+      `UPDATE douyin_parse_logs SET status = 'failed', error_message = ?, duration_ms = ?, updated_at = datetime('now')
+       WHERE id = ?`,
+    )
+    .run(String(errorMessage || '解析失败，请稍后重试').slice(0, 500), Math.round(Number(durationMs) || 0), id)
+}
+
+function markRowSuccess(id, result, durationMs) {
+  database()
+    .prepare(
       `UPDATE douyin_parse_logs SET
          douyin_url = ?, aweme_id = ?, title = ?, author = ?, cover = ?, media_type = ?, is_video = ?,
          result_url = ?, images = ?, source = ?, status = 'success', error_message = '',
          duration_ms = ?, expires_at = ?, updated_at = datetime('now')
        WHERE id = ?`,
-    ).run(
+    )
+    .run(
       result.douyinUrl || '',
       result.awemeId || '',
       result.title || '',
@@ -163,46 +185,141 @@ async function runParseIntoRow(id, text) {
       result.resultUrl || '',
       JSON.stringify(result.images || []),
       result.source || 'aggregator',
-      Math.round(durationMs),
+      Math.round(Number(durationMs) || 0),
       result.expiresAt || null,
       id,
     )
+}
+
+/**
+ * 后台解析并把结果写回指定行（fire-and-forget，内部吞异常，绝不抛出）。
+ * duration_ms = 任务端到端挂钟时间（进入解析 → 终态），含内部重试与退避。
+ * 对标云厂商「任务耗时」：end_time - start_time，不是把各次请求耗时手工相加。
+ */
+async function runParseIntoRow(id, text) {
+  const started = Date.now()
+  try {
+    const result = await douyinParser.parse(text)
+    markRowSuccess(id, result, Date.now() - started)
   } catch (e) {
-    const durationMs = Date.now() - started
     const isKnown = e instanceof douyinParser.DouyinParseError
     const msg = isKnown ? e.message : '解析失败，请稍后重试'
     if (!isKnown) console.error('[douyin] runParse', e && e.message)
     try {
-      d.prepare(
-        `UPDATE douyin_parse_logs SET status = 'failed', error_message = ?, duration_ms = ?, updated_at = datetime('now')
-         WHERE id = ?`,
-      ).run(msg, Math.round(durationMs), id)
+      markRowFailed(id, msg, Date.now() - started)
     } catch (_) {
       /* ignore */
     }
   }
 }
 
-/** 解析：粘贴文案/链接（支持多条批量）→ 立即建「解析中」记录并返回，后台异步解析 */
+/** 配置：全局聚合侧 + 浏览器直连用的公开 API；canEditAggSide 仅超级管理员为 true */
+router.get('/config', (req, res) => {
+  res.json(
+    ok({
+      aggSide: getAggSide(),
+      aggApi: douyinParser.AGGREGATOR_API,
+      canEditAggSide: dataScope.isSuperAdmin(req.userId),
+    }),
+  )
+})
+
+/** 超级管理员修改全局聚合侧，全员立即生效 */
+router.put('/config', (req, res) => {
+  try {
+    if (!dataScope.isSuperAdmin(req.userId)) {
+      return res.json(fail(403, '仅超级管理员可修改聚合方式'))
+    }
+    const side = parseAggSideStrict(req.body && req.body.aggSide)
+    if (!side) return res.json(fail(400, 'aggSide 须为 server 或 browser'))
+    db.setAppSetting(SETTING_AGG_SIDE, side)
+    res.json(ok({ aggSide: side, aggApi: douyinParser.AGGREGATOR_API, canEditAggSide: true }))
+  } catch (e) {
+    console.error('[douyin] config put', e && e.message)
+    res.json(fail(500, '保存失败'))
+  }
+})
+
+/**
+ * 解析作品 ID（短链跳转仍走服务器；仅解析 ID，不调 bugpk）。
+ * 浏览器模式下前端先 resolve，再直连聚合接口。
+ */
+router.post('/resolve', async (req, res) => {
+  try {
+    const text = String((req.body && req.body.text) || '').trim()
+    if (!text) return res.json(fail(400, '请输入抖音分享链接或文案'))
+    const resolved = await douyinParser.resolveAwemeId(text)
+    res.json(ok(resolved))
+  } catch (e) {
+    const isKnown = e instanceof douyinParser.DouyinParseError
+    res.json(fail(isKnown ? 400 : 500, isKnown ? e.message : '解析作品 ID 失败'))
+  }
+})
+
+/**
+ * 浏览器直连聚合后的结果回写。服务端用 buildFromAggregator 归一化，不盲信前端拼好的字段。
+ * body: { durationMs, errorMessage? } 或 { durationMs, awemeId, douyinUrl, aggregatorData }
+ */
+router.post('/logs/:id/client-complete', (req, res) => {
+  try {
+    const id = Number(req.params.id)
+    if (!id) return res.json(fail(400, '参数错误'))
+    const row = getLogById(id)
+    if (!row) return res.json(fail(404, '记录不存在'))
+    const check = dataScope.assertUserInScope(req.userId, row.user_id)
+    if (!check.ok) return res.json(fail(403, check.msg || '无权操作该记录'))
+
+    const body = req.body || {}
+    const durationMs = Math.max(0, Math.round(Number(body.durationMs) || 0))
+    const errMsg = String(body.errorMessage || '').trim()
+    if (errMsg) {
+      markRowFailed(id, errMsg, durationMs)
+      return res.json(ok(rowToLog(getLogById(id))))
+    }
+
+    const awemeId = String(body.awemeId || '').trim()
+    const douyinUrl = String(body.douyinUrl || '').trim()
+    const aggregatorData = body.aggregatorData
+    if (!awemeId || !aggregatorData || typeof aggregatorData !== 'object') {
+      return res.json(fail(400, '缺少聚合结果数据'))
+    }
+
+    const built = douyinParser.buildFromAggregator(awemeId, douyinUrl || `https://www.douyin.com/video/${awemeId}`, aggregatorData)
+    if (!built.resultUrl && !(built.images && built.images.length)) {
+      markRowFailed(id, '未解析到可用素材地址，作品可能已被删除或仅本人可见', durationMs)
+      return res.json(ok(rowToLog(getLogById(id))))
+    }
+    built.source = 'aggregator-browser'
+    markRowSuccess(id, built, durationMs)
+    res.json(ok(rowToLog(getLogById(id))))
+  } catch (e) {
+    console.error('[douyin] client-complete', e && e.message)
+    res.json(fail(500, '回写解析结果失败'))
+  }
+})
+
+/** 解析：粘贴文案/链接（支持多条批量）→ 立即建「解析中」记录并返回；聚合侧读库，server 后台解析 / browser 由前端回写 */
 router.post('/parse', (req, res) => {
   const text = String((req.body && req.body.text) || '').trim()
   if (!text) return res.json(fail(400, '请输入抖音分享链接或文案'))
   const inputs = douyinParser.splitInputs(text)
   if (!inputs.length) return res.json(fail(400, '请输入抖音分享链接或文案'))
+  const aggSide = getAggSide()
 
   const created = []
   for (const input of inputs) {
     const id = insertPendingLog(req.userId, input)
     created.push({ id, input })
   }
-  // 先响应，再后台解析（不阻塞请求；并发由 douyinParser 内部信号量控制）
-  res.json(ok({ list: created.map((c) => rowToLog(getLogById(c.id))) }))
-  for (const c of created) {
-    Promise.resolve().then(() => runParseIntoRow(c.id, c.input))
+  res.json(ok({ list: created.map((c) => rowToLog(getLogById(c.id))), aggSide }))
+  if (aggSide === 'server') {
+    for (const c of created) {
+      Promise.resolve().then(() => runParseIntoRow(c.id, c.input))
+    }
   }
 })
 
-/** 重新获取：把记录置为「解析中」立即返回，后台重跑（前端靠轮询更新状态） */
+/** 重新获取：把记录置为「解析中」立即返回；聚合侧读库 */
 router.post('/logs/:id/reparse', (req, res) => {
   try {
     const id = Number(req.params.id)
@@ -214,6 +331,7 @@ router.post('/logs/:id/reparse', (req, res) => {
 
     const text = String(row.input_text || row.douyin_url || '').trim()
     if (!text) return res.json(fail(400, '该记录缺少原始链接，无法重新获取'))
+    const aggSide = getAggSide()
 
     // 清空旧结果，避免前端/Network 里还带着上次的 resultUrl，误判「已经成功」
     database()
@@ -225,8 +343,10 @@ router.post('/logs/:id/reparse', (req, res) => {
          WHERE id = ?`,
       )
       .run(id)
-    res.json(ok(rowToLog(getLogById(id))))
-    Promise.resolve().then(() => runParseIntoRow(id, text))
+    res.json(ok({ ...rowToLog(getLogById(id)), aggSide }))
+    if (aggSide === 'server') {
+      Promise.resolve().then(() => runParseIntoRow(id, text))
+    }
   } catch (e) {
     console.error('[douyin] reparse', e.message)
     res.json(fail(500, '重新获取失败'))

@@ -13,6 +13,21 @@
       <div class="parse-actions">
         <el-button type="primary" :loading="parsing" :icon="$icons.MagicStick" @click="onParse">提取素材</el-button>
         <el-button :disabled="parsing" @click="parseText = ''">清空</el-button>
+        <div v-if="canEditAggSide" class="agg-side-switch">
+          <span class="agg-side-label">直连模式</span>
+          <el-tooltip
+            content="关闭：由我们的服务器去请求解析接口。开启：改由每个人自己的浏览器去请求（服务器网络不稳时可开）。切换后立即保存，全员生效。"
+            placement="top"
+          >
+            <el-icon class="agg-side-tip"><component :is="$icons.QuestionFilled" /></el-icon>
+          </el-tooltip>
+          <el-switch
+            :model-value="aggSide === 'browser'"
+            :loading="aggSaving"
+            :disabled="parsing || aggSaving"
+            @change="onAggSideChange"
+          />
+        </div>
       </div>
     </div>
 
@@ -212,13 +227,123 @@ import CzPagination from "@/components/cz-pagination/index.vue"
 import request from "@/request"
 import { debounce } from "@/utils"
 import { useAuthStore } from "@/stores/auth.js"
+import { fetchAggregatorData } from "@/utils/douyinAgg.js"
 
 const authStore = useAuthStore()
 /** 仅本人数据范围时无需筛选创建人 */
 const showCreatorFilter = computed(() => authStore.dataScopeInfo?.mode !== "self")
+/** 仅超级管理员可改全局聚合方式（开关仅管理员可见） */
+const canEditAggSide = computed(() => authStore.isSuperAdmin === true)
 
 const parseText = ref("")
 const parsing = ref(false)
+const aggSaving = ref(false)
+/** server | browser；来自库内全局配置，全员共用 */
+const aggSide = ref("server")
+const aggApi = ref("https://api.bugpk.com/api/douyin")
+
+async function loadAggConfig() {
+  try {
+    const res = await request({ url: "/admin-api/douyin/config", method: "GET" })
+    if (res.code === 0 && res.data) {
+      if (res.data.aggApi) aggApi.value = String(res.data.aggApi)
+      aggSide.value = res.data.aggSide === "browser" ? "browser" : "server"
+    }
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+/** 管理员切换开关：立即入库，全员生效 */
+async function onAggSideChange(on) {
+  const next = on ? "browser" : "server"
+  const prev = aggSide.value
+  if (next === prev) return
+  aggSide.value = next
+  aggSaving.value = true
+  try {
+    const res = await request({
+      url: "/admin-api/douyin/config",
+      method: "PUT",
+      data: { aggSide: next },
+    })
+    if (res.code === 0) {
+      aggSide.value = res.data?.aggSide === "browser" ? "browser" : "server"
+      ElMessage.success(next === "browser" ? "已开启直连模式，全员生效" : "已关闭直连模式，全员生效")
+    } else {
+      aggSide.value = prev
+      ElMessage.error(res.msg || "保存失败")
+    }
+  } catch (_) {
+    aggSide.value = prev
+    ElMessage.error("网络错误，保存失败")
+  } finally {
+    aggSaving.value = false
+  }
+}
+
+/**
+ * 浏览器模式：resolve（短链仍走后端）→ 浏览器直连聚合 → client-complete 回写
+ */
+async function runBrowserParseForRow(row) {
+  const id = row && row.id
+  const text = String(row?.inputText || row?.douyinUrl || "").trim()
+  if (!id || !text) return
+  const started = Date.now()
+  try {
+    const resolvedRes = await request({ url: "/admin-api/douyin/resolve", method: "POST", data: { text } })
+    if (resolvedRes.code !== 0) {
+      throw new Error(resolvedRes.msg || "解析作品 ID 失败")
+    }
+    const awemeId = String(resolvedRes.data?.awemeId || "").trim()
+    const douyinUrl = String(resolvedRes.data?.douyinUrl || "").trim()
+    if (!awemeId) throw new Error("未能解析出作品 ID")
+
+    const aggregatorData = await fetchAggregatorData(awemeId, aggApi.value)
+    const completeRes = await request({
+      url: `/admin-api/douyin/logs/${id}/client-complete`,
+      method: "POST",
+      data: {
+        awemeId,
+        douyinUrl,
+        aggregatorData,
+        durationMs: Date.now() - started,
+      },
+    })
+    if (completeRes.code === 0) {
+      patchRow(completeRes.data)
+    } else {
+      throw new Error(completeRes.msg || "回写失败")
+    }
+  } catch (e) {
+    const msg = (e && e.message) || "聚合接口请求失败，请稍后重试"
+    try {
+      const failRes = await request({
+        url: `/admin-api/douyin/logs/${id}/client-complete`,
+        method: "POST",
+        data: { errorMessage: msg, durationMs: Date.now() - started },
+      })
+      if (failRes.code === 0) patchRow(failRes.data)
+    } catch (_) {
+      /* 回写失败时留给轮询/超时兜底 */
+    }
+  }
+}
+
+async function runBrowserParseBatch(list) {
+  const rows = Array.isArray(list) ? list.filter((r) => r && r.id) : []
+  // 轻度并发，避免浏览器同时打爆聚合接口
+  const concurrency = 3
+  let cursor = 0
+  async function worker() {
+    while (cursor < rows.length) {
+      const i = cursor
+      cursor += 1
+      await runBrowserParseForRow(rows[i])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, rows.length) }, () => worker()))
+}
 /** 用集合记录多行的进行中状态，避免连续点击互相覆盖 loading */
 const reparsingIds = reactive(new Set())
 const deletingIds = reactive(new Set())
@@ -261,6 +386,7 @@ onMounted(() => {
   } else {
     loadUserOptions("")
   }
+  loadAggConfig()
   getTableData()
 })
 
@@ -278,14 +404,28 @@ async function onParse() {
   }
   parsing.value = true
   try {
-    const res = await request({ url: "/admin-api/douyin/parse", method: "POST", data: { text } })
+    // 先拉一次配置，避免管理员刚改过、本页还是旧状态
+    await loadAggConfig()
+    const res = await request({
+      url: "/admin-api/douyin/parse",
+      method: "POST",
+      data: { text },
+    })
     if (res.code === 0) {
       const list = Array.isArray(res.data?.list) ? res.data.list : []
+      const side = res.data?.aggSide === "browser" ? "browser" : "server"
+      aggSide.value = side
       ElMessage.success(list.length > 1 ? `已加入 ${list.length} 条解析任务` : "已加入解析任务")
       parseText.value = ""
       // 回到第 1 页展示刚建立的「解析中」记录，随后由轮询就地更新状态
       tableParams.pageNo = 1
-      getTableData()
+      await getTableData()
+      if (side === "browser" && list.length) {
+        // 不阻塞按钮：后台跑浏览器直连，表格靠 patchRow / 轮询更新
+        Promise.resolve()
+          .then(() => runBrowserParseBatch(list))
+          .finally(() => ensurePolling())
+      }
     } else {
       ElMessage.error(res.msg || "提取失败")
     }
@@ -300,11 +440,25 @@ async function onReparse(row) {
   if (!row || !row.id || reparsingIds.has(row.id) || isProcessing(row)) return
   reparsingIds.add(row.id)
   try {
-    const res = await request({ url: `/admin-api/douyin/logs/${row.id}/reparse`, method: "POST" })
+    const res = await request({
+      url: `/admin-api/douyin/logs/${row.id}/reparse`,
+      method: "POST",
+    })
     if (res.code === 0) {
-      // 后端已置为「解析中」，就地更新该行，交给轮询继续跟踪，避免整表刷新
-      patchRow(res.data)
-      ensurePolling()
+      // 后端已置为「解析中」，就地更新该行；server 靠轮询，browser 本地直连后回写
+      const fresh = res.data || {}
+      const side = fresh.aggSide === "browser" ? "browser" : "server"
+      aggSide.value = side
+      const { aggSide: _side, ...rowData } = fresh
+      patchRow(rowData.id ? rowData : { ...fresh, id: row.id })
+      if (side === "browser") {
+        const text = String(row.inputText || row.douyinUrl || "").trim()
+        Promise.resolve()
+          .then(() => runBrowserParseForRow({ id: row.id, inputText: text, douyinUrl: row.douyinUrl }))
+          .finally(() => ensurePolling())
+      } else {
+        ensurePolling()
+      }
     } else {
       ElMessage.error(res.msg || "重新获取失败")
     }
@@ -630,11 +784,28 @@ function displayNickname(row) {
 .parse-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
 }
 /* Element Plus 相邻按钮自带 margin-left，与 flex gap 叠加会偏大，这里归零只用 gap */
 .parse-actions :deep(.el-button + .el-button) {
   margin-left: 0;
+}
+.agg-side-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.agg-side-label {
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+  white-space: nowrap;
+}
+.agg-side-tip {
+  color: var(--el-text-color-secondary);
+  cursor: help;
+  font-size: 14px;
 }
 .douyin-parse .table-wrap {
   margin-top: 0;

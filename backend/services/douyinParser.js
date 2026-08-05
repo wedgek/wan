@@ -310,4 +310,13 @@ async function parse(text) {
   }, `aweme=${awemeId}`)
 }
 
-module.exports = { parse, splitInputs, DouyinParseError, extractExpiresAt }
+module.exports = {
+  parse,
+  splitInputs,
+  resolveAwemeId,
+  buildFromAggregator,
+  fetchAggregator,
+  DouyinParseError,
+  extractExpiresAt,
+  AGGREGATOR_API,
+}

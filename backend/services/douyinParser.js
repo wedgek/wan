@@ -7,6 +7,12 @@
 const AGGREGATOR_API = process.env.DOUYIN_AGG_API || 'https://api.bugpk.com/api/douyin'
 const REQUEST_TIMEOUT_MS = Number(process.env.DOUYIN_TIMEOUT_MS) || 20000
 const MAX_CONCURRENT = Number(process.env.DOUYIN_MAX_CONCURRENT) || 6
+/**
+ * bugpk 聚合接口会随机掐断连接/返回空体（实测单次失败率约 10~15%）。
+ * 对这类“抽风”做有限次重试即可把成功率拉到接近 100%；总尝试 = 重试数 + 1。
+ */
+const MAX_RETRIES = Math.max(0, Number(process.env.DOUYIN_RETRIES) || 3)
+const RETRY_BASE_MS = Number(process.env.DOUYIN_RETRY_BASE_MS) || 600
 
 const DESKTOP_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
@@ -29,12 +35,36 @@ function splitInputs(text) {
   return [raw]
 }
 
-/** 面向用户的可读解析错误 */
+/** 面向用户的可读解析错误；retryable=true 表示是聚合接口抽风、值得重试 */
 class DouyinParseError extends Error {
-  constructor(message) {
+  constructor(message, { retryable = false } = {}) {
     super(message)
     this.name = 'DouyinParseError'
+    this.retryable = retryable
   }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * 有限次重试：仅对可重试错误（网络抖动 / 非 DouyinParseError / retryable=true）重试，指数退避。
+ * 素材本身解析不了（作品已删除/仅本人可见等）标记为不可重试，直接失败，不做无谓等待。
+ */
+async function withRetry(fn) {
+  let lastErr
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
+    try {
+      return await fn(attempt)
+    } catch (e) {
+      lastErr = e
+      const retryable = !(e instanceof DouyinParseError) || e.retryable
+      if (!retryable || attempt === MAX_RETRIES) break
+      await sleep(RETRY_BASE_MS * Math.pow(2, attempt))
+    }
+  }
+  throw lastErr
 }
 
 /* ============ 并发信号量：限制对第三方接口的同时出站请求数 ============ */
@@ -141,18 +171,21 @@ async function fetchAggregator(awemeId) {
       },
     })
   } catch (e) {
-    if (e && e.name === 'AbortError') throw new DouyinParseError('解析超时，请稍后重试')
-    throw new DouyinParseError('聚合接口请求失败，请稍后重试')
+    if (e && e.name === 'AbortError') throw new DouyinParseError('解析超时，请稍后重试', { retryable: true })
+    // 连接被掐断 / 网络抖动（bugpk 常见的 HTTP 000）：可重试
+    throw new DouyinParseError('聚合接口请求失败，请稍后重试', { retryable: true })
   }
   const text = await resp.text()
   let data = null
   try {
     data = text ? JSON.parse(text) : null
   } catch (_) {
-    throw new DouyinParseError('聚合接口返回异常')
+    // 返回空体 / 非 JSON：多为抽风，可重试
+    throw new DouyinParseError('聚合接口返回异常', { retryable: true })
   }
   if (!data || Number(data.code) !== 200 || !data.data) {
-    throw new DouyinParseError(`聚合接口返回异常：${(data && data.msg) || '无数据'}`)
+    // code!=200（含“详情接口返回空响应体”等）多为临时性，重试一般能成
+    throw new DouyinParseError(`聚合接口返回异常：${(data && data.msg) || '无数据'}`, { retryable: true })
   }
   return data.data
 }
@@ -242,11 +275,15 @@ async function parse(text) {
   const { awemeId, douyinUrl } = await resolveAwemeId(text)
   await acquireSlot()
   try {
-    const data = await fetchAggregator(awemeId)
-    const result = buildFromAggregator(awemeId, douyinUrl, data)
-    if (!result.resultUrl && !result.images.length) {
-      throw new DouyinParseError('未解析到可用素材地址，作品可能已被删除或仅本人可见')
-    }
+    // 聚合接口抽风时自动重试；素材确实为空则视为不可重试的最终失败
+    const result = await withRetry(async () => {
+      const data = await fetchAggregator(awemeId)
+      const built = buildFromAggregator(awemeId, douyinUrl, data)
+      if (!built.resultUrl && !built.images.length) {
+        throw new DouyinParseError('未解析到可用素材地址，作品可能已被删除或仅本人可见')
+      }
+      return built
+    })
     return result
   } finally {
     releaseSlot()

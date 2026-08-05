@@ -1,3 +1,15 @@
+/**
+ * 强制 DNS 解析优先返回 IPv4，且必须在任何网络请求之前执行。
+ * 线上服务器无可用的全局 IPv6，但 Node/undici 默认会先试 IPv6/AAAA，
+ * 导致对外 fetch（抖音解析、大模型等）每次都卡到超时（~10s）再失败。
+ * 写在代码里最保险：跟随代码部署、不受 PM2 env/系统 gai.conf 是否生效的影响。
+ */
+try {
+  require("node:dns").setDefaultResultOrder("ipv4first")
+} catch (_) {
+  /* 老版本 Node 不支持则忽略 */
+}
+
 const path = require("path")
 const fs = require("fs")
 

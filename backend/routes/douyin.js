@@ -54,7 +54,8 @@ router.use(requireDouyinParse)
 /**
  * 惰性超时兜底：把「解析中」但已超过阈值的行判超时失败。
  * 阈值取较大值（默认 300s），大于单次解析上限（约 2×20s）与常规排队等待，避免误杀在跑/排队的任务。
- * 与启动对账一起，保证任何情况下都不会永久卡在「解析中」。
+ * 必须用 updated_at（重新获取会刷新它），不能用 created_at——否则老记录一点「重新获取」
+ * 就会被当成「创建超过 300s 仍在解析中」而误杀，页面出现「有 resultUrl 却显示失败」。
  */
 const PROCESSING_STALE_SEC = Number(process.env.DOUYIN_PROCESSING_STALE_SEC) || 300
 function reconcileStaleProcessing() {
@@ -64,7 +65,7 @@ function reconcileStaleProcessing() {
         `UPDATE douyin_parse_logs
          SET status = 'failed', error_message = '解析超时，请重新获取', updated_at = datetime('now')
          WHERE status IN ('processing', 'pending')
-           AND (strftime('%s', 'now') - strftime('%s', created_at)) > ?`,
+           AND (strftime('%s', 'now') - strftime('%s', COALESCE(updated_at, created_at))) > ?`,
       )
       .run(PROCESSING_STALE_SEC)
   } catch (e) {
@@ -127,8 +128,8 @@ function insertPendingLog(userId, inputText) {
   const info = d
     .prepare(
       `INSERT INTO douyin_parse_logs
-        (user_id, input_text, status, created_at)
-       VALUES (?, ?, 'processing', datetime('now'))`,
+        (user_id, input_text, status, created_at, updated_at)
+       VALUES (?, ?, 'processing', datetime('now'), datetime('now'))`,
     )
     .run(Number(userId), String(inputText || '').slice(0, 2000))
   return Number(info.lastInsertRowid)
@@ -214,8 +215,15 @@ router.post('/logs/:id/reparse', (req, res) => {
     const text = String(row.input_text || row.douyin_url || '').trim()
     if (!text) return res.json(fail(400, '该记录缺少原始链接，无法重新获取'))
 
+    // 清空旧结果，避免前端/Network 里还带着上次的 resultUrl，误判「已经成功」
     database()
-      .prepare(`UPDATE douyin_parse_logs SET status = 'processing', error_message = '', updated_at = datetime('now') WHERE id = ?`)
+      .prepare(
+        `UPDATE douyin_parse_logs SET
+           status = 'processing', error_message = '',
+           result_url = '', images = '[]', expires_at = NULL, duration_ms = NULL,
+           updated_at = datetime('now')
+         WHERE id = ?`,
+      )
       .run(id)
     res.json(ok(rowToLog(getLogById(id))))
     Promise.resolve().then(() => runParseIntoRow(id, text))

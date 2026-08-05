@@ -179,7 +179,13 @@ async function fetchAggregator(awemeId) {
     })
   } catch (e) {
     if (e && e.name === 'AbortError') throw new DouyinParseError('解析超时，请稍后重试', { retryable: true })
-    // 连接被掐断 / 网络抖动（bugpk 常见的 HTTP 000）：可重试
+    // 连接被掐断 / 网络抖动（bugpk 常见的 HTTP 000）：可重试。
+    // 把底层原因打出来（ETIMEDOUT / ECONNRESET / ENETUNREACH 等），方便区分「本机网络」和「接口业务错误」。
+    const cause = e && (e.cause || e)
+    const detail = [e && e.message, cause && cause.code, cause && cause.message]
+      .filter(Boolean)
+      .join(' | ')
+    console.warn(`[douyin] aggregator fetch failed aweme=${awemeId} detail=${detail || 'unknown'}`)
     throw new DouyinParseError('聚合接口请求失败，请稍后重试', { retryable: true })
   }
   const text = await resp.text()

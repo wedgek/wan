@@ -4,7 +4,7 @@
  */
 
 const PAID_API = process.env.DOUYIN_PAID_API || 'https://api-v1-exe.muzzz.cn/detail/users'
-const REQUEST_TIMEOUT_MS = Number(process.env.DOUYIN_PAID_TIMEOUT_MS) || 15000
+const REQUEST_TIMEOUT_MS = Number(process.env.DOUYIN_PAID_TIMEOUT_MS) || 120000
 const MAX_CONCURRENT = Math.max(1, Number(process.env.DOUYIN_PAID_MAX_CONCURRENT) || 2)
 const NETWORK_RETRIES = 1
 
@@ -184,17 +184,23 @@ function pickPaidMedia(data) {
 
 /**
  * 调用付费 details，返回 data 节点。
+ * 不重试：对方按请求扣次，超时/断连时第一次多半已经扣过，再打会连扣两次。
  * @param {string} url 抖音作品链接
  */
 async function fetchPaidDetails(url) {
   const share = String(url || '').trim()
   if (!share) throw new PaidApiError('付费解析缺少作品链接')
-  const data = await postPaidWithRetry({ url: share, type: 'details' }, `details`)
-  throwIfBusinessError(data, 'details')
-  if (!data.data || typeof data.data !== 'object') {
-    throw new PaidApiError('付费接口未返回数据', { retryable: true })
+  await acquireSlot()
+  try {
+    const data = await postPaid({ url: share, type: 'details' })
+    throwIfBusinessError(data, 'details')
+    if (!data.data || typeof data.data !== 'object') {
+      throw new PaidApiError('付费接口未返回数据', { retryable: false })
+    }
+    return data.data
+  } finally {
+    releaseSlot()
   }
-  return data.data
 }
 
 /** 查询额度：{ total_count, remainder, used_count } */

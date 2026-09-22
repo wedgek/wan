@@ -439,6 +439,7 @@ function ensureDouyinParseSchema(dbi) {
     CREATE INDEX IF NOT EXISTS idx_douyin_logs_user ON douyin_parse_logs(user_id);
   `)
   ensureColumn(dbi, 'douyin_parse_logs', 'quality', 'TEXT')
+  ensureColumn(dbi, 'douyin_parse_logs', 'paid_attempted', 'INTEGER NOT NULL DEFAULT 0')
 }
 
 /** 全局键值配置（如抖音聚合方式）；缺省键用 INSERT OR IGNORE 种子，不覆盖已入库值 */

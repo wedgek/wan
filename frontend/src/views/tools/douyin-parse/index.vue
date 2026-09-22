@@ -197,7 +197,7 @@
         </el-table-column>
         <el-table-column label="解析来源" width="104" align="center">
           <template #default="{ row }">
-            <el-tag v-if="row.status === 'success' && isPaidSource(row)" type="warning" size="small">付费兜底</el-tag>
+            <el-tag v-if="isPaidSource(row)" type="warning" size="small">付费兜底</el-tag>
             <el-tag v-else-if="row.status === 'success'" type="info" size="small">免费</el-tag>
             <span v-else class="muted">—</span>
           </template>
@@ -365,6 +365,7 @@ async function runBrowserParseForRow(row) {
   const started = Date.now()
   let awemeId = ""
   let douyinUrl = ""
+  let alreadyCompleted = false
   try {
     const resolvedRes = await request({ url: "/admin-api/douyin/resolve", method: "POST", data: { text } })
     if (resolvedRes.code !== 0) {
@@ -386,12 +387,14 @@ async function runBrowserParseForRow(row) {
       },
     })
     if (completeRes.code === 0) {
+      alreadyCompleted = true
       patchRow(completeRes.data)
       if (isPaidSource(completeRes.data)) loadQuota()
     } else {
       throw new Error(completeRes.msg || "回写失败")
     }
   } catch (e) {
+    if (alreadyCompleted) return
     const msg = (e && e.message) || "聚合接口请求失败，请稍后重试"
     try {
       const failRes = await request({
@@ -582,7 +585,7 @@ async function pollOnce() {
       let paidDone = false
       for (const item of res.data.list) {
         patchRow(item)
-        if (item && item.status === "success" && isPaidSource(item)) paidDone = true
+        if (item && isPaidSource(item) && item.status !== "processing") paidDone = true
       }
       if (paidDone) loadQuota()
     }

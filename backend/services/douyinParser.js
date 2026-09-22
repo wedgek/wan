@@ -378,7 +378,12 @@ async function fetchFreeBuilt(awemeId, douyinUrl) {
  * @returns {Promise<object>}
  * @throws {DouyinParseError}
  */
-async function parse(text) {
+/**
+ * @param {string} text
+ * @param {{ onBeforePaid?: () => boolean }} [hooks]
+ *   onBeforePaid 返回 false 则不再打付费（同条记录已扣过 / 正在扣）。
+ */
+async function parse(text, hooks = {}) {
   const { awemeId, douyinUrl } = await resolveAwemeId(text)
   let freeResult = null
   let fallbackReason = ''
@@ -391,12 +396,19 @@ async function parse(text) {
     // 不可重试（已删/仅本人可见等）不走付费，避免白烧次数
     if (isKnown && !e.retryable) throw e
     fallbackReason = isKnown ? e.message : '免费接口请求失败'
-    return parsePaidFallback(awemeId, douyinUrl, { fallbackReason })
+    return runPaidAfterHook(awemeId, douyinUrl, { fallbackReason, hooks })
   }
 
   if (isFreeResultAcceptable(freeResult)) return freeResult
 
   fallbackReason = freeResult.mediaType === 'images' ? '免费图集无可用地址' : '免费非原画'
+  return runPaidAfterHook(awemeId, douyinUrl, { fallbackReason, freeResult, hooks })
+}
+
+function runPaidAfterHook(awemeId, douyinUrl, { fallbackReason, freeResult = null, hooks = {} } = {}) {
+  if (typeof hooks.onBeforePaid === 'function' && hooks.onBeforePaid() === false) {
+    throw new DouyinParseError(formatFallbackMessage(fallbackReason, '付费兜底已在处理中，请稍后'))
+  }
   return parsePaidFallback(awemeId, douyinUrl, { fallbackReason, freeResult })
 }
 

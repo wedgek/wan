@@ -158,13 +158,38 @@ function insertPendingLog(userId, inputText) {
   return Number(info.lastInsertRowid)
 }
 
-function markRowFailed(id, errorMessage, durationMs) {
+function markRowFailed(id, errorMessage, durationMs, source) {
+  if (source) {
+    database()
+      .prepare(
+        `UPDATE douyin_parse_logs SET status = 'failed', error_message = ?, duration_ms = ?, source = ?, updated_at = datetime('now')
+         WHERE id = ?`,
+      )
+      .run(
+        String(errorMessage || '解析失败，请稍后重试').slice(0, 500),
+        Math.round(Number(durationMs) || 0),
+        String(source),
+        id,
+      )
+    return
+  }
   database()
     .prepare(
       `UPDATE douyin_parse_logs SET status = 'failed', error_message = ?, duration_ms = ?, updated_at = datetime('now')
        WHERE id = ?`,
     )
     .run(String(errorMessage || '解析失败，请稍后重试').slice(0, 500), Math.round(Number(durationMs) || 0), id)
+}
+
+/** 同一条记录只允许发起一次付费 details，避免回写超时/重复 complete 连扣两次 */
+function claimPaidAttempt(id) {
+  const r = database()
+    .prepare(
+      `UPDATE douyin_parse_logs SET paid_attempted = 1, updated_at = datetime('now')
+       WHERE id = ? AND COALESCE(paid_attempted, 0) = 0`,
+    )
+    .run(id)
+  return r.changes > 0
 }
 
 function markRowSuccess(id, result, durationMs) {
@@ -201,15 +226,21 @@ function markRowSuccess(id, result, durationMs) {
  */
 async function runParseIntoRow(id, text) {
   const started = Date.now()
+  let usedPaid = false
   try {
-    const result = await douyinParser.parse(text)
+    const result = await douyinParser.parse(text, {
+      onBeforePaid: () => {
+        usedPaid = claimPaidAttempt(id)
+        return usedPaid
+      },
+    })
     markRowSuccess(id, result, Date.now() - started)
   } catch (e) {
     const isKnown = e instanceof douyinParser.DouyinParseError
     const msg = isKnown ? e.message : '解析失败，请稍后重试'
     if (!isKnown) console.error('[douyin] runParse', e && e.message)
     try {
-      markRowFailed(id, msg, Date.now() - started)
+      markRowFailed(id, msg, Date.now() - started, usedPaid ? 'paid' : undefined)
     } catch (_) {
       /* ignore */
     }
@@ -233,6 +264,10 @@ async function runPaidFallbackIntoRow(id, opts = {}) {
       awemeId = resolved.awemeId
       douyinUrl = douyinUrl || resolved.douyinUrl
     }
+    if (!claimPaidAttempt(id)) {
+      console.warn(`[douyin] skip duplicate paid fallback id=${id}`)
+      return
+    }
     const result = await douyinParser.parsePaidFallback(awemeId, douyinUrl, { fallbackReason, freeResult })
     markRowSuccess(id, result, Date.now() - startedAt)
   } catch (e) {
@@ -240,7 +275,8 @@ async function runPaidFallbackIntoRow(id, opts = {}) {
     const msg = isKnown ? e.message : fallbackReason || '解析失败，请稍后重试'
     if (!isKnown) console.error('[douyin] paidFallback', e && e.message)
     try {
-      markRowFailed(id, msg, Date.now() - startedAt)
+      const claimed = database().prepare(`SELECT paid_attempted FROM douyin_parse_logs WHERE id = ?`).get(id)
+      markRowFailed(id, msg, Date.now() - startedAt, claimed && claimed.paid_attempted ? 'paid' : undefined)
     } catch (_) {
       /* ignore */
     }
@@ -427,6 +463,7 @@ router.post('/logs/:id/reparse', (req, res) => {
         `UPDATE douyin_parse_logs SET
            status = 'processing', error_message = '',
            result_url = '', images = '[]', expires_at = NULL, duration_ms = NULL, quality = NULL,
+           paid_attempted = 0,
            updated_at = datetime('now')
          WHERE id = ?`,
       )

@@ -272,10 +272,6 @@
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
-        <!--
-          暂时隐藏「重新获取 / 删除」：重新获取可能再打付费 details 扣次，删除后列表更对不上 used_count。
-          接口和 onReparse / onDelete 仍保留，把 SHOW_ROW_ACTIONS 改回 true 即可恢复。
-        -->
         <el-table-column v-if="SHOW_ROW_ACTIONS" label="操作" width="180" align="center" fixed="right" class-name="col-actions">
           <template #default="{ row }">
             <el-button
@@ -323,8 +319,7 @@ const showCreatorFilter = computed(() => authStore.dataScopeInfo?.mode !== "self
 /** 仅超级管理员可改全局聚合方式（开关仅管理员可见） */
 const canEditAggSide = computed(() => authStore.isSuperAdmin === true)
 
-/** 暂时关闭行内「重新获取 / 删除」，避免再扣次或删行后对不上账。改 true 即恢复。 */
-const SHOW_ROW_ACTIONS = false
+const SHOW_ROW_ACTIONS = true
 
 const parseText = ref("")
 const parsing = ref(false)

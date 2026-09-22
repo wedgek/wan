@@ -2,6 +2,24 @@
   <div class="page-container douyin-parse">
     <!-- 粘贴解析区 -->
     <div class="parse-box">
+      <div class="quota-bar">
+        <span class="quota-label">解析API剩余次数</span>
+        <span v-if="quota.configured" class="quota-nums">
+          {{ formatCount(quota.remainder) }} / {{ formatCount(quota.totalCount) }}
+        </span>
+        <span v-else class="quota-unconfigured">未配置付费接口</span>
+        <el-button
+          v-if="quota.configured"
+          link
+          type="primary"
+          :loading="quotaLoading"
+          :icon="$icons.Refresh"
+          @click="loadQuota"
+        >
+          刷新
+        </el-button>
+        <span class="quota-hint">仅免费失败或非原画时消耗</span>
+      </div>
       <el-input
         v-model="parseText"
         type="textarea"
@@ -70,6 +88,17 @@
           <el-option label="解析中" value="processing" />
           <el-option label="成功" value="success" />
           <el-option label="失败" value="failed" />
+        </el-select>
+        <el-select
+          v-model="tableParams.source"
+          placeholder="解析来源"
+          class="filter-select-source"
+          clearable
+          clear-icon="Close"
+          :suffix-icon="$icons.ArrowDown"
+        >
+          <el-option label="免费" value="free" />
+          <el-option label="付费兜底" value="paid" />
         </el-select>
         <el-date-picker
           v-model="tableParams.createTimeRange"
@@ -159,6 +188,20 @@
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
+        <el-table-column label="画质" width="88" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="isOriginalQuality(row)" type="success" size="small">原画</el-tag>
+            <el-tag v-else-if="qualityLabel(row)" type="warning" size="small">{{ qualityLabel(row) }}</el-tag>
+            <span v-else class="muted">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="解析来源" width="104" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.status === 'success' && isPaidSource(row)" type="warning" size="small">付费兜底</el-tag>
+            <el-tag v-else-if="row.status === 'success'" type="info" size="small">免费</el-tag>
+            <span v-else class="muted">—</span>
+          </template>
+        </el-table-column>
         <el-table-column label="提取耗时" width="100" align="center">
           <template #default="{ row }">
             <span v-if="row.durationMs != null">{{ formatDuration(row.durationMs) }}</span>
@@ -241,6 +284,36 @@ const aggSaving = ref(false)
 /** server | browser；来自库内全局配置，全员共用 */
 const aggSide = ref("server")
 const aggApi = ref("https://api.bugpk.com/api/douyin")
+const quotaLoading = ref(false)
+const quota = reactive({
+  configured: false,
+  remainder: 0,
+  totalCount: 0,
+  usedCount: 0,
+})
+
+function formatCount(n) {
+  const num = Number(n)
+  if (!Number.isFinite(num)) return "0"
+  return num.toLocaleString("zh-CN")
+}
+
+async function loadQuota() {
+  quotaLoading.value = true
+  try {
+    const res = await request({ url: "/admin-api/douyin/quota", method: "GET" })
+    if (res.code === 0 && res.data) {
+      quota.configured = Boolean(res.data.configured)
+      quota.remainder = Number(res.data.remainder) || 0
+      quota.totalCount = Number(res.data.totalCount) || 0
+      quota.usedCount = Number(res.data.usedCount) || 0
+    }
+  } catch (_) {
+    /* 额度查询失败不影响提取 */
+  } finally {
+    quotaLoading.value = false
+  }
+}
 
 async function loadAggConfig() {
   try {
@@ -290,13 +363,15 @@ async function runBrowserParseForRow(row) {
   const text = String(row?.inputText || row?.douyinUrl || "").trim()
   if (!id || !text) return
   const started = Date.now()
+  let awemeId = ""
+  let douyinUrl = ""
   try {
     const resolvedRes = await request({ url: "/admin-api/douyin/resolve", method: "POST", data: { text } })
     if (resolvedRes.code !== 0) {
       throw new Error(resolvedRes.msg || "解析作品 ID 失败")
     }
-    const awemeId = String(resolvedRes.data?.awemeId || "").trim()
-    const douyinUrl = String(resolvedRes.data?.douyinUrl || "").trim()
+    awemeId = String(resolvedRes.data?.awemeId || "").trim()
+    douyinUrl = String(resolvedRes.data?.douyinUrl || "").trim()
     if (!awemeId) throw new Error("未能解析出作品 ID")
 
     const aggregatorData = await fetchAggregatorData(awemeId, aggApi.value)
@@ -312,6 +387,7 @@ async function runBrowserParseForRow(row) {
     })
     if (completeRes.code === 0) {
       patchRow(completeRes.data)
+      if (isPaidSource(completeRes.data)) loadQuota()
     } else {
       throw new Error(completeRes.msg || "回写失败")
     }
@@ -321,9 +397,12 @@ async function runBrowserParseForRow(row) {
       const failRes = await request({
         url: `/admin-api/douyin/logs/${id}/client-complete`,
         method: "POST",
-        data: { errorMessage: msg, durationMs: Date.now() - started },
+        data: { errorMessage: msg, awemeId, douyinUrl, durationMs: Date.now() - started },
       })
-      if (failRes.code === 0) patchRow(failRes.data)
+      if (failRes.code === 0) {
+        patchRow(failRes.data)
+        if (isPaidSource(failRes.data)) loadQuota()
+      }
     } catch (_) {
       /* 回写失败时留给轮询/超时兜底 */
     }
@@ -356,6 +435,7 @@ const downloadAborters = {}
 const defaultTableParams = () => ({
   userId: "",
   status: "",
+  source: "",
   keyword: "",
   createTimeRange: null,
   pageNo: 1,
@@ -387,6 +467,7 @@ onMounted(() => {
     loadUserOptions("")
   }
   loadAggConfig()
+  loadQuota()
   getTableData()
 })
 
@@ -498,7 +579,12 @@ async function pollOnce() {
   try {
     const res = await request({ url: `/admin-api/douyin/logs/status?ids=${ids.join(",")}`, method: "GET" })
     if (res.code === 0 && Array.isArray(res.data?.list)) {
-      for (const item of res.data.list) patchRow(item)
+      let paidDone = false
+      for (const item of res.data.list) {
+        patchRow(item)
+        if (item && item.status === "success" && isPaidSource(item)) paidDone = true
+      }
+      if (paidDone) loadQuota()
     }
   } catch (_) {
     /* 忽略单次轮询失败，下次继续 */
@@ -760,6 +846,22 @@ function displayNickname(row) {
   const u = String(row.username || "").trim()
   return u || "—"
 }
+
+function isPaidSource(row) {
+  return String(row?.source || "").toLowerCase() === "paid"
+}
+
+function isOriginalQuality(row) {
+  return String(row?.quality || "").toLowerCase() === "original"
+}
+
+function qualityLabel(row) {
+  const q = String(row?.quality || "").trim()
+  if (!q) return ""
+  if (q.toLowerCase() === "original") return "原画"
+  if (q.toLowerCase() === "unknown") return "未知"
+  return q
+}
 </script>
 
 <style lang="scss" scoped>
@@ -777,6 +879,30 @@ function displayNickname(row) {
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 8px;
   background: var(--el-fill-color-blank);
+}
+.quota-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+.quota-label {
+  color: var(--el-text-color-regular);
+  font-weight: 500;
+}
+.quota-nums {
+  color: var(--el-color-primary);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.quota-unconfigured {
+  color: var(--el-text-color-secondary);
+}
+.quota-hint {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
 }
 .parse-input {
   margin-bottom: 12px;
@@ -826,6 +952,9 @@ function displayNickname(row) {
   width: 200px;
 }
 .douyin-parse .page-filter-left .filter-select-status.el-select {
+  width: 130px;
+}
+.douyin-parse .page-filter-left .filter-select-source.el-select {
   width: 130px;
 }
 .douyin-parse .page-filter-left .filter-date-range.el-date-editor {

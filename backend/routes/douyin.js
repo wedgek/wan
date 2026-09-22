@@ -1,7 +1,7 @@
 /**
- * 抖音解析：粘贴分享链接/文案 → 调用聚合接口解析原链接素材并落库。
+ * 抖音解析：粘贴分享链接/文案 → 免费聚合优先，非原画/失败再由服务端付费兜底并落库。
  * 聚合侧（server / browser）入库在 app_settings.douyin.agg_side，仅超级管理员可改，全员生效。
- * 需菜单权限 tools:douyin-parse:list；列表按数据范围过滤（本人 / 部门 / 全部）。
+ * 付费 token 只在服务端；需菜单权限 tools:douyin-parse:list；列表按数据范围过滤。
  */
 const express = require('express')
 const { Readable } = require('stream')
@@ -10,6 +10,7 @@ const { ok, fail } = require('../utils/response')
 const db = require('../db')
 const dataScope = require('../services/dataScopeService')
 const douyinParser = require('../services/douyinParser')
+const douyinPaid = require('../services/douyinPaid')
 
 const DOWNLOAD_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
@@ -122,6 +123,7 @@ function rowToLog(r) {
     resultUrl: r.result_url || '',
     images: parseImages(r.images),
     source: r.source || 'aggregator',
+    quality: r.quality || '',
     status: r.status || 'success',
     errorMessage: r.error_message || '',
     durationMs: r.duration_ms != null ? Number(r.duration_ms) : null,
@@ -170,7 +172,7 @@ function markRowSuccess(id, result, durationMs) {
     .prepare(
       `UPDATE douyin_parse_logs SET
          douyin_url = ?, aweme_id = ?, title = ?, author = ?, cover = ?, media_type = ?, is_video = ?,
-         result_url = ?, images = ?, source = ?, status = 'success', error_message = '',
+         result_url = ?, images = ?, source = ?, quality = ?, status = 'success', error_message = '',
          duration_ms = ?, expires_at = ?, updated_at = datetime('now')
        WHERE id = ?`,
     )
@@ -185,6 +187,7 @@ function markRowSuccess(id, result, durationMs) {
       result.resultUrl || '',
       JSON.stringify(result.images || []),
       result.source || 'aggregator',
+      result.quality || '',
       Math.round(Number(durationMs) || 0),
       result.expiresAt || null,
       id,
@@ -213,15 +216,69 @@ async function runParseIntoRow(id, text) {
   }
 }
 
+/**
+ * 浏览器免费失败/非原画后的付费兜底。行保持 processing，不先标失败。
+ * startedAt 用免费阶段起点，duration_ms 仍是端到端挂钟时间。
+ */
+async function runPaidFallbackIntoRow(id, opts = {}) {
+  const startedAt = Number(opts.startedAt) > 0 ? Number(opts.startedAt) : Date.now()
+  const fallbackReason = String(opts.fallbackReason || '').trim()
+  const freeResult = opts.freeResult || null
+  let awemeId = String(opts.awemeId || '').trim()
+  let douyinUrl = String(opts.douyinUrl || '').trim()
+  const text = String(opts.text || '').trim()
+  try {
+    if (!awemeId) {
+      const resolved = await douyinParser.resolveAwemeId(text || douyinUrl)
+      awemeId = resolved.awemeId
+      douyinUrl = douyinUrl || resolved.douyinUrl
+    }
+    const result = await douyinParser.parsePaidFallback(awemeId, douyinUrl, { fallbackReason, freeResult })
+    markRowSuccess(id, result, Date.now() - startedAt)
+  } catch (e) {
+    const isKnown = e instanceof douyinParser.DouyinParseError
+    const msg = isKnown ? e.message : fallbackReason || '解析失败，请稍后重试'
+    if (!isKnown) console.error('[douyin] paidFallback', e && e.message)
+    try {
+      markRowFailed(id, msg, Date.now() - startedAt)
+    } catch (_) {
+      /* ignore */
+    }
+  }
+}
+
 /** 配置：全局聚合侧 + 浏览器直连用的公开 API；canEditAggSide 仅超级管理员为 true */
 router.get('/config', (req, res) => {
   res.json(
     ok({
       aggSide: getAggSide(),
       aggApi: douyinParser.AGGREGATOR_API,
+      paidConfigured: douyinPaid.isPaidConfigured(),
       canEditAggSide: dataScope.isSuperAdmin(req.userId),
     }),
   )
+})
+
+/** 付费接口额度（type=check）；未配置 token 时 configured=false，不打对方接口 */
+router.get('/quota', async (req, res) => {
+  try {
+    if (!douyinPaid.isPaidConfigured()) {
+      return res.json(ok({ configured: false, remainder: 0, totalCount: 0, usedCount: 0 }))
+    }
+    const data = await douyinPaid.checkQuota()
+    res.json(
+      ok({
+        configured: true,
+        remainder: Number(data.remainder) || 0,
+        totalCount: Number(data.total_count) || 0,
+        usedCount: Number(data.used_count) || 0,
+      }),
+    )
+  } catch (e) {
+    const msg = e && e.message ? e.message : '查询次数失败'
+    console.warn('[douyin] quota', msg)
+    res.json(fail(500, msg))
+  }
 })
 
 /** 超级管理员修改全局聚合侧，全员立即生效 */
@@ -258,7 +315,8 @@ router.post('/resolve', async (req, res) => {
 
 /**
  * 浏览器直连聚合后的结果回写。服务端用 buildFromAggregator 归一化，不盲信前端拼好的字段。
- * body: { durationMs, errorMessage? } 或 { durationMs, awemeId, douyinUrl, aggregatorData }
+ * 免费失败 / 非原画时不先标失败，后台走付费兜底；行保持 processing，前端靠轮询收终态。
+ * body: { durationMs, errorMessage?, awemeId?, douyinUrl?, aggregatorData? }
  */
 router.post('/logs/:id/client-complete', (req, res) => {
   try {
@@ -271,27 +329,57 @@ router.post('/logs/:id/client-complete', (req, res) => {
 
     const body = req.body || {}
     const durationMs = Math.max(0, Math.round(Number(body.durationMs) || 0))
+    const startedAt = Date.now() - durationMs
     const errMsg = String(body.errorMessage || '').trim()
-    if (errMsg) {
-      markRowFailed(id, errMsg, durationMs)
-      return res.json(ok(rowToLog(getLogById(id))))
+    const awemeId = String(body.awemeId || row.aweme_id || '').trim()
+    const douyinUrl = String(body.douyinUrl || row.douyin_url || '').trim()
+    const text = String(row.input_text || douyinUrl || '').trim()
+    const aggregatorData = body.aggregatorData
+
+    const kickPaid = (fallbackReason, freeResult) => {
+      res.json(ok(rowToLog(getLogById(id))))
+      Promise.resolve().then(() =>
+        runPaidFallbackIntoRow(id, {
+          startedAt,
+          fallbackReason,
+          freeResult,
+          awemeId,
+          douyinUrl,
+          text,
+        }),
+      )
     }
 
-    const awemeId = String(body.awemeId || '').trim()
-    const douyinUrl = String(body.douyinUrl || '').trim()
-    const aggregatorData = body.aggregatorData
-    if (!awemeId || !aggregatorData || typeof aggregatorData !== 'object') {
+    if (errMsg) {
+      kickPaid(errMsg)
+      return
+    }
+
+    if (!aggregatorData || typeof aggregatorData !== 'object') {
       return res.json(fail(400, '缺少聚合结果数据'))
     }
+    const resolvedId = awemeId || String(body.awemeId || '').trim()
+    if (!resolvedId) {
+      kickPaid('未能解析出作品 ID')
+      return
+    }
 
-    const built = douyinParser.buildFromAggregator(awemeId, douyinUrl || `https://www.douyin.com/video/${awemeId}`, aggregatorData)
-    if (!built.resultUrl && !(built.images && built.images.length)) {
+    const built = douyinParser.buildFromAggregator(
+      resolvedId,
+      douyinUrl || `https://www.douyin.com/video/${resolvedId}`,
+      aggregatorData,
+    )
+    if (douyinParser.isFreeResultAcceptable(built)) {
+      built.source = 'aggregator-browser'
+      markRowSuccess(id, built, durationMs)
+      return res.json(ok(rowToLog(getLogById(id))))
+    }
+    if (!built.resultUrl && !(built.images && built.images.length) && !douyinParser.hasMeta(built)) {
       markRowFailed(id, '未解析到可用素材地址，作品可能已被删除或仅本人可见', durationMs)
       return res.json(ok(rowToLog(getLogById(id))))
     }
-    built.source = 'aggregator-browser'
-    markRowSuccess(id, built, durationMs)
-    res.json(ok(rowToLog(getLogById(id))))
+    const reason = built.mediaType === 'images' ? '免费图集无可用地址' : '免费非原画'
+    kickPaid(reason, built)
   } catch (e) {
     console.error('[douyin] client-complete', e && e.message)
     res.json(fail(500, '回写解析结果失败'))
@@ -338,7 +426,7 @@ router.post('/logs/:id/reparse', (req, res) => {
       .prepare(
         `UPDATE douyin_parse_logs SET
            status = 'processing', error_message = '',
-           result_url = '', images = '[]', expires_at = NULL, duration_ms = NULL,
+           result_url = '', images = '[]', expires_at = NULL, duration_ms = NULL, quality = NULL,
            updated_at = datetime('now')
          WHERE id = ?`,
       )
@@ -500,6 +588,7 @@ router.get('/logs/page', (req, res) => {
     const offset = (pageNo - 1) * pageSize
     const userIdFilter = req.query.userId != null && req.query.userId !== '' ? Number(req.query.userId) : 0
     const statusRaw = String(req.query.status || '').trim().toLowerCase()
+    const sourceRaw = String(req.query.source || '').trim().toLowerCase()
     const keyword = String(req.query.keyword || '').trim()
     const createTimeFrom = String(req.query.createTimeFrom || '').trim()
     const createTimeTo = String(req.query.createTimeTo || '').trim()
@@ -526,6 +615,11 @@ router.get('/logs/page', (req, res) => {
     } else if (statusRaw) {
       conds.push('LOWER(TRIM(j.status)) = ?')
       params.push(statusRaw)
+    }
+    if (sourceRaw === 'paid') {
+      conds.push(`j.source = 'paid'`)
+    } else if (sourceRaw === 'free') {
+      conds.push(`(j.source IS NULL OR j.source = '' OR j.source IN ('aggregator','aggregator-browser'))`)
     }
     if (keyword) {
       conds.push('(j.input_text LIKE ? OR j.title LIKE ? OR j.douyin_url LIKE ?)')

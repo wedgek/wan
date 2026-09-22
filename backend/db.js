@@ -432,11 +432,13 @@ function ensureDouyinParseSchema(dbi) {
       error_message TEXT,
       duration_ms INTEGER,
       expires_at TEXT,
+      quality TEXT,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_douyin_logs_user ON douyin_parse_logs(user_id);
   `)
+  ensureColumn(dbi, 'douyin_parse_logs', 'quality', 'TEXT')
 }
 
 /** 全局键值配置（如抖音聚合方式）；缺省键用 INSERT OR IGNORE 种子，不覆盖已入库值 */

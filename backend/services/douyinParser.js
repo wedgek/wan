@@ -1,8 +1,9 @@
 /**
- * 抖音原链素材解析：从分享文案/链接中提取作品，调用 bugpk 聚合接口拿到无水印原链。
- * 仅在后端调用第三方接口，前端不感知具体 API。
+ * 抖音原链素材解析：先走免费 bugpk，仅 quality=original（或图集）才采用；
+ * 失败 / 非原画由服务端付费 muzzz 兜底。付费 token 不离开本进程。
  * 移植自参考项目 douyin原链素材/backend/parser.py 的核心链路（聚合接口）。
  */
+const douyinPaid = require('./douyinPaid')
 
 const AGGREGATOR_API = process.env.DOUYIN_AGG_API || 'https://api.bugpk.com/api/douyin'
 // 单次请求超时收敛到 12s：IPv4 直连正常 <3s，超过多半是抽风，早失败早重试早让出并发槽
@@ -273,9 +274,102 @@ function buildFromAggregator(awemeId, douyinUrl, data) {
     isVideo: !isImages,
     resultUrl: bestUrl,
     images,
+    quality: isImages ? '' : extractFreeQuality(data),
     source: 'aggregator',
     expiresAt: extractExpiresAt(bestUrl) || (images.length ? extractExpiresAt(images[0]) : null),
   }
+}
+
+/** 免费接口 quality 字段：data.quality，兼容一层嵌套；统一小写 */
+function extractFreeQuality(data) {
+  if (!data || typeof data !== 'object') return ''
+  const raw = data.quality ?? data.Quality ?? (data.video && (data.video.quality || data.video.Quality))
+  return String(raw || '').trim().toLowerCase()
+}
+
+function hasMeta(built) {
+  return Boolean(built && (built.cover || built.title || built.author))
+}
+
+/**
+ * 免费结果是否可直接采用：图集有图即可；视频必须 quality=original 且有地址。
+ * 字段缺失一律当非原画。
+ */
+function isFreeResultAcceptable(built) {
+  if (!built) return false
+  if (built.mediaType === 'images' && Array.isArray(built.images) && built.images.length) return true
+  return built.quality === 'original' && Boolean(built.resultUrl)
+}
+
+function formatFallbackMessage(reason, paidMsg) {
+  const a = String(reason || '').trim()
+  const b = String(paidMsg || '').trim()
+  if (a && b) return `${a}，${b}`
+  return b || a || '解析失败，请稍后重试'
+}
+
+/**
+ * 付费兜底：原画优先，没有则取最高档。
+ * @param {{ fallbackReason?: string, freeResult?: object }} [opts]
+ */
+async function parsePaidFallback(awemeId, douyinUrl, opts = {}) {
+  const fallbackReason = String(opts.fallbackReason || '').trim()
+  const freeResult = opts.freeResult || null
+  if (!douyinPaid.isPaidConfigured()) {
+    throw new DouyinParseError(formatFallbackMessage(fallbackReason, '未配置付费接口'))
+  }
+  const share = douyinUrl || (awemeId ? `https://www.douyin.com/video/${awemeId}` : '')
+  let data
+  try {
+    data = await douyinPaid.fetchPaidDetails(share)
+  } catch (e) {
+    const msg = e && e.message ? e.message : '付费接口解析失败'
+    throw new DouyinParseError(formatFallbackMessage(fallbackReason, msg))
+  }
+  const picked = douyinPaid.pickPaidMedia(data)
+  if (!picked) {
+    throw new DouyinParseError(formatFallbackMessage(fallbackReason, '付费未返回可用地址'))
+  }
+  const title = String((data && data.title) || (freeResult && freeResult.title) || '').trim()
+  const author = String((freeResult && freeResult.author) || '').trim()
+  const cover = String((data && data.cover) || (freeResult && freeResult.cover) || '').trim()
+  return {
+    awemeId: String((data && data.vid) || awemeId || '').trim(),
+    douyinUrl: share,
+    title,
+    author,
+    cover,
+    mediaType: 'video',
+    isVideo: true,
+    resultUrl: picked.url,
+    images: [],
+    quality: picked.quality,
+    source: 'paid',
+    expiresAt: extractExpiresAt(picked.url),
+  }
+}
+
+async function fetchFreeBuilt(awemeId, douyinUrl) {
+  return withRetry(async () => {
+    await acquireSlot()
+    try {
+      const data = await fetchAggregator(awemeId)
+      const built = buildFromAggregator(awemeId, douyinUrl, data)
+      if (!built.resultUrl && !built.images.length) {
+        // 已经拿到封面/标题/作者，只差视频地址 → 聚合接口返回残缺（抽风），值得重试；
+        // 连封面/标题都没有才更像作品真被删/仅本人可见，标记不可重试直接失败。
+        throw new DouyinParseError(
+          hasMeta(built)
+            ? '素材地址暂时为空（接口抽风），请稍后重试'
+            : '未解析到可用素材地址，作品可能已被删除或仅本人可见',
+          { retryable: hasMeta(built) },
+        )
+      }
+      return built
+    } finally {
+      releaseSlot()
+    }
+  }, `aweme=${awemeId}`)
 }
 
 /**
@@ -286,36 +380,35 @@ function buildFromAggregator(awemeId, douyinUrl, data) {
  */
 async function parse(text) {
   const { awemeId, douyinUrl } = await resolveAwemeId(text)
-  // 并发槽“每次尝试才占、退避等待时释放”：单条卡住/重试不会长期占死并发，突发大批量也能平稳消化
-  return withRetry(async () => {
-    await acquireSlot()
-    try {
-      const data = await fetchAggregator(awemeId)
-      const built = buildFromAggregator(awemeId, douyinUrl, data)
-      if (!built.resultUrl && !built.images.length) {
-        // 已经拿到封面/标题/作者，只差视频地址 → 聚合接口返回残缺（抽风），值得重试；
-        // 连封面/标题都没有才更像作品真被删/仅本人可见，标记不可重试直接失败。
-        const hasMeta = Boolean(built.cover || built.title || built.author)
-        throw new DouyinParseError(
-          hasMeta
-            ? '素材地址暂时为空（接口抽风），请稍后重试'
-            : '未解析到可用素材地址，作品可能已被删除或仅本人可见',
-          { retryable: hasMeta },
-        )
-      }
-      return built
-    } finally {
-      releaseSlot()
-    }
-  }, `aweme=${awemeId}`)
+  let freeResult = null
+  let fallbackReason = ''
+
+  try {
+    // 并发槽“每次尝试才占、退避等待时释放”：单条卡住/重试不会长期占死并发
+    freeResult = await fetchFreeBuilt(awemeId, douyinUrl)
+  } catch (e) {
+    const isKnown = e instanceof DouyinParseError
+    // 不可重试（已删/仅本人可见等）不走付费，避免白烧次数
+    if (isKnown && !e.retryable) throw e
+    fallbackReason = isKnown ? e.message : '免费接口请求失败'
+    return parsePaidFallback(awemeId, douyinUrl, { fallbackReason })
+  }
+
+  if (isFreeResultAcceptable(freeResult)) return freeResult
+
+  fallbackReason = freeResult.mediaType === 'images' ? '免费图集无可用地址' : '免费非原画'
+  return parsePaidFallback(awemeId, douyinUrl, { fallbackReason, freeResult })
 }
 
 module.exports = {
   parse,
+  parsePaidFallback,
   splitInputs,
   resolveAwemeId,
   buildFromAggregator,
   fetchAggregator,
+  isFreeResultAcceptable,
+  hasMeta,
   DouyinParseError,
   extractExpiresAt,
   AGGREGATOR_API,

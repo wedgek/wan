@@ -14,12 +14,40 @@
           type="primary"
           :loading="quotaLoading"
           :icon="$icons.Refresh"
-          @click="loadQuota"
+          @click="loadQuota(true)"
         >
           刷新
         </el-button>
-        <span class="quota-hint">仅免费失败或非原画时消耗</span>
       </div>
+
+      <el-dialog v-model="paidCallsVisible" title="本站付费调用记录" width="760px" destroy-on-close>
+        <p class="paid-calls-tip">
+          对方已用 {{ formatCount(quota.usedCount) }} 次
+          <template v-if="quota.vendorTime"> · 对方时间 {{ quota.vendorTime }}</template>
+          · 本站 details {{ formatCount(quota.localUsedCount) }} 次（发版后才开始记）
+        </p>
+        <el-table :data="paidCalls" v-loading="paidCallsLoading" border max-height="420" size="small">
+          <el-table-column label="对方扣次时间" width="170">
+            <template #default="{ row }">{{ row.billedAt || row.createTime || "—" }}</template>
+          </el-table-column>
+          <el-table-column prop="logId" label="记录ID" width="88" align="center">
+            <template #default="{ row }">{{ row.logId || "—" }}</template>
+          </el-table-column>
+          <el-table-column label="账号" min-width="110" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.nickname || row.username || "—" }}</template>
+          </el-table-column>
+          <el-table-column label="结果" width="80" align="center">
+            <template #default="{ row }">
+              <el-tag v-if="row.ok" type="success" size="small">成功</el-tag>
+              <el-tag v-else type="danger" size="small">失败</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="url" label="作品链接" min-width="200" show-overflow-tooltip />
+          <el-table-column prop="errorMessage" label="失败原因" min-width="160" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.errorMessage || "—" }}</template>
+          </el-table-column>
+        </el-table>
+      </el-dialog>
       <el-input
         v-model="parseText"
         type="textarea"
@@ -31,20 +59,31 @@
       <div class="parse-actions">
         <el-button type="primary" :loading="parsing" :icon="$icons.MagicStick" @click="onParse">提取素材</el-button>
         <el-button :disabled="parsing" @click="parseText = ''">清空</el-button>
-        <div v-if="canEditAggSide" class="agg-side-switch">
-          <span class="agg-side-label">直连模式</span>
-          <el-tooltip
-            content="关闭：由我们的服务器去请求解析接口。开启：改由每个人自己的浏览器去请求（服务器网络不稳时可开）。切换后立即保存，全员生效。"
-            placement="top"
-          >
-            <el-icon class="agg-side-tip"><component :is="$icons.QuestionFilled" /></el-icon>
+        <div v-if="canEditAggSide" class="parse-actions-admin">
+          <el-tooltip content="付费调用记录" placement="top">
+            <el-button
+              class="paid-calls-icon-btn"
+              link
+              type="primary"
+              :icon="$icons.Tickets"
+              @click="openPaidCalls"
+            />
           </el-tooltip>
-          <el-switch
-            :model-value="aggSide === 'browser'"
-            :loading="aggSaving"
-            :disabled="parsing || aggSaving"
-            @change="onAggSideChange"
-          />
+          <div class="agg-side-switch">
+            <span class="agg-side-label">直连模式</span>
+            <el-tooltip
+              content="关闭：由我们的服务器去请求解析接口。开启：改由每个人自己的浏览器去请求（服务器网络不稳时可开）。切换后立即保存，全员生效。"
+              placement="top"
+            >
+              <el-icon class="agg-side-tip"><component :is="$icons.QuestionFilled" /></el-icon>
+            </el-tooltip>
+            <el-switch
+              :model-value="aggSide === 'browser'"
+              :loading="aggSaving"
+              :disabled="parsing || aggSaving"
+              @change="onAggSideChange"
+            />
+          </div>
         </div>
       </div>
     </div>
@@ -98,7 +137,7 @@
           :suffix-icon="$icons.ArrowDown"
         >
           <el-option label="免费" value="free" />
-          <el-option label="付费兜底" value="paid" />
+          <el-option label="付费" value="paid" />
         </el-select>
         <el-date-picker
           v-model="tableParams.createTimeRange"
@@ -197,7 +236,7 @@
         </el-table-column>
         <el-table-column label="解析来源" width="104" align="center">
           <template #default="{ row }">
-            <el-tag v-if="isPaidSource(row)" type="warning" size="small">付费兜底</el-tag>
+            <el-tag v-if="isPaidSource(row)" type="warning" size="small">付费</el-tag>
             <el-tag v-else-if="row.status === 'success'" type="info" size="small">免费</el-tag>
             <span v-else class="muted">—</span>
           </template>
@@ -224,14 +263,20 @@
         <el-table-column label="创建账号" min-width="110" align="center" show-overflow-tooltip>
           <template #default="{ row }">{{ row.username || "—" }}</template>
         </el-table-column>
-        <el-table-column prop="createTime" label="创建时间" min-width="160" align="center" show-overflow-tooltip />
+        <el-table-column label="解析时间" min-width="160" align="center" show-overflow-tooltip>
+          <template #default="{ row }">{{ displayParseTime(row) }}</template>
+        </el-table-column>
         <el-table-column label="失败原因" min-width="180" align="center" show-overflow-tooltip>
           <template #default="{ row }">
             <span v-if="row.errorMessage" class="err-text">{{ row.errorMessage }}</span>
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="180" align="center" fixed="right" class-name="col-actions">
+        <!--
+          暂时隐藏「重新获取 / 删除」：重新获取可能再打付费 details 扣次，删除后列表更对不上 used_count。
+          接口和 onReparse / onDelete 仍保留，把 SHOW_ROW_ACTIONS 改回 true 即可恢复。
+        -->
+        <el-table-column v-if="SHOW_ROW_ACTIONS" label="操作" width="180" align="center" fixed="right" class-name="col-actions">
           <template #default="{ row }">
             <el-button
               link
@@ -278,6 +323,9 @@ const showCreatorFilter = computed(() => authStore.dataScopeInfo?.mode !== "self
 /** 仅超级管理员可改全局聚合方式（开关仅管理员可见） */
 const canEditAggSide = computed(() => authStore.isSuperAdmin === true)
 
+/** 暂时关闭行内「重新获取 / 删除」，避免再扣次或删行后对不上账。改 true 即恢复。 */
+const SHOW_ROW_ACTIONS = false
+
 const parseText = ref("")
 const parsing = ref(false)
 const aggSaving = ref(false)
@@ -290,7 +338,12 @@ const quota = reactive({
   remainder: 0,
   totalCount: 0,
   usedCount: 0,
+  vendorTime: "",
+  localUsedCount: 0,
 })
+const paidCallsVisible = ref(false)
+const paidCallsLoading = ref(false)
+const paidCalls = ref([])
 
 function formatCount(n) {
   const num = Number(n)
@@ -298,20 +351,43 @@ function formatCount(n) {
   return num.toLocaleString("zh-CN")
 }
 
-async function loadQuota() {
+async function loadQuota(force = false) {
   quotaLoading.value = true
   try {
-    const res = await request({ url: "/admin-api/douyin/quota", method: "GET" })
+    const res = await request({
+      url: force ? "/admin-api/douyin/quota?refresh=1" : "/admin-api/douyin/quota",
+      method: "GET",
+    })
     if (res.code === 0 && res.data) {
       quota.configured = Boolean(res.data.configured)
       quota.remainder = Number(res.data.remainder) || 0
       quota.totalCount = Number(res.data.totalCount) || 0
       quota.usedCount = Number(res.data.usedCount) || 0
+      quota.vendorTime = String(res.data.vendorTime || "")
+      quota.localUsedCount = Number(res.data.localUsedCount) || 0
     }
   } catch (_) {
     /* 额度查询失败不影响提取 */
   } finally {
     quotaLoading.value = false
+  }
+}
+
+async function openPaidCalls() {
+  paidCallsVisible.value = true
+  paidCallsLoading.value = true
+  try {
+    const res = await request({ url: "/admin-api/douyin/paid-calls?limit=50", method: "GET" })
+    if (res.code === 0 && res.data) {
+      paidCalls.value = Array.isArray(res.data.list) ? res.data.list : []
+      if (res.data.localUsedCount != null) quota.localUsedCount = Number(res.data.localUsedCount) || 0
+    } else {
+      ElMessage.error(res.msg || "读取付费记录失败")
+    }
+  } catch (_) {
+    ElMessage.error("网络错误，请稍后重试")
+  } finally {
+    paidCallsLoading.value = false
   }
 }
 
@@ -520,6 +596,7 @@ async function onParse() {
   }
 }
 
+/** 行内「重新获取」：接口保留。SHOW_ROW_ACTIONS=false 时页面不展示，避免再走付费扣次。 */
 async function onReparse(row) {
   if (!row || !row.id || reparsingIds.has(row.id) || isProcessing(row)) return
   reparsingIds.add(row.id)
@@ -614,6 +691,7 @@ watch(tableData, () => ensurePolling())
 
 onUnmounted(() => stopPolling())
 
+/** 行内「删除」：接口保留。SHOW_ROW_ACTIONS=false 时页面不展示，避免删行后更对不上 used_count。 */
 async function onDelete(row) {
   if (!row || !row.id) return
   try {
@@ -854,6 +932,11 @@ function isPaidSource(row) {
   return String(row?.source || "").toLowerCase() === "paid"
 }
 
+/** 付费行优先用对方返回的 time；否则用最近写回时间（重新获取会变，创建时间不会） */
+function displayParseTime(row) {
+  return String(row?.paidAt || row?.updateTime || row?.createTime || "").trim() || "—"
+}
+
 function isOriginalQuality(row) {
   return String(row?.quality || "").toLowerCase() === "original"
 }
@@ -903,9 +986,11 @@ function qualityLabel(row) {
 .quota-unconfigured {
   color: var(--el-text-color-secondary);
 }
-.quota-hint {
+.paid-calls-tip {
+  margin: 0 0 12px;
   color: var(--el-text-color-secondary);
   font-size: 12px;
+  line-height: 1.5;
 }
 .parse-input {
   margin-bottom: 12px;
@@ -920,11 +1005,20 @@ function qualityLabel(row) {
 .parse-actions :deep(.el-button + .el-button) {
   margin-left: 0;
 }
-.agg-side-switch {
+.parse-actions-admin {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   margin-left: auto;
+}
+.paid-calls-icon-btn {
+  padding: 4px;
+  font-size: 16px;
+}
+.agg-side-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 .agg-side-label {
   font-size: 13px;

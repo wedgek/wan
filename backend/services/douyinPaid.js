@@ -1,7 +1,10 @@
 /**
  * 付费解析兜底（muzzz）：仅服务端持有 token（DOUYIN_PAID_TOKEN），前端永不接触。
  * details 扣次；check 只查额度。不复用历史结果，每次 details 都算一次。
+ * 每次 details 写入 douyin_paid_calls，供本站对账（对方 used_count 可能含历史重试/其它系统）。
  */
+
+const db = require('../db')
 
 const PAID_API = process.env.DOUYIN_PAID_API || 'https://api-v1-exe.muzzz.cn/detail/users'
 const REQUEST_TIMEOUT_MS = Number(process.env.DOUYIN_PAID_TIMEOUT_MS) || 120000
@@ -76,6 +79,13 @@ function releaseSlot() {
   }
 }
 
+function buildPaidBody(body) {
+  const type = String((body && body.type) || '').trim()
+  const payload = { type, token: paidToken() }
+  if (type === 'details') payload.url = String((body && body.url) || '').trim()
+  return payload
+}
+
 async function postPaid(body) {
   if (!isPaidConfigured()) {
     throw new PaidApiError('未配置付费接口', { retryable: false })
@@ -90,7 +100,7 @@ async function postPaid(body) {
         'Content-Type': 'application/json',
         Accept: 'application/json',
       },
-      body: JSON.stringify({ ...body, token: paidToken() }),
+      body: JSON.stringify(buildPaidBody(body)),
     })
   } catch (e) {
     if (e && e.name === 'AbortError') throw new PaidApiError('付费接口超时', { retryable: true })
@@ -182,43 +192,146 @@ function pickPaidMedia(data) {
   return null
 }
 
+function recordPaidCall({ logId, userId, url, ok, errorMessage, billedAt }) {
+  try {
+    const dbi = db.getDb()
+    dbi
+      .prepare(
+        `INSERT INTO douyin_paid_calls (log_id, user_id, url, ok, error_message, billed_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`,
+      )
+      .run(
+        logId ? Number(logId) : null,
+        userId ? Number(userId) : null,
+        String(url || '').slice(0, 500),
+        ok ? 1 : 0,
+        String(errorMessage || '').slice(0, 500),
+        String(billedAt || '').slice(0, 32) || null,
+      )
+    if (logId) {
+      dbi
+        .prepare(
+          `UPDATE douyin_parse_logs SET paid_call_count = COALESCE(paid_call_count, 0) + 1, updated_at = datetime('now')
+           WHERE id = ?`,
+        )
+        .run(Number(logId))
+    }
+  } catch (e) {
+    console.warn('[douyin-paid] recordPaidCall failed', e && e.message)
+  }
+}
+
+function countLocalPaidCalls() {
+  try {
+    const row = db.getDb().prepare(`SELECT COUNT(*) AS c FROM douyin_paid_calls`).get()
+    return Number(row && row.c) || 0
+  } catch (_) {
+    return 0
+  }
+}
+
+function listPaidCalls({ limit = 20, scopeSql = '', scopeParams = [] } = {}) {
+  const n = Math.min(50, Math.max(1, Number(limit) || 20))
+  const where = scopeSql ? `WHERE ${scopeSql}` : ''
+  const rows = db
+    .getDb()
+    .prepare(
+      `SELECT c.id, c.log_id, c.user_id, c.url, c.ok, c.error_message, c.billed_at,
+              datetime(c.created_at, 'localtime') AS create_time,
+              u.username, u.nickname
+       FROM douyin_paid_calls c
+       LEFT JOIN douyin_parse_logs j ON j.id = c.log_id
+       LEFT JOIN users u ON u.id = COALESCE(c.user_id, j.user_id)
+       ${where}
+       ORDER BY c.id DESC
+       LIMIT ?`,
+    )
+    .all(...scopeParams, n)
+  return rows.map((r) => ({
+    id: r.id,
+    logId: r.log_id != null ? Number(r.log_id) : null,
+    userId: r.user_id != null ? Number(r.user_id) : null,
+    username: r.username != null ? String(r.username) : '',
+    nickname: r.nickname != null ? String(r.nickname) : '',
+    url: r.url || '',
+    ok: Number(r.ok) === 1,
+    errorMessage: r.error_message || '',
+    billedAt: r.billed_at ? String(r.billed_at).replace('T', ' ').slice(0, 19) : '',
+    createTime: r.create_time ? String(r.create_time).replace('T', ' ').slice(0, 19) : '',
+  }))
+}
+
 /**
  * 调用付费 details，返回 data 节点。
  * 不重试：对方按请求扣次，超时/断连时第一次多半已经扣过，再打会连扣两次。
  * @param {string} url 抖音作品链接
+ * @param {{ logId?: number, userId?: number }} [meta]
  */
-async function fetchPaidDetails(url) {
+async function fetchPaidDetails(url, meta = {}) {
   const share = String(url || '').trim()
   if (!share) throw new PaidApiError('付费解析缺少作品链接')
   await acquireSlot()
+  let ok = false
+  let errorMessage = ''
+  let billedAt = ''
   try {
     const data = await postPaid({ url: share, type: 'details' })
+    billedAt = String((data && data.time) || '').trim()
     throwIfBusinessError(data, 'details')
     if (!data.data || typeof data.data !== 'object') {
       throw new PaidApiError('付费接口未返回数据', { retryable: false })
     }
-    return data.data
+    ok = true
+    return { payload: data.data, billedAt }
+  } catch (e) {
+    errorMessage = (e && e.message) || '付费接口解析失败'
+    throw e
   } finally {
+    recordPaidCall({
+      logId: meta.logId,
+      userId: meta.userId,
+      url: share,
+      ok,
+      errorMessage,
+      billedAt,
+    })
+    console.info(
+      `[douyin-paid] details logId=${meta.logId || '-'} ok=${ok ? 1 : 0} billedAt=${billedAt || '-'} ${ok ? 'ok' : errorMessage} url=${share.slice(0, 80)}`,
+    )
     releaseSlot()
   }
 }
 
-/** 查询额度：{ total_count, remainder, used_count } */
-async function checkQuota() {
-  const data = await postPaidWithRetry({ type: 'check' }, 'check')
+const QUOTA_CACHE_MS = 60000
+let quotaCache = { at: 0, data: null }
+
+/** 查询额度：只打 type=check，不重试。返回文档字段 total_count / remainder / used_count / time */
+async function checkQuota({ force = false } = {}) {
+  if (!force && quotaCache.data && Date.now() - quotaCache.at < QUOTA_CACHE_MS) {
+    return quotaCache.data
+  }
+  const data = await postPaid({ type: 'check' })
   throwIfBusinessError(data, 'check')
   const node = data.data && typeof data.data === 'object' ? data.data : {}
-  return {
+  const parsed = {
     total_count: Number(node.total_count) || 0,
     remainder: Number(node.remainder) || 0,
     used_count: Number(node.used_count) || 0,
+    time: String((data && data.time) || '').trim(),
   }
+  console.info(
+    `[douyin-paid] check used=${parsed.used_count} remainder=${parsed.remainder} total=${parsed.total_count} time=${parsed.time || '-'}`,
+  )
+  quotaCache = { at: Date.now(), data: parsed }
+  return parsed
 }
 
 module.exports = {
   isPaidConfigured,
   fetchPaidDetails,
   checkQuota,
+  countLocalPaidCalls,
+  listPaidCalls,
   pickPaidVideo,
   pickPaidMedia,
   PaidApiError,

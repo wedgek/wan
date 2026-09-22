@@ -320,8 +320,11 @@ async function parsePaidFallback(awemeId, douyinUrl, opts = {}) {
   }
   const share = douyinUrl || (awemeId ? `https://www.douyin.com/video/${awemeId}` : '')
   let data
+  let billedAt = ''
   try {
-    data = await douyinPaid.fetchPaidDetails(share)
+    const paid = await douyinPaid.fetchPaidDetails(share, { logId: opts.logId, userId: opts.userId })
+    data = paid && paid.payload
+    billedAt = String((paid && paid.billedAt) || '').trim()
   } catch (e) {
     const msg = e && e.message ? e.message : '付费接口解析失败'
     throw new DouyinParseError(formatFallbackMessage(fallbackReason, msg))
@@ -345,6 +348,7 @@ async function parsePaidFallback(awemeId, douyinUrl, opts = {}) {
     images: [],
     quality: picked.quality,
     source: 'paid',
+    paidAt: billedAt,
     expiresAt: extractExpiresAt(picked.url),
   }
 }
@@ -380,7 +384,7 @@ async function fetchFreeBuilt(awemeId, douyinUrl) {
  */
 /**
  * @param {string} text
- * @param {{ onBeforePaid?: () => boolean }} [hooks]
+ * @param {{ onBeforePaid?: () => boolean, logId?: number, userId?: number }} [hooks]
  *   onBeforePaid 返回 false 则不再打付费（同条记录已扣过 / 正在扣）。
  */
 async function parse(text, hooks = {}) {
@@ -409,7 +413,12 @@ function runPaidAfterHook(awemeId, douyinUrl, { fallbackReason, freeResult = nul
   if (typeof hooks.onBeforePaid === 'function' && hooks.onBeforePaid() === false) {
     throw new DouyinParseError(formatFallbackMessage(fallbackReason, '付费兜底已在处理中，请稍后'))
   }
-  return parsePaidFallback(awemeId, douyinUrl, { fallbackReason, freeResult })
+  return parsePaidFallback(awemeId, douyinUrl, {
+    fallbackReason,
+    freeResult,
+    logId: hooks.logId,
+    userId: hooks.userId,
+  })
 }
 
 module.exports = {

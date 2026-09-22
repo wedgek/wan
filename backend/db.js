@@ -437,9 +437,24 @@ function ensureDouyinParseSchema(dbi) {
       updated_at TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_douyin_logs_user ON douyin_parse_logs(user_id);
+    CREATE TABLE IF NOT EXISTS douyin_paid_calls (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      log_id INTEGER,
+      user_id INTEGER,
+      url TEXT,
+      ok INTEGER NOT NULL DEFAULT 0,
+      error_message TEXT,
+      billed_at TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_douyin_paid_calls_log ON douyin_paid_calls(log_id);
+    CREATE INDEX IF NOT EXISTS idx_douyin_paid_calls_created ON douyin_paid_calls(created_at);
   `)
   ensureColumn(dbi, 'douyin_parse_logs', 'quality', 'TEXT')
   ensureColumn(dbi, 'douyin_parse_logs', 'paid_attempted', 'INTEGER NOT NULL DEFAULT 0')
+  ensureColumn(dbi, 'douyin_parse_logs', 'paid_call_count', 'INTEGER NOT NULL DEFAULT 0')
+  ensureColumn(dbi, 'douyin_parse_logs', 'paid_at', 'TEXT')
+  ensureColumn(dbi, 'douyin_paid_calls', 'billed_at', 'TEXT')
 }
 
 /** 全局键值配置（如抖音聚合方式）；缺省键用 INSERT OR IGNORE 种子，不覆盖已入库值 */

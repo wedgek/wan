@@ -128,6 +128,7 @@ function rowToLog(r) {
     errorMessage: r.error_message || '',
     durationMs: r.duration_ms != null ? Number(r.duration_ms) : null,
     expiresAt: r.expires_at || '',
+    paidAt: r.paid_at ? String(r.paid_at).replace('T', ' ').slice(0, 19) : '',
     createTime: r.create_time ? String(r.create_time).replace('T', ' ').slice(0, 19) : '',
     updateTime: r.update_time ? String(r.update_time).replace('T', ' ').slice(0, 19) : '',
   }
@@ -198,7 +199,7 @@ function markRowSuccess(id, result, durationMs) {
       `UPDATE douyin_parse_logs SET
          douyin_url = ?, aweme_id = ?, title = ?, author = ?, cover = ?, media_type = ?, is_video = ?,
          result_url = ?, images = ?, source = ?, quality = ?, status = 'success', error_message = '',
-         duration_ms = ?, expires_at = ?, updated_at = datetime('now')
+         duration_ms = ?, expires_at = ?, paid_at = COALESCE(?, paid_at), updated_at = datetime('now')
        WHERE id = ?`,
     )
     .run(
@@ -215,6 +216,7 @@ function markRowSuccess(id, result, durationMs) {
       result.quality || '',
       Math.round(Number(durationMs) || 0),
       result.expiresAt || null,
+      result.paidAt || null,
       id,
     )
 }
@@ -227,12 +229,15 @@ function markRowSuccess(id, result, durationMs) {
 async function runParseIntoRow(id, text) {
   const started = Date.now()
   let usedPaid = false
+  const row = getLogById(id)
   try {
     const result = await douyinParser.parse(text, {
       onBeforePaid: () => {
         usedPaid = claimPaidAttempt(id)
         return usedPaid
       },
+      logId: id,
+      userId: row && row.user_id,
     })
     markRowSuccess(id, result, Date.now() - started)
   } catch (e) {
@@ -268,7 +273,13 @@ async function runPaidFallbackIntoRow(id, opts = {}) {
       console.warn(`[douyin] skip duplicate paid fallback id=${id}`)
       return
     }
-    const result = await douyinParser.parsePaidFallback(awemeId, douyinUrl, { fallbackReason, freeResult })
+    const row = getLogById(id)
+    const result = await douyinParser.parsePaidFallback(awemeId, douyinUrl, {
+      fallbackReason,
+      freeResult,
+      logId: id,
+      userId: row && row.user_id,
+    })
     markRowSuccess(id, result, Date.now() - startedAt)
   } catch (e) {
     const isKnown = e instanceof douyinParser.DouyinParseError
@@ -295,25 +306,64 @@ router.get('/config', (req, res) => {
   )
 })
 
-/** 付费接口额度（type=check）；未配置 token 时 configured=false，不打对方接口 */
+/** 付费接口额度（type=check）+ 本站实际 details 次数；未配置 token 时 configured=false */
 router.get('/quota', async (req, res) => {
   try {
+    const localUsedCount = douyinPaid.countLocalPaidCalls()
     if (!douyinPaid.isPaidConfigured()) {
-      return res.json(ok({ configured: false, remainder: 0, totalCount: 0, usedCount: 0 }))
+      return res.json(
+        ok({
+          configured: false,
+          remainder: 0,
+          totalCount: 0,
+          usedCount: 0,
+          vendorTime: '',
+          localUsedCount,
+        }),
+      )
     }
-    const data = await douyinPaid.checkQuota()
+    const force = String(req.query.refresh || '') === '1'
+    const data = await douyinPaid.checkQuota({ force })
     res.json(
       ok({
         configured: true,
         remainder: Number(data.remainder) || 0,
         totalCount: Number(data.total_count) || 0,
         usedCount: Number(data.used_count) || 0,
+        vendorTime: String(data.time || ''),
+        localUsedCount,
       }),
     )
   } catch (e) {
     const msg = e && e.message ? e.message : '查询次数失败'
     console.warn('[douyin] quota', msg)
     res.json(fail(500, msg))
+  }
+})
+
+/** 本站付费 details 调用记录（对账用，按数据范围） */
+router.get('/paid-calls', (req, res) => {
+  try {
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 20))
+    const conds = []
+    const params = []
+    const scopePart = dataScope.douyinLogsScopeClause(req.userId)
+    if (scopePart.scope && scopePart.scope.mode === 'self') {
+      conds.push('COALESCE(c.user_id, j.user_id) = ?')
+      params.push(Number(req.userId))
+    } else if (scopePart.sql) {
+      conds.push(scopePart.sql)
+      params.push(...scopePart.params)
+    }
+    const list = douyinPaid.listPaidCalls({
+      limit,
+      scopeSql: conds.join(' AND '),
+      scopeParams: params,
+    })
+    res.json(ok({ list, localUsedCount: douyinPaid.countLocalPaidCalls() }))
+  } catch (e) {
+    console.error('[douyin] paid-calls', e && e.message)
+    res.json(fail(500, '读取付费调用记录失败'))
   }
 })
 

@@ -76,6 +76,8 @@ function applySchemaPatches(dbi) {
     ensureDouyinParseSchema(dbi)
     ensureAppSettingsSchema(dbi)
     ensureDouyinParseMenu(dbi)
+    ensureNovelSchema(dbi)
+    ensureNovelMenus(dbi)
     ensureAiVideoModelMenuInSidebar(dbi)
     ensureModelCatalogSchema(dbi)
     ensureModelCatalogMenu(dbi)
@@ -562,6 +564,230 @@ function ensureDouyinParseMenu(dbi) {
     dbi.prepare('INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES (?, ?)').run('menus', id)
   } catch (_) {
     /* ignore */
+  }
+}
+
+/** 顶级「小说投流」：书籍 / 素材 / 推广链接（同步记录菜单隐藏） */
+function ensureNovelMenu(dbi) {
+  const existing = dbi.prepare(`SELECT id FROM menus WHERE parent_id = 0 AND path = '/novel' LIMIT 1`).get()
+  if (existing) return existing.id
+  const maxRow = dbi.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM menus').get()
+  const id = maxRow.m + 1
+  dbi
+    .prepare(`
+      INSERT INTO menus (id, parent_id, type, name, path, component_name, icon, sort, permission, status, visible, keep_alive)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    .run(id, 0, 1, '小说投流', '/novel', '', 'Reading', 7, '', 0, 1, 0)
+  dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (?, ?)').run(1, id)
+  try {
+    dbi.prepare('INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES (?, ?)').run('menus', id)
+  } catch (_) {
+    /* ignore */
+  }
+  return id
+}
+
+function ensureNovelMenus(dbi) {
+  const parentId = ensureNovelMenu(dbi)
+  if (!parentId) return
+  const children = [
+    { name: '书籍', path: 'books', component: 'novelBooks', icon: 'Notebook', sort: 1, perm: 'novel:books:list', visible: 1 },
+    { name: '素材', path: 'materials', component: 'novelMaterials', icon: 'VideoCamera', sort: 2, perm: 'novel:materials:list', visible: 1 },
+    { name: '推广链接', path: 'promo-links', component: 'novelPromoLinks', icon: 'Link', sort: 3, perm: 'novel:promo:list', visible: 1 },
+    { name: '同步记录', path: 'sync', component: 'novelSync', icon: 'Upload', sort: 4, perm: 'novel:sync:list', visible: 0 },
+  ]
+  const ins = dbi.prepare(`
+    INSERT INTO menus (id, parent_id, type, name, path, component_name, icon, sort, permission, status, visible, keep_alive)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+  for (const c of children) {
+    const row = dbi
+      .prepare(`SELECT id, parent_id, permission FROM menus WHERE component_name = ? LIMIT 1`)
+      .get(c.component)
+    if (row) {
+      dbi
+        .prepare(
+          `UPDATE menus SET parent_id = ?, type = 2, name = ?, component_name = ?, path = ?, permission = ?,
+             status = 0, visible = ?, sort = ? WHERE id = ?`,
+        )
+        .run(parentId, c.name, c.component, c.path, c.perm, c.visible, c.sort, row.id)
+      dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (1, ?)').run(row.id)
+      continue
+    }
+    const maxRow = dbi.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM menus').get()
+    const id = maxRow.m + 1
+    ins.run(id, parentId, 2, c.name, c.path, c.component, c.icon, c.sort, c.perm, 0, c.visible, 0)
+    dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (?, ?)').run(1, id)
+    try {
+      dbi.prepare('INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES (?, ?)').run('menus', id)
+    } catch (_) {
+      /* ignore */
+    }
+  }
+}
+
+/** 小说投流：书籍主档、效果快照、素材、推广链接、同步批次 */
+function ensureNovelSchema(dbi) {
+  dbi.exec(`
+    CREATE TABLE IF NOT EXISTS novel_books (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      external_book_id TEXT NOT NULL,
+      store TEXT NOT NULL DEFAULT '',
+      name TEXT NOT NULL DEFAULT '',
+      author TEXT NOT NULL DEFAULT '',
+      word_count INTEGER DEFAULT 0,
+      category TEXT NOT NULL DEFAULT '',
+      first_seen_at TEXT DEFAULT (datetime('now')),
+      last_seen_at TEXT DEFAULT (datetime('now')),
+      launch_status TEXT NOT NULL DEFAULT 'pending',
+      launched_at TEXT,
+      launch_user_id INTEGER,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT,
+      UNIQUE(store, external_book_id)
+    );
+    CREATE TABLE IF NOT EXISTS novel_book_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      book_id INTEGER NOT NULL,
+      stat_date TEXT NOT NULL,
+      slot TEXT NOT NULL DEFAULT 'morning',
+      recharge_users INTEGER DEFAULT 0,
+      recharge_orders INTEGER DEFAULT 0,
+      avg_orders REAL DEFAULT 0,
+      first_recharge_orders INTEGER DEFAULT 0,
+      recharge_amount REAL DEFAULT 0,
+      arpu REAL DEFAULT 0,
+      is_hot INTEGER DEFAULT 0,
+      batch_id INTEGER,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT,
+      UNIQUE(book_id, stat_date, slot)
+    );
+    CREATE TABLE IF NOT EXISTS novel_materials (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      book_id INTEGER,
+      external_id TEXT NOT NULL DEFAULT '',
+      title TEXT NOT NULL DEFAULT '',
+      cover_url TEXT NOT NULL DEFAULT '',
+      play_url TEXT NOT NULL DEFAULT '',
+      heat REAL DEFAULT 0,
+      convert_status TEXT NOT NULL DEFAULT 'collected',
+      converted_url TEXT NOT NULL DEFAULT '',
+      convert_remark TEXT NOT NULL DEFAULT '',
+      convert_user_id INTEGER,
+      convert_at TEXT,
+      first_seen_at TEXT DEFAULT (datetime('now')),
+      last_seen_at TEXT DEFAULT (datetime('now')),
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS novel_material_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      material_id INTEGER NOT NULL,
+      stat_date TEXT NOT NULL,
+      slot TEXT NOT NULL DEFAULT 'morning',
+      cost REAL DEFAULT 0,
+      impressions INTEGER DEFAULT 0,
+      clicks INTEGER DEFAULT 0,
+      ctr REAL DEFAULT 0,
+      conversions INTEGER DEFAULT 0,
+      recharge_amount REAL DEFAULT 0,
+      heat REAL DEFAULT 0,
+      is_hot INTEGER DEFAULT 0,
+      batch_id INTEGER,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT,
+      UNIQUE(material_id, stat_date, slot)
+    );
+    CREATE TABLE IF NOT EXISTS novel_promo_links (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      book_id INTEGER NOT NULL,
+      name TEXT NOT NULL DEFAULT '',
+      url TEXT NOT NULL,
+      store TEXT NOT NULL DEFAULT '',
+      channel TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'active',
+      remark TEXT NOT NULL DEFAULT '',
+      external_id TEXT NOT NULL DEFAULT '',
+      source TEXT NOT NULL DEFAULT 'manual',
+      referral_id TEXT NOT NULL DEFAULT '',
+      media_source TEXT NOT NULL DEFAULT '',
+      path TEXT NOT NULL DEFAULT '',
+      monitor1 TEXT NOT NULL DEFAULT '',
+      monitor2 TEXT NOT NULL DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT,
+      UNIQUE(book_id, url)
+    );
+    CREATE TABLE IF NOT EXISTS novel_dianzhong_callbacks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id TEXT NOT NULL DEFAULT '',
+      xurl TEXT NOT NULL DEFAULT '',
+      query_json TEXT NOT NULL DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS novel_sync_batches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL,
+      stat_date TEXT NOT NULL,
+      slot TEXT NOT NULL DEFAULT 'morning',
+      filename TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending',
+      total_count INTEGER DEFAULT 0,
+      success_count INTEGER DEFAULT 0,
+      fail_count INTEGER DEFAULT 0,
+      error_message TEXT NOT NULL DEFAULT '',
+      fail_reasons TEXT,
+      user_id INTEGER,
+      created_at TEXT DEFAULT (datetime('now')),
+      finished_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_novel_book_snapshots_date ON novel_book_snapshots(stat_date, slot);
+    CREATE INDEX IF NOT EXISTS idx_novel_book_snapshots_book ON novel_book_snapshots(book_id, stat_date);
+    CREATE INDEX IF NOT EXISTS idx_novel_materials_book ON novel_materials(book_id);
+    CREATE INDEX IF NOT EXISTS idx_novel_materials_ext ON novel_materials(external_id);
+    CREATE INDEX IF NOT EXISTS idx_novel_promo_book ON novel_promo_links(book_id);
+    CREATE INDEX IF NOT EXISTS idx_novel_sync_date ON novel_sync_batches(stat_date, type);
+  `)
+  ensureColumn(dbi, 'novel_books', 'launch_status', "TEXT NOT NULL DEFAULT 'pending'")
+  ensureColumn(dbi, 'novel_books', 'launched_at', 'TEXT')
+  ensureColumn(dbi, 'novel_books', 'launch_user_id', 'INTEGER')
+  ensureColumn(dbi, 'novel_materials', 'first_seen_at', 'TEXT')
+  ensureColumn(dbi, 'novel_materials', 'last_seen_at', 'TEXT')
+  ensureColumn(dbi, 'novel_promo_links', 'referral_id', "TEXT NOT NULL DEFAULT ''")
+  ensureColumn(dbi, 'novel_promo_links', 'media_source', "TEXT NOT NULL DEFAULT ''")
+  ensureColumn(dbi, 'novel_promo_links', 'path', "TEXT NOT NULL DEFAULT ''")
+  ensureColumn(dbi, 'novel_promo_links', 'monitor1', "TEXT NOT NULL DEFAULT ''")
+  ensureColumn(dbi, 'novel_promo_links', 'monitor2', "TEXT NOT NULL DEFAULT ''")
+  try {
+    dbi.exec(`
+      UPDATE novel_materials SET first_seen_at = COALESCE(first_seen_at, created_at) WHERE first_seen_at IS NULL;
+      UPDATE novel_materials SET last_seen_at = COALESCE(last_seen_at, created_at) WHERE last_seen_at IS NULL;
+    `)
+  } catch (_) {
+    /* ignore */
+  }
+  try {
+    dbi.exec(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_novel_promo_referral ON novel_promo_links(referral_id) WHERE referral_id != ''`,
+    )
+  } catch (_) {
+    /* 旧数据可能冲突，列表仍按 book_id+url 去重 */
+  }
+  try {
+    dbi.exec(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_novel_materials_ext_uniq ON novel_materials(external_id) WHERE external_id != ''`,
+    )
+  } catch (_) {
+    /* 历史重复素材仍按应用层 upsert */
+  }
+  try {
+    dbi.exec(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_novel_materials_url_uniq ON novel_materials(play_url) WHERE play_url != ''`,
+    )
+  } catch (_) {
+    /* 历史重复素材仍按应用层 upsert */
   }
 }
 

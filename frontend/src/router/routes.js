@@ -16,6 +16,11 @@ export const routeComponents = {
   aiProductLibrary: () => import("@/views/ai/product-library/index.vue"),
   // 工具箱
   toolsDouyinParse: () => import("@/views/tools/douyin-parse/index.vue"),
+  // 小说投流
+  novelBooks: () => import("@/views/novel/books/index.vue"),
+  novelMaterials: () => import("@/views/novel/materials/index.vue"),
+  novelPromoLinks: () => import("@/views/novel/promo-links/index.vue"),
+  novelSync: () => import("@/views/novel/sync/index.vue"),
 }
 
 
@@ -174,6 +179,50 @@ export const staticRoutes = [
       title: "抖音素材提取",
     },
   },
+  {
+    path: "/novel/books",
+    name: "menuNovelBooks",
+    component: () => import("@/views/novel/books/index.vue"),
+    meta: {
+      requiresAuth: true,
+      showNavbar: true,
+      showSidebar: true,
+      title: "书籍",
+    },
+  },
+  {
+    path: "/novel/materials",
+    name: "menuNovelMaterials",
+    component: () => import("@/views/novel/materials/index.vue"),
+    meta: {
+      requiresAuth: true,
+      showNavbar: true,
+      showSidebar: true,
+      title: "素材",
+    },
+  },
+  {
+    path: "/novel/promo-links",
+    name: "menuNovelPromoLinks",
+    component: () => import("@/views/novel/promo-links/index.vue"),
+    meta: {
+      requiresAuth: true,
+      showNavbar: true,
+      showSidebar: true,
+      title: "推广链接",
+    },
+  },
+  {
+    path: "/novel/sync",
+    name: "menuNovelSync",
+    component: () => import("@/views/novel/sync/index.vue"),
+    meta: {
+      requiresAuth: true,
+      showNavbar: true,
+      showSidebar: true,
+      title: "同步记录",
+    },
+  },
 ]
 
 /** 已由 staticRoutes 注册的路径，addDynamicRoutes 中不再 addRoute，防止重复记录 */
@@ -187,6 +236,10 @@ export const staticMenuRoutePaths = new Set([
   "/ai/product-library",
   "/ai/video-manage",
   "/tools/douyin-parse",
+  "/novel/books",
+  "/novel/materials",
+  "/novel/promo-links",
+  "/novel/sync",
 ])
 
 

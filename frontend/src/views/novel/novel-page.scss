@@ -1,0 +1,56 @@
+/* 与产品库 / 创作日志 / 提示词 列表页对齐的间距与筛选项宽度 */
+.novel-page {
+  .page-filter-box {
+    margin-bottom: 16px;
+  }
+
+  .filters-wrap {
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+  }
+
+  .page-filter-left {
+    .filter-input-keyword.el-input {
+      width: 220px;
+    }
+    .filter-select.el-select,
+    :deep(.filter-select-book) {
+      width: 220px;
+    }
+    .filter-select-sm.el-select {
+      width: 130px;
+    }
+    .filter-date.el-date-editor {
+      width: 180px;
+      flex: 0 0 180px;
+    }
+  }
+
+  .page-table-header {
+    border-bottom: 1px solid var(--el-border-color-lighter);
+    border-radius: 4px;
+  }
+
+  &.has-toolbar .page-table-box {
+    margin-top: 12px;
+  }
+
+  .page-pagination-box {
+    margin-top: 15px;
+  }
+
+  .today-badge {
+    font-size: 13px;
+    color: var(--el-text-color-regular);
+    line-height: 1;
+  }
+
+  .muted {
+    color: var(--el-text-color-secondary);
+  }
+
+  .link-a {
+    color: var(--el-color-primary);
+  }
+}

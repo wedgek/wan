@@ -16,7 +16,7 @@ const {
   mapPackRow,
   runImport,
 } = require('../services/novelImportService')
-const { signKey, normalizeMediaSource } = require('../services/dianzhongPromoClient')
+const { parseChannels, signKey, normalizeMediaSource } = require('../services/dianzhongPromoClient')
 
 assert.strictEqual(parseNumber('1,286.5'), 1286.5)
 assert.strictEqual(parseNumber('5.0W'), 50000)
@@ -387,5 +387,14 @@ assert.strictEqual(packAgain.updatedMaterials, 2)
 assert.strictEqual(signKey('10006007', 'token', '1710000000'), require('crypto').createHash('md5').update('10006007token1710000000').digest('hex'))
 assert.strictEqual(normalizeMediaSource('KS'), 'ks')
 assert.strictEqual(normalizeMediaSource('other'), 'dy')
+
+const parsed = parseChannels('117110:巨量1,117111:巨量2,117112:巨量3,117113:巨量4')
+assert.strictEqual(parsed.length, 4)
+assert.strictEqual(parsed[0].id, '117110')
+assert.strictEqual(parsed[0].label, '巨量1')
+assert.strictEqual(parsed[3].id, '117113')
+assert.deepStrictEqual(parseChannels('117110'), [{ id: '117110', label: '117110' }])
+assert.deepStrictEqual(parseChannels(''), [])
+assert.strictEqual(parseChannels('117110:巨量1,117110:重复').length, 1)
 
 console.log('novel-import.test.cjs ok')

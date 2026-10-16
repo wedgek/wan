@@ -25,6 +25,8 @@ export const MEDIA_SOURCE_OPTIONS = [
   { value: "no_back", label: "不回传" },
 ]
 
+export const PROMO_COUNT_OPTIONS = [1, 2, 3, 5]
+
 export const CONVERT_STATUS_OPTIONS = [
   { value: "collected", label: "已收集" },
   { value: "hot", label: "爆款" },
@@ -105,10 +107,23 @@ export function mediaSourceLabel(value) {
   return hit ? hit.label : value || "—"
 }
 
+export function defaultPromoName({ bookName, channelLabel, mediaSource }) {
+  const media = MEDIA_SOURCE_OPTIONS.find((x) => x.value === mediaSource)
+  const parts = [String(bookName || "").trim(), String(channelLabel || "").trim(), media ? media.label : ""]
+  return parts.filter(Boolean).join("-").slice(0, 60)
+}
+
 export function sourceLabel(source) {
   if (source === "dianzhong") return "点众"
   if (source === "yunfan") return "云帆"
   return "手工"
+}
+
+export function channelLabel(id, channels) {
+  const s = String(id || "").trim()
+  if (!s) return "—"
+  const hit = (channels || []).find((c) => String(c.id) === s)
+  return hit ? hit.label : s
 }
 
 export async function copyText(text) {

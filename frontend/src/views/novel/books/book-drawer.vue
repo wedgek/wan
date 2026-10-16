@@ -101,12 +101,19 @@
               <el-table-column label="媒体" width="80" align="center">
                 <template #default="{ row }">{{ mediaSourceLabel(row.mediaSource) }}</template>
               </el-table-column>
+              <el-table-column label="章节" width="64" align="center">
+                <template #default="{ row }">{{ row.chapterIdx != null ? row.chapterIdx : "—" }}</template>
+              </el-table-column>
+              <el-table-column label="充值档" min-width="100" show-overflow-tooltip>
+                <template #default="{ row }">{{ row.goods || "—" }}</template>
+              </el-table-column>
               <el-table-column label="来源" width="80" align="center">
                 <template #default="{ row }">{{ sourceLabel(row.source) }}</template>
               </el-table-column>
-              <el-table-column label="操作" width="120" align="center">
+              <el-table-column label="操作" width="160" align="center">
                 <template #default="{ row }">
-                  <el-button v-if="row.path || row.url" type="primary" link @click="copyText(row.path || row.url)">复制</el-button>
+                  <el-button v-if="row.monitor1" type="primary" link @click="copyText(row.monitor1)">监测链</el-button>
+                  <el-button v-else-if="row.path || row.url" type="primary" link @click="copyText(row.path || row.url)">复制</el-button>
                   <el-button type="danger" link @click="onDeletePromo(row)">删除</el-button>
                 </template>
               </el-table-column>
@@ -120,6 +127,7 @@
       v-if="detail?.book?.id"
       v-model="promoVisible"
       :book-id="detail.book.id"
+      :book-name="detail.book.name"
       @created="onPromoCreated"
     />
   </el-drawer>

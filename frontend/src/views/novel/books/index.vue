@@ -67,6 +67,9 @@
             <span v-else class="muted">0</span>
           </template>
         </el-table-column>
+        <el-table-column label="链接数" width="80" align="center">
+          <template #default="{ row }">{{ row.promoCount || 0 }}</template>
+        </el-table-column>
         <el-table-column label="投放状态" width="100" align="center">
           <template #default="{ row }">
             <el-tag :type="row.launchStatus === 'launched' ? 'success' : row.isNew ? 'warning' : 'info'" size="small">
@@ -76,7 +79,7 @@
         </el-table-column>
         <el-table-column prop="firstSeenAt" label="首次入库" width="170" align="center" />
         <el-table-column prop="lastSeenAt" label="最近见到" width="170" align="center" />
-        <el-table-column label="操作" width="240" fixed="right" align="center">
+        <el-table-column label="操作" width="320" fixed="right" align="center">
           <template #default="{ row }">
             <el-button
               v-if="row.launchStatus !== 'launched'"
@@ -88,6 +91,7 @@
             </el-button>
             <el-button v-else type="primary" link @click="setLaunch(row, false)">取消投放</el-button>
             <el-button type="primary" link @click="openPromo(row)">创建链接</el-button>
+            <el-button v-if="row.latestMonitor" type="primary" link @click="copyText(row.latestMonitor)">复制监测链</el-button>
             <el-button type="primary" link @click="drawerRef?.show(row.id, 'mat')">看素材</el-button>
           </template>
         </el-table-column>
@@ -104,7 +108,12 @@
     </div>
 
     <BookDrawer ref="drawerRef" />
-    <PromoCreateDialog v-model="promoVisible" :book-id="promoBookId" @created="getTableData" />
+    <PromoCreateDialog
+      v-model="promoVisible"
+      :book-id="promoBookId"
+      :book-name="promoBookName"
+      @created="getTableData"
+    />
 
     <el-drawer v-model="recentVisible" title="最近导入" size="420px">
       <el-timeline v-if="recentBatches.length">
@@ -122,7 +131,7 @@
 import { useTable } from "@/hooks/useTable"
 import CzPagination from "@/components/cz-pagination/index.vue"
 import request from "@/request"
-import { LAUNCH_STATUS_OPTIONS, typeLabel } from "../shared"
+import { LAUNCH_STATUS_OPTIONS, copyText, typeLabel } from "../shared"
 import BookDrawer from "./book-drawer.vue"
 import PromoCreateDialog from "../components/promo-create-dialog.vue"
 
@@ -132,6 +141,7 @@ const todayInfo = reactive({ imported: 0 })
 const importing = ref(false)
 const promoVisible = ref(false)
 const promoBookId = ref("")
+const promoBookName = ref("")
 const recentVisible = ref(false)
 const recentBatches = ref([])
 
@@ -172,6 +182,7 @@ async function loadRecent() {
 
 function openPromo(row) {
   promoBookId.value = row.id
+  promoBookName.value = row.name || ""
   promoVisible.value = true
 }
 

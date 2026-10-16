@@ -17,9 +17,12 @@ export const routeComponents = {
   // 工具箱
   toolsDouyinParse: () => import("@/views/tools/douyin-parse/index.vue"),
   // 小说投流
+  novelDouyinParse: () => import("@/views/tools/douyin-parse/index.vue"),
   novelBooks: () => import("@/views/novel/books/index.vue"),
   novelMaterials: () => import("@/views/novel/materials/index.vue"),
   novelPromoLinks: () => import("@/views/novel/promo-links/index.vue"),
+  novelPromoTemplates: () => import("@/views/novel/promo-templates/index.vue"),
+  novelRechargeTemplates: () => import("@/views/novel/recharge-templates/index.vue"),
   novelSync: () => import("@/views/novel/sync/index.vue"),
 }
 
@@ -177,6 +180,19 @@ export const staticRoutes = [
       showNavbar: true,
       showSidebar: true,
       title: "抖音素材提取",
+      bizType: "ecommerce",
+    },
+  },
+  {
+    path: "/novel/douyin-parse",
+    name: "menuNovelDouyinParse",
+    component: () => import("@/views/tools/douyin-parse/index.vue"),
+    meta: {
+      requiresAuth: true,
+      showNavbar: true,
+      showSidebar: true,
+      title: "抖音素材提取",
+      bizType: "novel",
     },
   },
   {
@@ -213,6 +229,28 @@ export const staticRoutes = [
     },
   },
   {
+    path: "/novel/promo-templates",
+    name: "menuNovelPromoTemplates",
+    component: () => import("@/views/novel/promo-templates/index.vue"),
+    meta: {
+      requiresAuth: true,
+      showNavbar: true,
+      showSidebar: true,
+      title: "推广模板",
+    },
+  },
+  {
+    path: "/novel/recharge-templates",
+    name: "menuNovelRechargeTemplates",
+    component: () => import("@/views/novel/recharge-templates/index.vue"),
+    meta: {
+      requiresAuth: true,
+      showNavbar: true,
+      showSidebar: true,
+      title: "充值模板",
+    },
+  },
+  {
     path: "/novel/sync",
     name: "menuNovelSync",
     component: () => import("@/views/novel/sync/index.vue"),
@@ -236,9 +274,12 @@ export const staticMenuRoutePaths = new Set([
   "/ai/product-library",
   "/ai/video-manage",
   "/tools/douyin-parse",
+  "/novel/douyin-parse",
   "/novel/books",
   "/novel/materials",
   "/novel/promo-links",
+  "/novel/promo-templates",
+  "/novel/recharge-templates",
   "/novel/sync",
 ])
 

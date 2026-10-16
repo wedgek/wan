@@ -221,8 +221,20 @@ function recordPaidCall({ logId, userId, url, ok, errorMessage, billedAt }) {
   }
 }
 
-function countLocalPaidCalls() {
+function countLocalPaidCalls(bizType) {
   try {
+    const biz = String(bizType || '').trim().toLowerCase()
+    if (biz === 'novel' || biz === 'ecommerce') {
+      const row = db
+        .getDb()
+        .prepare(
+          `SELECT COUNT(*) AS c FROM douyin_paid_calls c
+           LEFT JOIN douyin_parse_logs j ON j.id = c.log_id
+           WHERE COALESCE(NULLIF(TRIM(j.biz_type), ''), 'ecommerce') = ?`,
+        )
+        .get(biz)
+      return Number(row && row.c) || 0
+    }
     const row = db.getDb().prepare(`SELECT COUNT(*) AS c FROM douyin_paid_calls`).get()
     return Number(row && row.c) || 0
   } catch (_) {

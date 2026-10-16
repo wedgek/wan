@@ -419,6 +419,7 @@ function ensureDouyinParseSchema(dbi) {
     CREATE TABLE IF NOT EXISTS douyin_parse_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
+      biz_type TEXT NOT NULL DEFAULT 'ecommerce',
       input_text TEXT,
       douyin_url TEXT,
       aweme_id TEXT,
@@ -457,6 +458,14 @@ function ensureDouyinParseSchema(dbi) {
   ensureColumn(dbi, 'douyin_parse_logs', 'paid_call_count', 'INTEGER NOT NULL DEFAULT 0')
   ensureColumn(dbi, 'douyin_parse_logs', 'paid_at', 'TEXT')
   ensureColumn(dbi, 'douyin_paid_calls', 'billed_at', 'TEXT')
+  // 电商 / 小说分库存。历史行没有该列，补列默认 ecommerce，空值再归一次电商。
+  ensureColumn(dbi, 'douyin_parse_logs', 'biz_type', "TEXT NOT NULL DEFAULT 'ecommerce'")
+  dbi
+    .prepare(
+      `UPDATE douyin_parse_logs SET biz_type = 'ecommerce' WHERE biz_type IS NULL OR TRIM(biz_type) = ''`,
+    )
+    .run()
+  dbi.exec(`CREATE INDEX IF NOT EXISTS idx_douyin_logs_biz ON douyin_parse_logs(biz_type, user_id)`)
 }
 
 /** 全局键值配置（如抖音聚合方式）；缺省键用 INSERT OR IGNORE 种子，不覆盖已入库值 */
@@ -595,7 +604,10 @@ function ensureNovelMenus(dbi) {
     { name: '书籍', path: 'books', component: 'novelBooks', icon: 'Notebook', sort: 1, perm: 'novel:books:list', visible: 1 },
     { name: '素材', path: 'materials', component: 'novelMaterials', icon: 'VideoCamera', sort: 2, perm: 'novel:materials:list', visible: 1 },
     { name: '推广链接', path: 'promo-links', component: 'novelPromoLinks', icon: 'Link', sort: 3, perm: 'novel:promo:list', visible: 1 },
-    { name: '同步记录', path: 'sync', component: 'novelSync', icon: 'Upload', sort: 4, perm: 'novel:sync:list', visible: 0 },
+    { name: '推广模板', path: 'promo-templates', component: 'novelPromoTemplates', icon: 'Ticket', sort: 4, perm: 'novel:promo:list', visible: 1 },
+    { name: '充值模板', path: 'recharge-templates', component: 'novelRechargeTemplates', icon: 'Coin', sort: 5, perm: 'novel:promo:list', visible: 1 },
+    { name: '同步记录', path: 'sync', component: 'novelSync', icon: 'Upload', sort: 6, perm: 'novel:sync:list', visible: 0 },
+    { name: '抖音素材提取', path: 'douyin-parse', component: 'novelDouyinParse', icon: 'Film', sort: 7, perm: 'novel:douyin-parse:list', visible: 1 },
   ]
   const ins = dbi.prepare(`
     INSERT INTO menus (id, parent_id, type, name, path, component_name, icon, sort, permission, status, visible, keep_alive)
@@ -623,6 +635,19 @@ function ensureNovelMenus(dbi) {
       dbi.prepare('INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES (?, ?)').run('menus', id)
     } catch (_) {
       /* ignore */
+    }
+  }
+  const promo = dbi.prepare(`SELECT id FROM menus WHERE component_name = 'novelPromoLinks' LIMIT 1`).get()
+  if (promo) {
+    const extra = dbi
+      .prepare(
+        `SELECT id FROM menus WHERE component_name IN ('novelPromoTemplates', 'novelRechargeTemplates')`,
+      )
+      .all()
+    const roles = dbi.prepare('SELECT role_id FROM role_menus WHERE menu_id = ?').all(promo.id)
+    const ir = dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (?, ?)')
+    for (const m of extra) {
+      for (const r of roles) ir.run(r.role_id, m.id)
     }
   }
 }
@@ -716,6 +741,11 @@ function ensureNovelSchema(dbi) {
       path TEXT NOT NULL DEFAULT '',
       monitor1 TEXT NOT NULL DEFAULT '',
       monitor2 TEXT NOT NULL DEFAULT '',
+      chapter_idx INTEGER,
+      chapter_charge_start INTEGER,
+      chapter_kandian INTEGER,
+      goods TEXT NOT NULL DEFAULT '',
+      callback_config_id TEXT NOT NULL DEFAULT '',
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT,
       UNIQUE(book_id, url)
@@ -726,6 +756,25 @@ function ensureNovelSchema(dbi) {
       xurl TEXT NOT NULL DEFAULT '',
       query_json TEXT NOT NULL DEFAULT '',
       created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS novel_promo_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      channel_id TEXT NOT NULL DEFAULT '',
+      media_source TEXT NOT NULL DEFAULT 'dy',
+      chapter_idx INTEGER NOT NULL DEFAULT 1,
+      count INTEGER NOT NULL DEFAULT 1,
+      recharge_template_id INTEGER,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS novel_recharge_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      batch_id TEXT NOT NULL DEFAULT '',
+      remark TEXT NOT NULL DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT
     );
     CREATE TABLE IF NOT EXISTS novel_sync_batches (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -760,6 +809,21 @@ function ensureNovelSchema(dbi) {
   ensureColumn(dbi, 'novel_promo_links', 'path', "TEXT NOT NULL DEFAULT ''")
   ensureColumn(dbi, 'novel_promo_links', 'monitor1', "TEXT NOT NULL DEFAULT ''")
   ensureColumn(dbi, 'novel_promo_links', 'monitor2', "TEXT NOT NULL DEFAULT ''")
+  ensureColumn(dbi, 'novel_promo_links', 'chapter_idx', 'INTEGER')
+  ensureColumn(dbi, 'novel_promo_links', 'chapter_charge_start', 'INTEGER')
+  ensureColumn(dbi, 'novel_promo_links', 'chapter_kandian', 'INTEGER')
+  ensureColumn(dbi, 'novel_promo_links', 'goods', "TEXT NOT NULL DEFAULT ''")
+  ensureColumn(dbi, 'novel_promo_links', 'callback_config_id', "TEXT NOT NULL DEFAULT ''")
+  ensureColumn(dbi, 'novel_promo_links', 'goods_batch_id', "TEXT NOT NULL DEFAULT ''")
+  ensureColumn(dbi, 'novel_promo_templates', 'recharge_template_id', 'INTEGER')
+  try {
+    dbi.exec(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_novel_recharge_batch
+       ON novel_recharge_templates(batch_id) WHERE batch_id != ''`,
+    )
+  } catch (_) {
+    /* 旧数据可能冲突 */
+  }
   try {
     dbi.exec(`
       UPDATE novel_materials SET first_seen_at = COALESCE(first_seen_at, created_at) WHERE first_seen_at IS NULL;

@@ -133,6 +133,8 @@ function rowToBook(r) {
     launchUserId: r.launch_user_id || null,
     materialCount: Number(r.material_count || 0),
     newMaterialCount: Number(r.new_material_count || 0),
+    promoCount: Number(r.promo_count || 0),
+    latestMonitor: r.latest_monitor || '',
     isNew: r.is_new != null ? Number(r.is_new) === 1 : isNewBookRow(r),
     createTime: fmtTime(r.create_time || r.created_at),
     updateTime: fmtTime(r.update_time || r.updated_at),
@@ -220,6 +222,12 @@ function rowToPromo(r) {
     path: r.path || '',
     monitor1: r.monitor1 || '',
     monitor2: r.monitor2 || '',
+    chapterIdx: r.chapter_idx != null && r.chapter_idx !== '' ? Number(r.chapter_idx) : null,
+    chapterChargeStart: r.chapter_charge_start != null && r.chapter_charge_start !== '' ? Number(r.chapter_charge_start) : null,
+    chapterKandian: r.chapter_kandian != null && r.chapter_kandian !== '' ? Number(r.chapter_kandian) : null,
+    goods: r.goods || '',
+    goodsBatchId: r.goods_batch_id || '',
+    callbackConfigId: r.callback_config_id || '',
     createTime: fmtTime(r.created_at),
     updateTime: fmtTime(r.updated_at),
   }
@@ -305,6 +313,9 @@ router.get('/books/page', requirePerm(PERM.books, '书籍'), (req, res) => {
                 b.first_seen_at, b.last_seen_at, b.launch_status, b.launched_at, b.launch_user_id,
                 b.created_at, b.updated_at,
                 (SELECT COUNT(*) FROM novel_materials m WHERE m.book_id = b.id) AS material_count,
+                (SELECT COUNT(*) FROM novel_promo_links p WHERE p.book_id = b.id) AS promo_count,
+                (SELECT COALESCE(NULLIF(p.monitor1, ''), NULLIF(p.monitor2, ''), NULLIF(p.path, ''), p.url)
+                 FROM novel_promo_links p WHERE p.book_id = b.id ORDER BY p.id DESC LIMIT 1) AS latest_monitor,
                 (SELECT COUNT(*) FROM novel_materials m WHERE m.book_id = b.id AND (
                    CASE
                      WHEN COALESCE(b.launch_status, 'pending') = 'launched' AND b.launched_at IS NOT NULL
@@ -622,8 +633,9 @@ router.get('/promo-links/page', requirePerm(PERM.promo, '推广链接'), (req, r
     const conds = ['1=1']
     const params = []
     if (keyword) {
-      conds.push('(p.name LIKE ? OR p.url LIKE ? OR p.path LIKE ? OR p.channel LIKE ? OR b.name LIKE ? OR b.external_book_id LIKE ? OR p.referral_id LIKE ?)')
-      params.push(`%${keyword}%`, `%${keyword}%`, `%${keyword}%`, `%${keyword}%`, `%${keyword}%`, `%${keyword}%`, `%${keyword}%`)
+      conds.push('(p.name LIKE ? OR p.url LIKE ? OR p.path LIKE ? OR p.channel LIKE ? OR b.name LIKE ? OR b.external_book_id LIKE ? OR p.referral_id LIKE ? OR p.goods LIKE ? OR p.goods_batch_id LIKE ?)')
+      const like = `%${keyword}%`
+      params.push(like, like, like, like, like, like, like, like, like)
     }
     if (bookId) {
       conds.push('p.book_id = ?')
@@ -633,9 +645,14 @@ router.get('/promo-links/page', requirePerm(PERM.promo, '推广链接'), (req, r
       conds.push('p.status = ?')
       params.push(status)
     }
+    const channel = String(req.query.channel || '').trim()
     if (mediaSource) {
       conds.push('p.media_source = ?')
       params.push(mediaSource)
+    }
+    if (channel) {
+      conds.push('p.channel = ?')
+      params.push(channel)
     }
     if (referralId) {
       conds.push('p.referral_id = ?')
@@ -725,6 +742,28 @@ function pickField(obj, keys) {
   return ''
 }
 
+function asOptInt(v) {
+  if (v == null || v === '') return null
+  const n = parseInt(v, 10)
+  return Number.isFinite(n) ? n : null
+}
+
+function stringifyGoods(raw) {
+  if (raw == null || raw === '') return ''
+  if (typeof raw === 'string') return raw.trim()
+  if (Array.isArray(raw)) return raw.map((x) => stringifyGoods(x)).filter(Boolean).join(' / ')
+  if (typeof raw === 'object') {
+    const n = raw.name || raw.title || raw.goodsName || raw.goods_name || raw.desc
+    if (n) return String(n).trim()
+    try {
+      return JSON.stringify(raw)
+    } catch {
+      return ''
+    }
+  }
+  return String(raw)
+}
+
 function pickReferralList(data) {
   if (!data) return []
   if (Array.isArray(data)) return data
@@ -755,7 +794,7 @@ function findOrCreateBookByExternal(d, externalBookId, store, name) {
   return Number(r.lastInsertRowid)
 }
 
-function upsertDianzhongReferral(d, item, fallbackBookId) {
+function upsertDianzhongReferral(d, item, fallbackBookId, fallbackChannel) {
   const referralId = String(pickField(item, ['referralId', 'referral_id', 'id']) || '').trim()
   const path = String(pickField(item, ['path', 'url', 'link', 'miniPath']) || '').trim()
   const monitor1 = String(pickField(item, ['monitor1', 'monitor_1', 'monitorUrl1']) || '').trim()
@@ -763,7 +802,9 @@ function upsertDianzhongReferral(d, item, fallbackBookId) {
   const name = String(pickField(item, ['name', 'channelName', 'title']) || '').trim()
   const mediaSource = dianzhong.normalizeMediaSource(pickField(item, ['mediaSource', 'media_source', 'from']))
   const extBookId = String(pickField(item, ['bookId', 'book_id']) || '').trim()
-  const channel = String(pickField(item, ['channelId', 'channel_id', 'channel']) || '').trim()
+  const channel = String(
+    pickField(item, ['channelId', 'channel_id', 'channel']) || fallbackChannel || '',
+  ).trim()
   const url = path || monitor2 || monitor1 || (referralId ? `dianzhong:${referralId}` : '')
   if (!url) return { error: '缺少 path' }
   const bookId = fallbackBookId || findOrCreateBookByExternal(d, extBookId, '', name)
@@ -781,6 +822,16 @@ function upsertDianzhongReferral(d, item, fallbackBookId) {
     path,
     monitor1,
     monitor2,
+    chapterIdx: asOptInt(pickField(item, ['chapterIdx', 'chapter_idx'])),
+    chapterChargeStart: asOptInt(pickField(item, ['chapterChargeStart', 'chapter_charge_start'])),
+    chapterKandian: asOptInt(pickField(item, ['chapterKandian', 'chapter_kandian'])),
+    goods: stringifyGoods(item && (item.goods != null ? item.goods : pickField(item, ['goodsName', 'goods_name']))),
+    goodsBatchId: String(
+      pickField(item, ['referral_goods_batch_id', 'goodsBatchId', 'goods_batch_id']) || '',
+    ).trim(),
+    callbackConfigId: String(
+      pickField(item, ['callback_config_id', 'callbackConfigId', 'CallbackConfigId']) || '',
+    ).trim(),
   }
   if (byRef) {
     d.prepare(
@@ -789,7 +840,11 @@ function upsertDianzhongReferral(d, item, fallbackBookId) {
          channel = CASE WHEN ? != '' THEN ? ELSE channel END,
          external_id = CASE WHEN ? != '' THEN ? ELSE external_id END,
          source = 'dianzhong', media_source = ?, path = ?, monitor1 = ?, monitor2 = ?,
-         referral_id = ?, updated_at = datetime('now')
+         referral_id = ?, chapter_idx = ?, chapter_charge_start = ?, chapter_kandian = ?,
+         goods = CASE WHEN ? != '' THEN ? ELSE goods END,
+         goods_batch_id = CASE WHEN ? != '' THEN ? ELSE goods_batch_id END,
+         callback_config_id = CASE WHEN ? != '' THEN ? ELSE callback_config_id END,
+         updated_at = datetime('now')
        WHERE id = ?`,
     ).run(
       bookId,
@@ -805,6 +860,15 @@ function upsertDianzhongReferral(d, item, fallbackBookId) {
       payload.monitor1,
       payload.monitor2,
       payload.referralId,
+      payload.chapterIdx,
+      payload.chapterChargeStart,
+      payload.chapterKandian,
+      payload.goods,
+      payload.goods,
+      payload.goodsBatchId,
+      payload.goodsBatchId,
+      payload.callbackConfigId,
+      payload.callbackConfigId,
       byRef.id,
     )
     return { id: byRef.id, created: false }
@@ -818,6 +882,10 @@ function upsertDianzhongReferral(d, item, fallbackBookId) {
          external_id = CASE WHEN ? != '' THEN ? ELSE external_id END,
          source = 'dianzhong', media_source = ?, path = ?, monitor1 = ?, monitor2 = ?,
          referral_id = CASE WHEN ? != '' THEN ? ELSE referral_id END,
+         chapter_idx = ?, chapter_charge_start = ?, chapter_kandian = ?,
+         goods = CASE WHEN ? != '' THEN ? ELSE goods END,
+         goods_batch_id = CASE WHEN ? != '' THEN ? ELSE goods_batch_id END,
+         callback_config_id = CASE WHEN ? != '' THEN ? ELSE callback_config_id END,
          updated_at = datetime('now')
        WHERE id = ?`,
     ).run(
@@ -833,6 +901,15 @@ function upsertDianzhongReferral(d, item, fallbackBookId) {
       payload.monitor2,
       payload.referralId,
       payload.referralId,
+      payload.chapterIdx,
+      payload.chapterChargeStart,
+      payload.chapterKandian,
+      payload.goods,
+      payload.goods,
+      payload.goodsBatchId,
+      payload.goodsBatchId,
+      payload.callbackConfigId,
+      payload.callbackConfigId,
       byUrl.id,
     )
     return { id: byUrl.id, created: false }
@@ -841,8 +918,9 @@ function upsertDianzhongReferral(d, item, fallbackBookId) {
     .prepare(
       `INSERT INTO novel_promo_links
          (book_id, name, url, store, channel, status, remark, external_id, source,
-          referral_id, media_source, path, monitor1, monitor2, updated_at)
-       VALUES (?, ?, ?, '', ?, 'active', '', ?, 'dianzhong', ?, ?, ?, ?, ?, datetime('now'))`,
+          referral_id, media_source, path, monitor1, monitor2,
+          chapter_idx, chapter_charge_start, chapter_kandian, goods, goods_batch_id, callback_config_id, updated_at)
+       VALUES (?, ?, ?, '', ?, 'active', '', ?, 'dianzhong', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
     )
     .run(
       bookId,
@@ -855,63 +933,456 @@ function upsertDianzhongReferral(d, item, fallbackBookId) {
       payload.path,
       payload.monitor1,
       payload.monitor2,
+      payload.chapterIdx,
+      payload.chapterChargeStart,
+      payload.chapterKandian,
+      payload.goods,
+      payload.goodsBatchId,
+      payload.callbackConfigId,
     )
   return { id: Number(r.lastInsertRowid), created: true }
 }
 
 async function syncReferralsFromRemote(d, input, fallbackBookId) {
-  const remote = await dianzhong.listReferrals(input)
-  if (remote.error) return remote
-  const items = pickReferralList(remote.data)
+  const channelId = String(input.channelId || '').trim()
+  if (!channelId) return { error: '请选择投放账号' }
+  const size = Math.min(200, Math.max(1, parseInt(input.size, 10) || 100))
+  let page = Math.max(1, parseInt(input.page, 10) || 1)
   let upserted = 0
   let created = 0
+  let total = 0
   const rows = []
-  for (const item of items) {
-    const r = upsertDianzhongReferral(d, item, fallbackBookId)
-    if (r.error) continue
-    upserted += 1
-    if (r.created) created += 1
-    rows.push(rowToPromo(fetchPromoRow(d, r.id)))
+  const maxPages = 50
+  while (page <= maxPages) {
+    const remote = await dianzhong.listReferrals({ ...input, channelId, page, size })
+    if (remote.error) return remote
+    const items = pickReferralList(remote.data)
+    const remoteTotal = Number(remote.data && remote.data.total)
+    if (page === 1) total = Number.isFinite(remoteTotal) && remoteTotal > 0 ? remoteTotal : items.length
+    for (const item of items) {
+      const r = upsertDianzhongReferral(d, item, fallbackBookId, channelId)
+      if (r.error) continue
+      upserted += 1
+      if (r.created) created += 1
+      rows.push(rowToPromo(fetchPromoRow(d, r.id)))
+    }
+    if (items.length < size) break
+    if (Number.isFinite(remoteTotal) && remoteTotal > 0 && page * size >= remoteTotal) break
+    page += 1
   }
-  return { upserted, created, total: items.length, list: rows, raw: remote.raw }
+  return { upserted, created, total, list: rows, channelId }
 }
+
+function promoTemplateSelectSql() {
+  return `
+    SELECT t.*, r.name AS recharge_name, r.batch_id AS recharge_batch_id
+    FROM novel_promo_templates t
+    LEFT JOIN novel_recharge_templates r ON r.id = t.recharge_template_id
+  `
+}
+
+function fetchPromoTemplateRow(d, id) {
+  return d.prepare(`${promoTemplateSelectSql()} WHERE t.id = ?`).get(id)
+}
+
+function rowToPromoTemplate(r) {
+  if (!r) return null
+  return {
+    id: r.id,
+    name: r.name || '',
+    channelId: r.channel_id || '',
+    mediaSource: dianzhong.normalizeMediaSource(r.media_source),
+    chapterIdx: Math.min(20, Math.max(1, parseInt(r.chapter_idx, 10) || 1)),
+    count: [1, 2, 3, 5].includes(Number(r.count)) ? Number(r.count) : 1,
+    rechargeTemplateId: r.recharge_template_id || null,
+    rechargeName: r.recharge_name || '',
+    batchId: r.recharge_batch_id || '',
+    createTime: fmtTime(r.created_at),
+    updateTime: fmtTime(r.updated_at),
+  }
+}
+
+function normalizePromoTemplateBody(body) {
+  const name = String((body && body.name) || '').trim()
+  const channelId = String((body && body.channelId) || '').trim()
+  const mediaSource = dianzhong.normalizeMediaSource(body && body.mediaSource)
+  const chapterIdx = Math.min(20, Math.max(1, parseInt(body && body.chapterIdx, 10) || 1))
+  const countRaw = parseInt(body && body.count, 10) || 1
+  const count = [1, 2, 3, 5].includes(countRaw) ? countRaw : 1
+  const rid = parseInt(body && body.rechargeTemplateId, 10) || 0
+  return { name, channelId, mediaSource, chapterIdx, count, rechargeTemplateId: rid || null }
+}
+
+function assertRechargeTemplate(d, id) {
+  if (!id) return { ok: true }
+  const row = d.prepare('SELECT id FROM novel_recharge_templates WHERE id = ?').get(id)
+  if (!row) return { error: '充值模板不存在' }
+  return { ok: true }
+}
+
+function rechargeSelectSql() {
+  return `
+    SELECT r.*,
+      (SELECT COUNT(*) FROM novel_promo_templates t WHERE t.recharge_template_id = r.id) AS promo_tpl_count,
+      (SELECT COUNT(*) FROM novel_promo_links l
+        WHERE r.batch_id != '' AND l.goods_batch_id = r.batch_id) AS link_count
+    FROM novel_recharge_templates r
+  `
+}
+
+function rowToRechargeTemplate(r) {
+  if (!r) return null
+  return {
+    id: r.id,
+    name: r.name || '',
+    batchId: r.batch_id || '',
+    remark: r.remark || '',
+    promoTplCount: Number(r.promo_tpl_count) || 0,
+    linkCount: Number(r.link_count) || 0,
+    createTime: fmtTime(r.created_at),
+    updateTime: fmtTime(r.updated_at),
+  }
+}
+
+function normalizeRechargeTemplateBody(body) {
+  const name = String((body && body.name) || '').trim()
+  const batchId = String((body && body.batchId) || '').trim()
+  const remark = String((body && body.remark) || '').trim()
+  return { name, batchId, remark }
+}
+
+function findDupRechargeBatch(d, batchId, excludeId) {
+  if (!batchId) return null
+  if (excludeId) {
+    return d
+      .prepare('SELECT id FROM novel_recharge_templates WHERE batch_id = ? AND id != ?')
+      .get(batchId, excludeId)
+  }
+  return d.prepare('SELECT id FROM novel_recharge_templates WHERE batch_id = ?').get(batchId)
+}
+
+router.get('/promo-links/dianzhong/channels', requirePerm(PERM.promo, '推广链接'), (req, res) => {
+  const ready = dianzhong.assertConfig()
+  if (ready.error) return res.json(fail(400, ready.error))
+  res.json(ok(dianzhong.listChannels()))
+})
+
+router.get('/promo-links/templates', requirePerm(PERM.promo, '推广链接'), (req, res) => {
+  try {
+    const rows = database()
+      .prepare(`${promoTemplateSelectSql()} ORDER BY t.id DESC`)
+      .all()
+    res.json(ok(rows.map(rowToPromoTemplate)))
+  } catch (e) {
+    console.error('[novel] promo templates list', e.message)
+    res.json(fail(500, '读取推广模板失败'))
+  }
+})
+
+router.get('/promo-links/templates/page', requirePerm(PERM.promo, '推广链接'), (req, res) => {
+  try {
+    const { pageSize, offset } = pageParams(req.query)
+    const keyword = String(req.query.keyword || '').trim()
+    const channel = String(req.query.channel || req.query.channelId || '').trim()
+    const mediaSource = String(req.query.mediaSource || '').trim()
+    const where = []
+    const args = []
+    if (keyword) {
+      where.push(`(t.name LIKE ? OR IFNULL(r.name, '') LIKE ? OR IFNULL(r.batch_id, '') LIKE ?)`)
+      const like = `%${keyword}%`
+      args.push(like, like, like)
+    }
+    if (channel) {
+      where.push('t.channel_id = ?')
+      args.push(channel)
+    }
+    if (mediaSource) {
+      where.push('t.media_source = ?')
+      args.push(mediaSource)
+    }
+    const clause = where.length ? `WHERE ${where.join(' AND ')}` : ''
+    const d = database()
+    const total = d.prepare(`SELECT COUNT(*) AS c FROM (${promoTemplateSelectSql()} ${clause})`).get(...args).c
+    const rows = d
+      .prepare(`${promoTemplateSelectSql()} ${clause} ORDER BY t.id DESC LIMIT ? OFFSET ?`)
+      .all(...args, pageSize, offset)
+    res.json(ok({ list: rows.map(rowToPromoTemplate), total }))
+  } catch (e) {
+    console.error('[novel] promo templates page', e.message)
+    res.json(fail(500, '读取推广模板失败'))
+  }
+})
+
+router.post('/promo-links/templates', requirePerm(PERM.promo, '推广链接'), (req, res) => {
+  try {
+    const p = normalizePromoTemplateBody(req.body)
+    if (!p.name) return res.json(fail(400, '请填写模板名称'))
+    if (!p.channelId) return res.json(fail(400, '请选择投放账号'))
+    if (!dianzhong.findChannel(p.channelId)) return res.json(fail(400, '投放账号不在已配置列表中'))
+    const d = database()
+    const recharge = assertRechargeTemplate(d, p.rechargeTemplateId)
+    if (recharge.error) return res.json(fail(400, recharge.error))
+    const r = d
+      .prepare(
+        `INSERT INTO novel_promo_templates
+           (name, channel_id, media_source, chapter_idx, count, recharge_template_id, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`,
+      )
+      .run(p.name, p.channelId, p.mediaSource, p.chapterIdx, p.count, p.rechargeTemplateId)
+    res.json(ok(rowToPromoTemplate(fetchPromoTemplateRow(d, Number(r.lastInsertRowid)))))
+  } catch (e) {
+    console.error('[novel] promo templates create', e.message)
+    res.json(fail(500, '保存模板失败'))
+  }
+})
+
+router.put('/promo-links/templates/:id', requirePerm(PERM.promo, '推广链接'), (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10) || 0
+    const d = database()
+    const exist = d.prepare('SELECT id FROM novel_promo_templates WHERE id = ?').get(id)
+    if (!exist) return res.json(fail(400, '模板不存在'))
+    const p = normalizePromoTemplateBody(req.body)
+    if (!p.name) return res.json(fail(400, '请填写模板名称'))
+    if (!p.channelId) return res.json(fail(400, '请选择投放账号'))
+    if (!dianzhong.findChannel(p.channelId)) return res.json(fail(400, '投放账号不在已配置列表中'))
+    const recharge = assertRechargeTemplate(d, p.rechargeTemplateId)
+    if (recharge.error) return res.json(fail(400, recharge.error))
+    d.prepare(
+      `UPDATE novel_promo_templates
+       SET name = ?, channel_id = ?, media_source = ?, chapter_idx = ?, count = ?,
+           recharge_template_id = ?, updated_at = datetime('now')
+       WHERE id = ?`,
+    ).run(p.name, p.channelId, p.mediaSource, p.chapterIdx, p.count, p.rechargeTemplateId, id)
+    res.json(ok(rowToPromoTemplate(fetchPromoTemplateRow(d, id))))
+  } catch (e) {
+    console.error('[novel] promo templates update', e.message)
+    res.json(fail(500, '保存模板失败'))
+  }
+})
+
+router.delete('/promo-links/templates/:id', requirePerm(PERM.promo, '推广链接'), (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10) || 0
+    const d = database()
+    const exist = d.prepare('SELECT id FROM novel_promo_templates WHERE id = ?').get(id)
+    if (!exist) return res.json(fail(400, '模板不存在'))
+    d.prepare('DELETE FROM novel_promo_templates WHERE id = ?').run(id)
+    res.json(ok(true))
+  } catch (e) {
+    console.error('[novel] promo templates delete', e.message)
+    res.json(fail(500, '删除模板失败'))
+  }
+})
+
+router.get('/recharge-templates', requirePerm(PERM.promo, '充值模板'), (req, res) => {
+  try {
+    const rows = database()
+      .prepare(`${rechargeSelectSql()} ORDER BY r.id DESC`)
+      .all()
+    res.json(ok(rows.map(rowToRechargeTemplate)))
+  } catch (e) {
+    console.error('[novel] recharge templates list', e.message)
+    res.json(fail(500, '读取充值模板失败'))
+  }
+})
+
+router.get('/recharge-templates/page', requirePerm(PERM.promo, '充值模板'), (req, res) => {
+  try {
+    const { pageSize, offset } = pageParams(req.query)
+    const keyword = String(req.query.keyword || '').trim()
+    const where = []
+    const args = []
+    if (keyword) {
+      where.push(`(r.name LIKE ? OR r.batch_id LIKE ? OR r.remark LIKE ?)`)
+      const like = `%${keyword}%`
+      args.push(like, like, like)
+    }
+    const clause = where.length ? `WHERE ${where.join(' AND ')}` : ''
+    const d = database()
+    const total = d.prepare(`SELECT COUNT(*) AS c FROM novel_recharge_templates r ${clause}`).get(...args).c
+    const rows = d
+      .prepare(`${rechargeSelectSql()} ${clause} ORDER BY r.id DESC LIMIT ? OFFSET ?`)
+      .all(...args, pageSize, offset)
+    res.json(ok({ list: rows.map(rowToRechargeTemplate), total }))
+  } catch (e) {
+    console.error('[novel] recharge templates page', e.message)
+    res.json(fail(500, '读取充值模板失败'))
+  }
+})
+
+router.post('/recharge-templates', requirePerm(PERM.promo, '充值模板'), (req, res) => {
+  try {
+    const p = normalizeRechargeTemplateBody(req.body)
+    if (!p.name) return res.json(fail(400, '请填写模板名称'))
+    const d = database()
+    if (findDupRechargeBatch(d, p.batchId)) return res.json(fail(400, '该档位ID已存在'))
+    const r = d
+      .prepare(
+        `INSERT INTO novel_recharge_templates (name, batch_id, remark, updated_at)
+         VALUES (?, ?, ?, datetime('now'))`,
+      )
+      .run(p.name, p.batchId, p.remark)
+    const row = d.prepare(`${rechargeSelectSql()} WHERE r.id = ?`).get(Number(r.lastInsertRowid))
+    res.json(ok(rowToRechargeTemplate(row)))
+  } catch (e) {
+    console.error('[novel] recharge templates create', e.message)
+    res.json(fail(500, '保存充值模板失败'))
+  }
+})
+
+router.put('/recharge-templates/:id', requirePerm(PERM.promo, '充值模板'), (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10) || 0
+    const d = database()
+    const exist = d.prepare('SELECT id FROM novel_recharge_templates WHERE id = ?').get(id)
+    if (!exist) return res.json(fail(400, '充值模板不存在'))
+    const p = normalizeRechargeTemplateBody(req.body)
+    if (!p.name) return res.json(fail(400, '请填写模板名称'))
+    if (findDupRechargeBatch(d, p.batchId, id)) return res.json(fail(400, '该档位ID已存在'))
+    d.prepare(
+      `UPDATE novel_recharge_templates
+       SET name = ?, batch_id = ?, remark = ?, updated_at = datetime('now')
+       WHERE id = ?`,
+    ).run(p.name, p.batchId, p.remark, id)
+    res.json(ok(rowToRechargeTemplate(d.prepare(`${rechargeSelectSql()} WHERE r.id = ?`).get(id))))
+  } catch (e) {
+    console.error('[novel] recharge templates update', e.message)
+    res.json(fail(500, '保存充值模板失败'))
+  }
+})
+
+router.delete('/recharge-templates/:id', requirePerm(PERM.promo, '充值模板'), (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10) || 0
+    const d = database()
+    const exist = d.prepare('SELECT id FROM novel_recharge_templates WHERE id = ?').get(id)
+    if (!exist) return res.json(fail(400, '充值模板不存在'))
+    d.prepare('UPDATE novel_promo_templates SET recharge_template_id = NULL WHERE recharge_template_id = ?').run(id)
+    d.prepare('DELETE FROM novel_recharge_templates WHERE id = ?').run(id)
+    res.json(ok(true))
+  } catch (e) {
+    console.error('[novel] recharge templates delete', e.message)
+    res.json(fail(500, '删除充值模板失败'))
+  }
+})
+
+router.post('/recharge-templates/import-from-links', requirePerm(PERM.promo, '充值模板'), (req, res) => {
+  try {
+    const d = database()
+    const rows = d
+      .prepare(
+        `SELECT DISTINCT TRIM(goods) AS name, TRIM(IFNULL(goods_batch_id, '')) AS batch_id
+         FROM novel_promo_links
+         WHERE TRIM(IFNULL(goods, '')) != '' OR TRIM(IFNULL(goods_batch_id, '')) != ''`,
+      )
+      .all()
+    let created = 0
+    let skipped = 0
+    const ins = d.prepare(
+      `INSERT INTO novel_recharge_templates (name, batch_id, remark, updated_at)
+       VALUES (?, ?, '', datetime('now'))`,
+    )
+    for (const row of rows) {
+      const batchId = String(row.batch_id || '').trim()
+      const name = String(row.name || '').trim() || (batchId ? `档位 ${batchId}` : '')
+      if (!name) {
+        skipped += 1
+        continue
+      }
+      if (batchId) {
+        const hit = d.prepare('SELECT id FROM novel_recharge_templates WHERE batch_id = ?').get(batchId)
+        if (hit) {
+          skipped += 1
+          continue
+        }
+      } else {
+        const hit = d
+          .prepare(`SELECT id FROM novel_recharge_templates WHERE name = ? AND batch_id = ''`)
+          .get(name)
+        if (hit) {
+          skipped += 1
+          continue
+        }
+      }
+      ins.run(name, batchId)
+      created += 1
+    }
+    res.json(ok({ created, skipped, scanned: rows.length }))
+  } catch (e) {
+    console.error('[novel] recharge templates import', e.message)
+    res.json(fail(500, '从链接带入失败'))
+  }
+})
 
 router.post('/promo-links/dianzhong/create', requirePerm(PERM.promo, '推广链接'), async (req, res) => {
   try {
     const body = req.body || {}
     const bookId = parseInt(body.bookId, 10) || 0
     if (!bookId) return res.json(fail(400, '请选择所属书籍'))
+    const channelId = String(body.channelId || '').trim()
+    if (!channelId) return res.json(fail(400, '请选择投放账号'))
+    if (!dianzhong.findChannel(channelId)) return res.json(fail(400, '投放账号不在已配置列表中'))
     const d = database()
     const book = d.prepare('SELECT * FROM novel_books WHERE id = ?').get(bookId)
     if (!book) return res.json(fail(400, '书籍不存在'))
     if (!book.external_book_id) return res.json(fail(400, '该书缺少书籍ID，无法对接点众'))
-    const created = await dianzhong.createReferral({
-      bookId: book.external_book_id,
-      name: body.name,
-      mediaSource: body.mediaSource,
-      chapterIdx: body.chapterIdx,
-      fromDrId: body.fromDrId,
-      batchId: body.batchId,
-      callbackConfigId: body.callbackConfigId,
-      chapterChargeStart: body.chapterChargeStart,
-      chapterKandian: body.chapterKandian,
-    })
-    if (created.error) return res.json(fail(400, created.error))
-    const synced = await syncReferralsFromRemote(d, { bookId: book.external_book_id, size: 100 }, book.id)
+    const count = Math.min(5, Math.max(1, parseInt(body.count, 10) || 1))
+    const baseName = String(body.name || '').trim()
+    if (!baseName) return res.json(fail(400, '请填写链接名称'))
+    let batchId = String(body.batchId || '').trim()
+    const rechargeTemplateId = parseInt(body.rechargeTemplateId, 10) || 0
+    if (rechargeTemplateId) {
+      const rt = d.prepare('SELECT batch_id FROM novel_recharge_templates WHERE id = ?').get(rechargeTemplateId)
+      if (!rt) return res.json(fail(400, '充值模板不存在'))
+      if (rt.batch_id) batchId = String(rt.batch_id).trim()
+    }
+    const createdItems = []
+    const warnings = []
+    for (let i = 0; i < count; i += 1) {
+      const name = count === 1 ? baseName : `${baseName}-${i + 1}`.slice(0, 60)
+      const created = await dianzhong.createReferral({
+        bookId: book.external_book_id,
+        name,
+        mediaSource: body.mediaSource,
+        chapterIdx: body.chapterIdx,
+        channelId,
+        fromDrId: body.fromDrId,
+        batchId,
+        callbackConfigId: body.callbackConfigId,
+        chapterChargeStart: body.chapterChargeStart,
+        chapterKandian: body.chapterKandian,
+      })
+      if (created.error) {
+        warnings.push(`${name}：${created.error}`)
+        continue
+      }
+      createdItems.push(created.data)
+    }
+    if (!createdItems.length) return res.json(fail(400, warnings.join('；') || '创建失败'))
+    const synced = await syncReferralsFromRemote(
+      d,
+      { bookId: book.external_book_id, size: 100, channelId },
+      book.id,
+    )
     if (synced.error) {
+      warnings.push(synced.error)
       return res.json(
         ok({
-          created: created.data,
+          created: createdItems,
+          createdCount: createdItems.length,
           synced: 0,
-          warning: synced.error,
+          warning: warnings.join('；'),
           list: [],
         }),
       )
     }
     res.json(
       ok({
-        created: created.data,
+        created: createdItems,
+        createdCount: createdItems.length,
         synced: synced.upserted,
+        warning: warnings.length ? warnings.join('；') : '',
         list: synced.list,
       }),
     )
@@ -934,20 +1405,38 @@ router.post('/promo-links/dianzhong/refresh', requirePerm(PERM.promo, '推广链
     } else {
       fallbackBookId = 0
     }
-    const synced = await syncReferralsFromRemote(
-      d,
-      {
-        bookId: remoteBookId,
-        referralId: body.referralId,
-        startTime: body.startTime,
-        endTime: body.endTime,
-        page: body.page,
-        size: body.size,
-      },
-      fallbackBookId || undefined,
-    )
-    if (synced.error) return res.json(fail(400, synced.error))
-    res.json(ok(synced))
+    const ready = dianzhong.assertConfig()
+    if (ready.error) return res.json(fail(400, ready.error))
+    const one = String(body.channelId || '').trim()
+    const targets = one ? ready.cfg.channels.filter((c) => c.id === one) : ready.cfg.channels
+    if (!targets.length) return res.json(fail(400, '投放账号不在已配置列表中'))
+    let upserted = 0
+    let created = 0
+    let total = 0
+    const warnings = []
+    for (const ch of targets) {
+      const synced = await syncReferralsFromRemote(
+        d,
+        {
+          bookId: remoteBookId,
+          referralId: body.referralId,
+          startTime: body.startTime,
+          endTime: body.endTime,
+          size: body.size,
+          channelId: ch.id,
+        },
+        fallbackBookId || undefined,
+      )
+      if (synced.error) {
+        warnings.push(`${ch.label}：${synced.error}`)
+        continue
+      }
+      upserted += synced.upserted
+      created += synced.created
+      total += synced.total
+    }
+    if (warnings.length && !upserted) return res.json(fail(400, warnings.join('；')))
+    res.json(ok({ upserted, created, total, warnings }))
   } catch (e) {
     console.error('[novel] promo dianzhong refresh', e.message)
     res.json(fail(500, '刷新推广链接失败'))

@@ -12,6 +12,16 @@
         />
         <BookSelect v-model="tableParams.bookId" class="filter-select-book" placeholder="所属书籍" />
         <el-select
+          v-model="tableParams.channel"
+          placeholder="投放账号"
+          class="filter-select-sm"
+          clearable
+          clear-icon="Close"
+          :suffix-icon="$icons.ArrowDown"
+        >
+          <el-option v-for="c in channels" :key="c.id" :label="c.label" :value="c.id" />
+        </el-select>
+        <el-select
           v-model="tableParams.mediaSource"
           placeholder="回传媒体"
           class="filter-select-sm"
@@ -79,8 +89,32 @@
         <el-table-column label="所属书籍" min-width="150" show-overflow-tooltip>
           <template #default="{ row }">{{ row.bookName || "—" }}</template>
         </el-table-column>
+        <el-table-column label="投放账号" width="100" align="center">
+          <template #default="{ row }">{{ channelLabel(row.channel, channels) }}</template>
+        </el-table-column>
         <el-table-column label="媒体" width="90" align="center">
           <template #default="{ row }">{{ mediaSourceLabel(row.mediaSource) }}</template>
+        </el-table-column>
+        <el-table-column label="起始章节" width="88" align="center">
+          <template #default="{ row }">{{ row.chapterIdx != null ? row.chapterIdx : "—" }}</template>
+        </el-table-column>
+        <el-table-column label="收费起始" width="88" align="center">
+          <template #default="{ row }">{{ row.chapterChargeStart != null ? row.chapterChargeStart : "—" }}</template>
+        </el-table-column>
+        <el-table-column label="看点" width="72" align="center">
+          <template #default="{ row }">{{ row.chapterKandian != null ? row.chapterKandian : "—" }}</template>
+        </el-table-column>
+        <el-table-column label="充值档" min-width="140" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span v-if="row.goods || row.goodsBatchId">
+              {{ row.goods || "—" }}
+              <span v-if="row.goodsBatchId" class="muted">（{{ row.goodsBatchId }}）</span>
+            </span>
+            <span v-else class="muted">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="回传配置" width="110" align="center" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.callbackConfigId || "—" }}</template>
         </el-table-column>
         <el-table-column prop="referralId" label="referralId" width="130" align="center">
           <template #default="{ row }">{{ row.referralId || "—" }}</template>
@@ -120,15 +154,17 @@ import CzPagination from "@/components/cz-pagination/index.vue"
 import request from "@/request"
 import BookSelect from "../components/book-select.vue"
 import PromoCreateDialog from "../components/promo-create-dialog.vue"
-import { MEDIA_SOURCE_OPTIONS, copyText, mediaSourceLabel, sourceLabel } from "../shared"
+import { MEDIA_SOURCE_OPTIONS, channelLabel, copyText, mediaSourceLabel, sourceLabel } from "../shared"
 
 const createRange = ref([])
 const createVisible = ref(false)
 const refreshing = ref(false)
+const channels = ref([])
 
 const defaultTableParams = () => ({
   keyword: "",
   bookId: "",
+  channel: "",
   mediaSource: "",
   startTime: "",
   endTime: "",
@@ -150,8 +186,16 @@ const { tableParams, tableData, tableTotal, tableLoading, getTableData, tableSea
 )
 
 onMounted(() => {
+  loadChannels()
   getTableData()
 })
+
+async function loadChannels() {
+  const res = await request({ url: "/admin-api/novel/promo-links/dianzhong/channels" })
+  if (res.code === 0 && Array.isArray(res.data)) {
+    channels.value = res.data
+  }
+}
 
 function resetAll() {
   createRange.value = []
@@ -167,6 +211,7 @@ async function refreshRemote() {
       method: "POST",
       data: {
         bookId: tableParams.bookId || undefined,
+        channelId: tableParams.channel || undefined,
         startTime: range[0],
         endTime: range[1],
       },

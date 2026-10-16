@@ -18,13 +18,19 @@
         >
           刷新
         </el-button>
+        <el-tooltip
+          content="勾选后跳过免费接口，直接走付费解析。取消勾选则按原来的逻辑：先免费，非原画或失败再付费兜底。"
+          placement="top"
+        >
+          <el-checkbox v-model="paidOnly" class="paid-only-check">仅付费</el-checkbox>
+        </el-tooltip>
       </div>
 
       <el-dialog v-model="paidCallsVisible" title="本站付费调用记录" width="760px" destroy-on-close>
         <p class="paid-calls-tip">
           对方已用 {{ formatCount(quota.usedCount) }} 次
           <template v-if="quota.vendorTime"> · 对方时间 {{ quota.vendorTime }}</template>
-          · 本站 details {{ formatCount(quota.localUsedCount) }} 次（发版后才开始记）
+          · 本类 details {{ formatCount(quota.localUsedCount) }} 次（发版后才开始记）
         </p>
         <el-table :data="paidCalls" v-loading="paidCallsLoading" border max-height="420" size="small">
           <el-table-column label="对方扣次时间" width="170">
@@ -314,6 +320,12 @@ import { useAuthStore } from "@/stores/auth.js"
 import { fetchAggregatorData } from "@/utils/douyinAgg.js"
 
 const authStore = useAuthStore()
+const route = useRoute()
+/**
+ * 同一页面两处入口：AI工具=/tools/douyin-parse 为电商，小说投流=/novel/douyin-parse 为小说。
+ * 未识别时归电商，和历史数据一致。
+ */
+const bizType = route.path.startsWith("/novel/") ? "novel" : "ecommerce"
 /** 仅本人数据范围时无需筛选创建人 */
 const showCreatorFilter = computed(() => authStore.dataScopeInfo?.mode !== "self")
 /** 仅超级管理员可改全局聚合方式（开关仅管理员可见） */
@@ -323,6 +335,8 @@ const SHOW_ROW_ACTIONS = true
 
 const parseText = ref("")
 const parsing = ref(false)
+/** 默认勾选：本次提取只走付费；取消后恢复「先免费再付费兜底」 */
+const paidOnly = ref(true)
 const aggSaving = ref(false)
 /** server | browser；来自库内全局配置，全员共用 */
 const aggSide = ref("server")
@@ -372,7 +386,7 @@ async function openPaidCalls() {
   paidCallsVisible.value = true
   paidCallsLoading.value = true
   try {
-    const res = await request({ url: "/admin-api/douyin/paid-calls?limit=50", method: "GET" })
+    const res = await request({ url: `/admin-api/douyin/paid-calls?limit=50&bizType=${bizType}`, method: "GET" })
     if (res.code === 0 && res.data) {
       paidCalls.value = Array.isArray(res.data.list) ? res.data.list : []
       if (res.data.localUsedCount != null) quota.localUsedCount = Number(res.data.localUsedCount) || 0
@@ -450,7 +464,8 @@ async function runBrowserParseForRow(row) {
     const completeRes = await request({
       url: `/admin-api/douyin/logs/${id}/client-complete`,
       method: "POST",
-      data: {
+        data: {
+        bizType,
         awemeId,
         douyinUrl,
         aggregatorData,
@@ -471,7 +486,7 @@ async function runBrowserParseForRow(row) {
       const failRes = await request({
         url: `/admin-api/douyin/logs/${id}/client-complete`,
         method: "POST",
-        data: { errorMessage: msg, awemeId, douyinUrl, durationMs: Date.now() - started },
+        data: { bizType, errorMessage: msg, awemeId, douyinUrl, durationMs: Date.now() - started },
       })
       if (failRes.code === 0) {
         patchRow(failRes.data)
@@ -507,6 +522,7 @@ const downloadProgress = reactive({})
 const downloadAborters = {}
 
 const defaultTableParams = () => ({
+  bizType,
   userId: "",
   status: "",
   source: "",
@@ -557,6 +573,7 @@ async function onParse() {
     ElMessage.warning("请粘贴抖音分享链接或文案")
     return
   }
+  const usePaidOnly = paidOnly.value
   parsing.value = true
   try {
     // 先拉一次配置，避免管理员刚改过、本页还是旧状态
@@ -564,7 +581,7 @@ async function onParse() {
     const res = await request({
       url: "/admin-api/douyin/parse",
       method: "POST",
-      data: { text },
+      data: { text, paidOnly: usePaidOnly, bizType },
     })
     if (res.code === 0) {
       const list = Array.isArray(res.data?.list) ? res.data.list : []
@@ -575,7 +592,8 @@ async function onParse() {
       // 回到第 1 页展示刚建立的「解析中」记录，随后由轮询就地更新状态
       tableParams.pageNo = 1
       await getTableData()
-      if (side === "browser" && list.length) {
+      // 仅付费由服务端直接打付费接口，不再走浏览器免费聚合
+      if (!usePaidOnly && side === "browser" && list.length) {
         // 不阻塞按钮：后台跑浏览器直连，表格靠 patchRow / 轮询更新
         Promise.resolve()
           .then(() => runBrowserParseBatch(list))
@@ -594,20 +612,22 @@ async function onParse() {
 /** 行内「重新获取」：接口保留。SHOW_ROW_ACTIONS=false 时页面不展示，避免再走付费扣次。 */
 async function onReparse(row) {
   if (!row || !row.id || reparsingIds.has(row.id) || isProcessing(row)) return
+  const usePaidOnly = paidOnly.value
   reparsingIds.add(row.id)
   try {
     const res = await request({
       url: `/admin-api/douyin/logs/${row.id}/reparse`,
       method: "POST",
+      data: { paidOnly: usePaidOnly, bizType },
     })
     if (res.code === 0) {
       // 后端已置为「解析中」，就地更新该行；server 靠轮询，browser 本地直连后回写
       const fresh = res.data || {}
       const side = fresh.aggSide === "browser" ? "browser" : "server"
       aggSide.value = side
-      const { aggSide: _side, ...rowData } = fresh
+      const { aggSide: _side, paidOnly: _paidOnly, ...rowData } = fresh
       patchRow(rowData.id ? rowData : { ...fresh, id: row.id })
-      if (side === "browser") {
+      if (!usePaidOnly && side === "browser") {
         const text = String(row.inputText || row.douyinUrl || "").trim()
         Promise.resolve()
           .then(() => runBrowserParseForRow({ id: row.id, inputText: text, douyinUrl: row.douyinUrl }))
@@ -652,7 +672,10 @@ async function pollOnce() {
   }
   polling = true
   try {
-    const res = await request({ url: `/admin-api/douyin/logs/status?ids=${ids.join(",")}`, method: "GET" })
+    const res = await request({
+      url: `/admin-api/douyin/logs/status?ids=${ids.join(",")}&bizType=${bizType}`,
+      method: "GET",
+    })
     if (res.code === 0 && Array.isArray(res.data?.list)) {
       let paidDone = false
       for (const item of res.data.list) {
@@ -701,7 +724,7 @@ async function onDelete(row) {
   if (deletingIds.has(row.id)) return
   deletingIds.add(row.id)
   try {
-    const res = await request({ url: `/admin-api/douyin/logs/${row.id}`, method: "DELETE" })
+    const res = await request({ url: `/admin-api/douyin/logs/${row.id}?bizType=${bizType}`, method: "DELETE" })
     if (res.code === 0) {
       ElMessage.success("已删除")
       getTableData()
@@ -818,7 +841,7 @@ async function downloadMaterial(row) {
   const controller = new AbortController()
   downloadAborters[row.id] = controller
 
-  const endpoint = `${apiBase()}/admin-api/douyin/logs/${row.id}/download`
+  const endpoint = `${apiBase()}/admin-api/douyin/logs/${row.id}/download?bizType=${encodeURIComponent(bizType)}`
   const token = authStore.token
   try {
     const resp = await fetch(endpoint, {
@@ -980,6 +1003,16 @@ function qualityLabel(row) {
 }
 .quota-unconfigured {
   color: var(--el-text-color-secondary);
+}
+.paid-only-check {
+  height: 22px;
+  margin-right: 0;
+}
+.paid-only-check :deep(.el-checkbox__label) {
+  padding-left: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--el-text-color-regular);
 }
 .paid-calls-tip {
   margin: 0 0 12px;

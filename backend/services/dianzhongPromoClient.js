@@ -1,18 +1,47 @@
 /**
  * 点众书城推广链接：创建 / 查询 / 更新。
  * 签名：md5(clientId + token + timestamp) 小写。密钥只读环境变量。
+ * DIANZHONG_CHANNEL_ID 支持多个投放账号：117110:巨量1,117111:巨量2
  */
 const crypto = require('crypto')
 
 const DEFAULT_BASE = 'https://video.wqxsw.com'
 const MEDIA_SOURCES = new Set(['dy', 'ks', 'bd', 'adq', 'no_back'])
 
+function parseChannels(raw) {
+  const s = String(raw == null ? '' : raw).trim()
+  if (!s) return []
+  const seen = new Set()
+  const out = []
+  for (const part of s.split(',')) {
+    const item = String(part || '').trim()
+    if (!item) continue
+    const colon = item.indexOf(':')
+    const id = (colon > 0 ? item.slice(0, colon) : item).trim()
+    const label = (colon > 0 ? item.slice(colon + 1) : '').trim() || id
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    out.push({ id, label })
+  }
+  return out
+}
+
 function config() {
   const clientId = String(process.env.DIANZHONG_CLIENT_ID || '').trim()
   const token = String(process.env.DIANZHONG_TOKEN || '').trim()
-  const channelId = String(process.env.DIANZHONG_CHANNEL_ID || '').trim()
+  const channels = parseChannels(process.env.DIANZHONG_CHANNEL_ID)
   const base = String(process.env.DIANZHONG_API_BASE || DEFAULT_BASE).trim().replace(/\/+$/, '')
-  return { clientId, token, channelId, base }
+  return { clientId, token, channels, base }
+}
+
+function listChannels() {
+  return config().channels
+}
+
+function findChannel(channelId) {
+  const id = String(channelId || '').trim()
+  if (!id) return null
+  return listChannels().find((c) => c.id === id) || null
 }
 
 function assertConfig() {
@@ -20,8 +49,8 @@ function assertConfig() {
   if (!cfg.clientId || !cfg.token) {
     return { error: '未配置点众接口，请在 backend/.env 填写 DIANZHONG_CLIENT_ID 与 DIANZHONG_TOKEN' }
   }
-  if (!cfg.channelId) {
-    return { error: '未填写点众渠道商ID，请向点众确认后写入 backend/.env 的 DIANZHONG_CHANNEL_ID' }
+  if (!cfg.channels.length) {
+    return { error: '未填写点众投放账号，请在 backend/.env 的 DIANZHONG_CHANNEL_ID 填写，格式如 117110:巨量1,117111:巨量2' }
   }
   return { cfg }
 }
@@ -35,8 +64,8 @@ function asInt(v) {
   return Number.isFinite(n) ? n : v
 }
 
-function authBody() {
-  const { clientId, token, channelId } = config()
+function authBody(channelId) {
+  const { clientId, token } = config()
   const timestamp = Math.floor(Date.now() / 1000)
   return {
     clientId: asInt(clientId),
@@ -46,11 +75,16 @@ function authBody() {
   }
 }
 
-async function postJson(path, extra) {
+async function postJson(path, extra, channelId) {
   const ready = assertConfig()
   if (ready.error) return { error: ready.error }
+  const id = String(channelId || '').trim()
+  if (!id) return { error: '请选择投放账号' }
+  if (!ready.cfg.channels.some((c) => c.id === id)) {
+    return { error: '投放账号不在已配置列表中' }
+  }
   const url = `${ready.cfg.base}${path}`
-  const body = { ...authBody(), ...extra }
+  const body = { ...authBody(id), ...extra }
   let res
   try {
     res = await fetch(url, {
@@ -97,7 +131,7 @@ async function createReferral(input) {
   if (input.callbackConfigId) extra.CallbackConfigId = String(input.callbackConfigId)
   if (input.chapterChargeStart != null) extra.chapterChargeStart = Number(input.chapterChargeStart) || 0
   if (input.chapterKandian != null) extra.chapterKandian = Number(input.chapterKandian) || 0
-  return postJson('/api/channelapi/referralsave', extra)
+  return postJson('/api/channelapi/referralsave', extra, input.channelId)
 }
 
 async function listReferrals(input = {}) {
@@ -109,7 +143,7 @@ async function listReferrals(input = {}) {
   if (input.referralId) extra.referralId = asInt(input.referralId)
   if (input.startTime) extra.startTime = asInt(input.startTime)
   if (input.endTime) extra.endTime = asInt(input.endTime)
-  return postJson('/api/channelapi/referrallist', extra)
+  return postJson('/api/channelapi/referrallist', extra, input.channelId)
 }
 
 async function updateReferral(input) {
@@ -120,12 +154,15 @@ async function updateReferral(input) {
   if (input.callbackConfigId != null) extra.CallbackConfigId = String(input.callbackConfigId)
   if (input.chapterChargeStart != null) extra.chapterChargeStart = String(input.chapterChargeStart)
   if (input.chapterKandian != null) extra.chapterKandian = String(input.chapterKandian)
-  return postJson('/api/channelapi/referralupdate', extra)
+  return postJson('/api/channelapi/referralupdate', extra, input.channelId)
 }
 
 module.exports = {
   MEDIA_SOURCES,
+  parseChannels,
   config,
+  listChannels,
+  findChannel,
   assertConfig,
   signKey,
   normalizeMediaSource,

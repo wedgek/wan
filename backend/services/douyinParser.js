@@ -379,16 +379,17 @@ async function fetchFreeBuilt(awemeId, douyinUrl) {
 /**
  * 解析入口：输入分享文案/链接，返回归一化素材信息。
  * @param {string} text
+ * @param {{ paidOnly?: boolean, onBeforePaid?: () => boolean, logId?: number, userId?: number }} [hooks]
+ *   paidOnly 为 true 时跳过免费接口，直接走付费。
+ *   onBeforePaid 返回 false 则不再打付费（同条记录已扣过 / 正在扣）。
  * @returns {Promise<object>}
  * @throws {DouyinParseError}
  */
-/**
- * @param {string} text
- * @param {{ onBeforePaid?: () => boolean, logId?: number, userId?: number }} [hooks]
- *   onBeforePaid 返回 false 则不再打付费（同条记录已扣过 / 正在扣）。
- */
 async function parse(text, hooks = {}) {
   const { awemeId, douyinUrl } = await resolveAwemeId(text)
+  if (hooks.paidOnly) {
+    return runPaidAfterHook(awemeId, douyinUrl, { hooks })
+  }
   let freeResult = null
   let fallbackReason = ''
 

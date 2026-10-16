@@ -1,7 +1,8 @@
 /**
  * 抖音解析：粘贴分享链接/文案 → 免费聚合优先，非原画/失败再由服务端付费兜底并落库。
  * 聚合侧（server / browser）入库在 app_settings.douyin.agg_side，仅超级管理员可改，全员生效。
- * 付费 token 只在服务端；需菜单权限 tools:douyin-parse:list；列表按数据范围过滤。
+ * 付费 token 只在服务端。记录按 biz_type 分开：ecommerce=电商（AI工具，缺省兼容历史数据），novel=小说（小说投流）。
+ * 电商权限 tools:douyin-parse:list，小说权限 novel:douyin-parse:list；列表按数据范围过滤。
  */
 const express = require('express')
 const { Readable } = require('stream')
@@ -23,6 +24,12 @@ const ENV_AGG_SIDE = (() => {
   return v === 'browser' || v === 'client' ? 'browser' : 'server'
 })()
 
+/** 本次提取是否只走付费。缺省 / false 保持「先免费，非原画再付费」。 */
+function readPaidOnly(body) {
+  const v = body && body.paidOnly
+  return v === true || v === 1 || v === '1' || v === 'true'
+}
+
 function parseAggSideStrict(raw) {
   const v = String(raw || '').trim().toLowerCase()
   if (v === 'browser' || v === 'client') return 'browser'
@@ -40,8 +47,11 @@ router.use(requireAuth)
 
 const database = () => db.getDb()
 
-/** @type {string} 与 menus.permission 一致 */
-const PERM_DOUYIN_PARSE = 'tools:douyin-parse:list'
+/** 与 menus.permission 一致。两类页面各自鉴权，缺省 bizType 视为电商以兼容旧请求。 */
+const PERM_DOUYIN_ECOMMERCE = 'tools:douyin-parse:list'
+const PERM_DOUYIN_NOVEL = 'novel:douyin-parse:list'
+const BIZ_ECOMMERCE = 'ecommerce'
+const BIZ_NOVEL = 'novel'
 
 function userHasPermission(userId, permission) {
   const d = database()
@@ -65,13 +75,59 @@ function userHasPermission(userId, permission) {
 }
 
 function requireDouyinParse(req, res, next) {
-  if (!userHasPermission(req.userId, PERM_DOUYIN_PARSE)) {
-    return res.json(fail(403, '无权限访问抖音素材提取'))
+  if (
+    userHasPermission(req.userId, PERM_DOUYIN_ECOMMERCE) ||
+    userHasPermission(req.userId, PERM_DOUYIN_NOVEL)
+  ) {
+    return next()
   }
-  next()
+  return res.json(fail(403, '无权限访问抖音素材提取'))
 }
 
 router.use(requireDouyinParse)
+
+/** 请求里的类别。未传、无法识别时归电商，旧页面和历史调用不用改。 */
+function readBizType(req) {
+  const q = req.query && req.query.bizType
+  const b = req.body && req.body.bizType
+  const raw = String(q != null && String(q).trim() !== '' ? q : b || '')
+    .trim()
+    .toLowerCase()
+  if (raw === BIZ_NOVEL || raw === '小说') return BIZ_NOVEL
+  return BIZ_ECOMMERCE
+}
+
+function permForBiz(bizType) {
+  return bizType === BIZ_NOVEL ? PERM_DOUYIN_NOVEL : PERM_DOUYIN_ECOMMERCE
+}
+
+/** 校验当前类别权限。不通过时已写响应，返回 null。http=true 时用真实 HTTP 403（下载代理）。 */
+function takeBiz(req, res, http = false) {
+  const bizType = readBizType(req)
+  if (!userHasPermission(req.userId, permForBiz(bizType))) {
+    const msg = bizType === BIZ_NOVEL ? '无权限访问小说抖音素材提取' : '无权限访问抖音素材提取'
+    if (http) res.status(403).json(fail(403, msg))
+    else res.json(fail(403, msg))
+    return null
+  }
+  return bizType
+}
+
+function rowBizType(row) {
+  const v = String((row && row.biz_type) || '')
+    .trim()
+    .toLowerCase()
+  return v === BIZ_NOVEL ? BIZ_NOVEL : BIZ_ECOMMERCE
+}
+
+/** 列表条件：小说只看 novel；电商含空值和 ecommerce，把迁移前的记录留在原页面。 */
+function bizWhere(bizType) {
+  if (bizType === BIZ_NOVEL) return { sql: `j.biz_type = ?`, params: [BIZ_NOVEL] }
+  return {
+    sql: `(j.biz_type IS NULL OR TRIM(j.biz_type) = '' OR j.biz_type = ?)`,
+    params: [BIZ_ECOMMERCE],
+  }
+}
 
 /**
  * 惰性超时兜底：把「解析中」但已超过阈值的行判超时失败。
@@ -110,6 +166,7 @@ function rowToLog(r) {
   return {
     id: r.id,
     userId: r.user_id,
+    bizType: rowBizType(r),
     username: r.username != null ? String(r.username) : '',
     nickname: r.nickname != null ? String(r.nickname) : '',
     inputText: r.input_text || '',
@@ -147,15 +204,15 @@ function getLogById(id) {
 }
 
 /** 插入一条「解析中」占位记录，立即返回 id（真正解析走后台） */
-function insertPendingLog(userId, inputText) {
+function insertPendingLog(userId, inputText, bizType) {
   const d = database()
   const info = d
     .prepare(
       `INSERT INTO douyin_parse_logs
-        (user_id, input_text, status, created_at, updated_at)
-       VALUES (?, ?, 'processing', datetime('now'), datetime('now'))`,
+        (user_id, input_text, status, biz_type, created_at, updated_at)
+       VALUES (?, ?, 'processing', ?, datetime('now'), datetime('now'))`,
     )
-    .run(Number(userId), String(inputText || '').slice(0, 2000))
+    .run(Number(userId), String(inputText || '').slice(0, 2000), bizType === BIZ_NOVEL ? BIZ_NOVEL : BIZ_ECOMMERCE)
   return Number(info.lastInsertRowid)
 }
 
@@ -226,12 +283,14 @@ function markRowSuccess(id, result, durationMs) {
  * duration_ms = 任务端到端挂钟时间（进入解析 → 终态），含内部重试与退避。
  * 对标云厂商「任务耗时」：end_time - start_time，不是把各次请求耗时手工相加。
  */
-async function runParseIntoRow(id, text) {
+async function runParseIntoRow(id, text, opts = {}) {
   const started = Date.now()
   let usedPaid = false
+  const paidOnly = Boolean(opts.paidOnly)
   const row = getLogById(id)
   try {
     const result = await douyinParser.parse(text, {
+      paidOnly,
       onBeforePaid: () => {
         usedPaid = claimPaidAttempt(id)
         return usedPaid
@@ -344,9 +403,14 @@ router.get('/quota', async (req, res) => {
 /** 本站付费 details 调用记录（对账用，按数据范围） */
 router.get('/paid-calls', (req, res) => {
   try {
+    const bizType = takeBiz(req, res)
+    if (!bizType) return
     const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 20))
     const conds = []
     const params = []
+    const bizPart = bizWhere(bizType)
+    conds.push(bizPart.sql)
+    params.push(...bizPart.params)
     const scopePart = dataScope.douyinLogsScopeClause(req.userId)
     if (scopePart.scope && scopePart.scope.mode === 'self') {
       conds.push('COALESCE(c.user_id, j.user_id) = ?')
@@ -360,7 +424,7 @@ router.get('/paid-calls', (req, res) => {
       scopeSql: conds.join(' AND '),
       scopeParams: params,
     })
-    res.json(ok({ list, localUsedCount: douyinPaid.countLocalPaidCalls() }))
+    res.json(ok({ list, localUsedCount: douyinPaid.countLocalPaidCalls(bizType) }))
   } catch (e) {
     console.error('[douyin] paid-calls', e && e.message)
     res.json(fail(500, '读取付费调用记录失败'))
@@ -406,10 +470,13 @@ router.post('/resolve', async (req, res) => {
  */
 router.post('/logs/:id/client-complete', (req, res) => {
   try {
+    const bizType = takeBiz(req, res)
+    if (!bizType) return
     const id = Number(req.params.id)
     if (!id) return res.json(fail(400, '参数错误'))
     const row = getLogById(id)
     if (!row) return res.json(fail(404, '记录不存在'))
+    if (rowBizType(row) !== bizType) return res.json(fail(403, '记录不属于当前类别'))
     const check = dataScope.assertUserInScope(req.userId, row.user_id)
     if (!check.ok) return res.json(fail(403, check.msg || '无权操作该记录'))
 
@@ -472,23 +539,27 @@ router.post('/logs/:id/client-complete', (req, res) => {
   }
 })
 
-/** 解析：粘贴文案/链接（支持多条批量）→ 立即建「解析中」记录并返回；聚合侧读库，server 后台解析 / browser 由前端回写 */
+/** 解析：粘贴文案/链接（支持多条批量）→ 立即建「解析中」记录并返回；聚合侧读库，server 后台解析 / browser 由前端回写。paidOnly 时跳过免费，服务端直接付费。 */
 router.post('/parse', (req, res) => {
+  const bizType = takeBiz(req, res)
+  if (!bizType) return
   const text = String((req.body && req.body.text) || '').trim()
   if (!text) return res.json(fail(400, '请输入抖音分享链接或文案'))
   const inputs = douyinParser.splitInputs(text)
   if (!inputs.length) return res.json(fail(400, '请输入抖音分享链接或文案'))
   const aggSide = getAggSide()
+  const paidOnly = readPaidOnly(req.body)
 
   const created = []
   for (const input of inputs) {
-    const id = insertPendingLog(req.userId, input)
+    const id = insertPendingLog(req.userId, input, bizType)
     created.push({ id, input })
   }
-  res.json(ok({ list: created.map((c) => rowToLog(getLogById(c.id))), aggSide }))
-  if (aggSide === 'server') {
+  res.json(ok({ list: created.map((c) => rowToLog(getLogById(c.id))), aggSide, paidOnly }))
+  // 仅付费不走浏览器免费聚合，一律由服务端打付费接口
+  if (aggSide === 'server' || paidOnly) {
     for (const c of created) {
-      Promise.resolve().then(() => runParseIntoRow(c.id, c.input))
+      Promise.resolve().then(() => runParseIntoRow(c.id, c.input, { paidOnly }))
     }
   }
 })
@@ -496,16 +567,20 @@ router.post('/parse', (req, res) => {
 /** 重新获取：把记录置为「解析中」立即返回；聚合侧读库 */
 router.post('/logs/:id/reparse', (req, res) => {
   try {
+    const bizType = takeBiz(req, res)
+    if (!bizType) return
     const id = Number(req.params.id)
     if (!id) return res.json(fail(400, '参数错误'))
     const row = getLogById(id)
     if (!row) return res.json(fail(404, '记录不存在'))
+    if (rowBizType(row) !== bizType) return res.json(fail(403, '记录不属于当前类别'))
     const check = dataScope.assertUserInScope(req.userId, row.user_id)
     if (!check.ok) return res.json(fail(403, check.msg || '无权操作该记录'))
 
     const text = String(row.input_text || row.douyin_url || '').trim()
     if (!text) return res.json(fail(400, '该记录缺少原始链接，无法重新获取'))
     const aggSide = getAggSide()
+    const paidOnly = readPaidOnly(req.body)
 
     // 清空旧结果，避免前端/Network 里还带着上次的 resultUrl，误判「已经成功」
     database()
@@ -518,9 +593,9 @@ router.post('/logs/:id/reparse', (req, res) => {
          WHERE id = ?`,
       )
       .run(id)
-    res.json(ok({ ...rowToLog(getLogById(id)), aggSide }))
-    if (aggSide === 'server') {
-      Promise.resolve().then(() => runParseIntoRow(id, text))
+    res.json(ok({ ...rowToLog(getLogById(id)), aggSide, paidOnly }))
+    if (aggSide === 'server' || paidOnly) {
+      Promise.resolve().then(() => runParseIntoRow(id, text, { paidOnly }))
     }
   } catch (e) {
     console.error('[douyin] reparse', e.message)
@@ -531,6 +606,8 @@ router.post('/logs/:id/reparse', (req, res) => {
 /** 轻量状态轮询：仅返回指定 id（数据范围内）的最新记录，用于前端更新「解析中」行 */
 router.get('/logs/status', (req, res) => {
   try {
+    const bizType = takeBiz(req, res)
+    if (!bizType) return
     reconcileStaleProcessing()
     const ids = String(req.query.ids || '')
       .split(',')
@@ -540,6 +617,9 @@ router.get('/logs/status', (req, res) => {
     if (!ids.length) return res.json(ok({ list: [] }))
     const conds = [`j.id IN (${ids.map(() => '?').join(',')})`]
     const params = [...ids]
+    const bizPart = bizWhere(bizType)
+    conds.push(bizPart.sql)
+    params.push(...bizPart.params)
     const scopePart = dataScope.douyinLogsScopeClause(req.userId)
     if (scopePart.sql) {
       conds.push(scopePart.sql)
@@ -564,10 +644,13 @@ router.get('/logs/status', (req, res) => {
 /** 删除：仅可删除数据范围内的记录 */
 router.delete('/logs/:id', (req, res) => {
   try {
+    const bizType = takeBiz(req, res)
+    if (!bizType) return
     const id = Number(req.params.id)
     if (!id) return res.json(fail(400, '参数错误'))
     const row = getLogById(id)
     if (!row) return res.json(fail(404, '记录不存在'))
+    if (rowBizType(row) !== bizType) return res.json(fail(403, '记录不属于当前类别'))
     const check = dataScope.assertUserInScope(req.userId, row.user_id)
     if (!check.ok) return res.json(fail(403, check.msg || '无权删除该记录'))
     database().prepare('DELETE FROM douyin_parse_logs WHERE id = ?').run(id)
@@ -585,10 +668,13 @@ router.delete('/logs/:id', (req, res) => {
 router.get('/logs/:id/download', async (req, res) => {
   let upstreamAbort = null
   try {
+    const bizType = takeBiz(req, res, true)
+    if (!bizType) return
     const id = Number(req.params.id)
     if (!id) return res.status(400).json(fail(400, '参数错误'))
     const row = getLogById(id)
     if (!row) return res.status(404).json(fail(404, '记录不存在'))
+    if (rowBizType(row) !== bizType) return res.status(403).json(fail(403, '记录不属于当前类别'))
     const check = dataScope.assertUserInScope(req.userId, row.user_id)
     if (!check.ok) return res.status(403).json(fail(403, check.msg || '无权下载该记录'))
 
@@ -669,6 +755,8 @@ router.get('/logs/:id/download', async (req, res) => {
 /** 分页：按数据范围过滤的解析记录 */
 router.get('/logs/page', (req, res) => {
   try {
+    const bizType = takeBiz(req, res)
+    if (!bizType) return
     reconcileStaleProcessing()
     const pageNo = Math.max(1, parseInt(req.query.pageNo, 10) || 1)
     const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 20))
@@ -682,6 +770,9 @@ router.get('/logs/page', (req, res) => {
 
     const conds = ['1=1']
     const params = []
+    const bizPart = bizWhere(bizType)
+    conds.push(bizPart.sql)
+    params.push(...bizPart.params)
     const scopePart = dataScope.douyinLogsScopeClause(req.userId)
     if (scopePart.sql) {
       conds.push(scopePart.sql)

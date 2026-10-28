@@ -90,6 +90,13 @@ export function fmtNum(n, digits = 2) {
   return x.toLocaleString("zh-CN", { maximumFractionDigits: digits })
 }
 
+export function fmtPct(ratio, digits = 1) {
+  if (ratio == null || ratio === "") return "—"
+  const x = Number(ratio)
+  if (!Number.isFinite(x)) return "—"
+  return `${(x * 100).toLocaleString("zh-CN", { maximumFractionDigits: digits })}%`
+}
+
 export function bookTitle(row) {
   if (!row) return "—"
   const name = row.name || row.bookName || "未命名"
@@ -107,7 +114,15 @@ export function mediaSourceLabel(value) {
   return hit ? hit.label : value || "—"
 }
 
-export function defaultPromoName({ bookName, channelLabel, mediaSource }) {
+export const PROMO_NAME_PREFIX = "点众-倾心书馆-公共配置"
+
+export function publicConfigPromoName(templateName) {
+  const n = String(templateName || "").trim()
+  return (n ? `${PROMO_NAME_PREFIX}-${n}` : PROMO_NAME_PREFIX).slice(0, 60)
+}
+
+export function defaultPromoName({ bookName, channelLabel, mediaSource, rechargeName }) {
+  if (rechargeName) return publicConfigPromoName(rechargeName)
   const media = MEDIA_SOURCE_OPTIONS.find((x) => x.value === mediaSource)
   const parts = [String(bookName || "").trim(), String(channelLabel || "").trim(), media ? media.label : ""]
   return parts.filter(Boolean).join("-").slice(0, 60)

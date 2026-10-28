@@ -157,8 +157,60 @@ async function updateReferral(input) {
   return postJson('/api/channelapi/referralupdate', extra, input.channelId)
 }
 
+const LOCKED_RECHARGE_NAMES = new Set(['39.9', '29.9', '9.9', '3.9', '2.9', '1.9'])
+const PROMO_NAME_PREFIX = '点众-倾心书馆-公共配置'
+
+function isLockedRechargeName(name) {
+  return LOCKED_RECHARGE_NAMES.has(String(name || '').trim())
+}
+
+function isDisabledRechargeName(name) {
+  const s = String(name || '')
+  return /保留|系统推荐/.test(s)
+}
+
+function publicConfigPromoName(templateName) {
+  const n = String(templateName || '').trim()
+  return (n ? `${PROMO_NAME_PREFIX}-${n}` : PROMO_NAME_PREFIX).slice(0, 60)
+}
+
+function isRealBookName(name) {
+  const n = String(name || '').trim()
+  return Boolean(n && !n.startsWith('点众-'))
+}
+
+function parseBookIds(raw) {
+  const seen = new Set()
+  const out = []
+  for (const part of String(raw == null ? '' : raw).split(/[\s,，;；]+/)) {
+    const id = String(part || '').trim()
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
+  return out
+}
+
+function pickRemoteList(data) {
+  if (!data) return []
+  if (Array.isArray(data)) return data
+  if (Array.isArray(data.list)) return data.list
+  if (Array.isArray(data.records)) return data.records
+  if (Array.isArray(data.rows)) return data.rows
+  if (data.data && Array.isArray(data.data)) return data.data
+  return []
+}
+
+async function listBatches(input = {}) {
+  const remote = await postJson('/api/channelapi/batchlist', {}, input.channelId)
+  if (remote.error) return remote
+  return { data: pickRemoteList(remote.data), raw: remote.raw }
+}
+
 module.exports = {
   MEDIA_SOURCES,
+  LOCKED_RECHARGE_NAMES,
+  PROMO_NAME_PREFIX,
   parseChannels,
   config,
   listChannels,
@@ -166,7 +218,13 @@ module.exports = {
   assertConfig,
   signKey,
   normalizeMediaSource,
+  isLockedRechargeName,
+  isDisabledRechargeName,
+  publicConfigPromoName,
+  isRealBookName,
+  parseBookIds,
   createReferral,
   listReferrals,
   updateReferral,
+  listBatches,
 }

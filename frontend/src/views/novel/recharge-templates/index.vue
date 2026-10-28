@@ -4,12 +4,33 @@
       <div class="page-filter-left filters-wrap">
         <el-input
           v-model="tableParams.keyword"
-          placeholder="名称 / 档位ID / 备注"
+          placeholder="名称 / 档位ID / 创建人"
           class="filter-input-keyword"
           :suffix-icon="$icons.Search"
           clearable
           clear-icon="Close"
         />
+        <el-select
+          v-model="tableParams.channel"
+          placeholder="投放账号"
+          class="filter-select-sm"
+          clearable
+          clear-icon="Close"
+          :suffix-icon="$icons.ArrowDown"
+        >
+          <el-option v-for="c in channels" :key="c.id" :label="c.label" :value="c.id" />
+        </el-select>
+        <el-select
+          v-model="tableParams.enabled"
+          placeholder="投入使用"
+          class="filter-select-sm"
+          clearable
+          clear-icon="Close"
+          :suffix-icon="$icons.ArrowDown"
+        >
+          <el-option label="投入使用" value="1" />
+          <el-option label="未投入使用" value="0" />
+        </el-select>
         <el-button type="primary" @click="tableSearch">查询</el-button>
         <el-button @click="resetTable">重置</el-button>
       </div>
@@ -17,7 +38,7 @@
 
     <div class="page-table-header">
       <el-button type="primary" :icon="$icons.Plus" @click="openEdit()">新增模板</el-button>
-      <el-button :loading="importing" @click="importFromLinks">从已同步链接带入</el-button>
+      <el-button :icon="$icons.Refresh" :loading="refreshing" @click="refreshRemote">从点众拉取</el-button>
     </div>
 
     <div class="page-table-box table-wrap">
@@ -28,27 +49,28 @@
         height="100%"
         :header-cell-style="{ 'text-align': 'center' }"
       >
-        <el-table-column prop="name" label="模板名称" min-width="160" show-overflow-tooltip />
-        <el-table-column prop="batchId" label="档位ID" min-width="160" show-overflow-tooltip>
+        <el-table-column prop="batchId" label="模板ID" width="130" align="center">
+          <template #default="{ row }">{{ row.batchId || "—" }}</template>
+        </el-table-column>
+        <el-table-column prop="creator" label="创建人" width="140" align="center" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.creator || "—" }}</template>
+        </el-table-column>
+        <el-table-column prop="name" label="充值模板名称" min-width="160" show-overflow-tooltip />
+        <el-table-column prop="createTime" label="创建时间" width="170" align="center" />
+        <el-table-column prop="updateTime" label="更新时间" width="170" align="center" />
+        <el-table-column label="投放账号" width="110" align="center">
+          <template #default="{ row }">{{ channelLabel(row.channelId, channels) }}</template>
+        </el-table-column>
+        <el-table-column label="投入使用" width="110" align="center" fixed="right">
           <template #default="{ row }">
-            <span v-if="row.batchId">{{ row.batchId }}</span>
-            <span v-else class="muted">未填</span>
+            <el-switch :model-value="row.enabled" @change="(v) => onToggle(row, v)" />
           </template>
         </el-table-column>
-        <el-table-column prop="remark" label="备注" min-width="160" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.remark || "—" }}</template>
-        </el-table-column>
-        <el-table-column label="推广模板" width="100" align="center">
-          <template #default="{ row }">{{ row.promoTplCount || 0 }}</template>
-        </el-table-column>
-        <el-table-column label="已用链接" width="100" align="center">
-          <template #default="{ row }">{{ row.linkCount || 0 }}</template>
-        </el-table-column>
-        <el-table-column prop="updateTime" label="更新时间" width="170" align="center" />
         <el-table-column label="操作" width="140" fixed="right" align="center">
           <template #default="{ row }">
             <el-button type="primary" link @click="openEdit(row)">编辑</el-button>
-            <el-button type="danger" link @click="onDelete(row)">删除</el-button>
+            <el-button v-if="!row.locked" type="danger" link @click="onDelete(row)">删除</el-button>
+            <span v-else class="muted">锁定</span>
           </template>
         </el-table-column>
       </el-table>
@@ -66,16 +88,21 @@
     <el-dialog
       v-model="editVisible"
       :title="editForm.id ? '编辑充值模板' : '新增充值模板'"
-      width="460px"
+      width="480px"
       append-to-body
       destroy-on-close
     >
-      <el-form ref="editRef" :model="editForm" :rules="editRules" label-width="88px">
+      <el-form ref="editRef" :model="editForm" :rules="editRules" label-width="96px">
         <el-form-item label="模板名称" prop="name">
-          <el-input v-model="editForm.name" maxlength="40" placeholder="例如：常规档 / 高价档" />
+          <el-input v-model="editForm.name" maxlength="40" placeholder="例如：9.9" />
         </el-form-item>
         <el-form-item label="档位ID" prop="batchId">
-          <el-input v-model="editForm.batchId" placeholder="点众 batchId，创建链接时会带上" />
+          <el-input v-model="editForm.batchId" placeholder="点众模板 ID，创建链接时会带上" />
+        </el-form-item>
+        <el-form-item label="投放账号">
+          <el-select v-model="editForm.channelId" clearable placeholder="可选" style="width: 100%">
+            <el-option v-for="c in channels" :key="c.id" :label="c.label" :value="c.id" />
+          </el-select>
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="editForm.remark" type="textarea" :rows="2" maxlength="120" placeholder="可选" />
@@ -93,24 +120,30 @@
 import { useTable } from "@/hooks/useTable"
 import CzPagination from "@/components/cz-pagination/index.vue"
 import request from "@/request"
+import { channelLabel } from "../shared"
 
-const importing = ref(false)
+const refreshing = ref(false)
 const editVisible = ref(false)
 const saving = ref(false)
 const editRef = ref(null)
+const channels = ref([])
 const editForm = reactive({
   id: 0,
   name: "",
   batchId: "",
+  channelId: "",
   remark: "",
 })
 
 const editRules = {
   name: [{ required: true, message: "请填写模板名称", trigger: "blur" }],
+  batchId: [{ required: true, message: "请填写档位ID", trigger: "blur" }],
 }
 
 const defaultTableParams = () => ({
   keyword: "",
+  channel: "",
+  enabled: "",
   pageNo: 1,
   pageSize: 20,
 })
@@ -121,13 +154,20 @@ const { tableParams, tableData, tableTotal, tableLoading, getTableData, tableSea
 )
 
 onMounted(() => {
+  loadChannels()
   getTableData()
 })
+
+async function loadChannels() {
+  const res = await request({ url: "/admin-api/novel/promo-links/dianzhong/channels" })
+  if (res.code === 0 && Array.isArray(res.data)) channels.value = res.data
+}
 
 function openEdit(row) {
   editForm.id = row?.id || 0
   editForm.name = row?.name || ""
   editForm.batchId = row?.batchId || ""
+  editForm.channelId = row?.channelId || ""
   editForm.remark = row?.remark || ""
   editVisible.value = true
 }
@@ -145,6 +185,7 @@ async function saveEdit() {
       data: {
         name: editForm.name,
         batchId: editForm.batchId,
+        channelId: editForm.channelId,
         remark: editForm.remark,
       },
     })
@@ -160,28 +201,47 @@ async function saveEdit() {
   }
 }
 
-async function importFromLinks() {
-  importing.value = true
+async function onToggle(row, enabled) {
+  const prev = row.enabled
+  row.enabled = enabled
+  const res = await request({
+    url: `/admin-api/novel/recharge-templates/${row.id}/enabled`,
+    method: "PATCH",
+    data: { enabled: enabled ? 1 : 0 },
+  })
+  if (res.code === 0) {
+    ElMessage.success(enabled ? "已投入使用" : "已设为未投入使用")
+    Object.assign(row, res.data || {})
+  } else {
+    row.enabled = prev
+    ElMessage.error(res.msg || "更新失败")
+  }
+}
+
+async function refreshRemote() {
+  refreshing.value = true
   try {
     const res = await request({
-      url: "/admin-api/novel/recharge-templates/import-from-links",
+      url: "/admin-api/novel/recharge-templates/dianzhong/refresh",
       method: "POST",
+      data: { channelId: tableParams.channel || undefined },
+      timeout: 60000,
     })
     if (res.code === 0) {
-      const n = res.data?.created || 0
-      ElMessage.success(n ? `已带入 ${n} 条` : "没有新的档位可带入")
+      ElMessage.success(`已同步 ${res.data?.upserted || 0} 条`)
+      if (res.data?.warnings?.length) ElMessage.warning(res.data.warnings.join("；"))
       getTableData()
     } else {
-      ElMessage.error(res.msg || "带入失败")
+      ElMessage.error(res.msg || "拉取失败")
     }
   } finally {
-    importing.value = false
+    refreshing.value = false
   }
 }
 
 async function onDelete(row) {
   try {
-    await ElMessageBox.confirm(`删除充值模板「${row.name}」？关联的推广模板会去掉该档位。`, "提示", {
+    await ElMessageBox.confirm(`删除充值模板「${row.name}」？仅从本系统移除，点众上仍保留。`, "提示", {
       confirmButtonText: "确定",
       cancelButtonText: "取消",
       type: "warning",

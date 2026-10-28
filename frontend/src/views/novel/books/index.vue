@@ -90,7 +90,6 @@
               标为已投放
             </el-button>
             <el-button v-else type="primary" link @click="setLaunch(row, false)">取消投放</el-button>
-            <el-button type="primary" link @click="openPromo(row)">创建链接</el-button>
             <el-button v-if="row.latestMonitor" type="primary" link @click="copyText(row.latestMonitor)">复制监测链</el-button>
             <el-button type="primary" link @click="drawerRef?.show(row.id, 'mat')">看素材</el-button>
           </template>
@@ -108,12 +107,6 @@
     </div>
 
     <BookDrawer ref="drawerRef" />
-    <PromoCreateDialog
-      v-model="promoVisible"
-      :book-id="promoBookId"
-      :book-name="promoBookName"
-      @created="getTableData"
-    />
 
     <el-drawer v-model="recentVisible" title="最近导入" size="420px">
       <el-timeline v-if="recentBatches.length">
@@ -133,15 +126,11 @@ import CzPagination from "@/components/cz-pagination/index.vue"
 import request from "@/request"
 import { LAUNCH_STATUS_OPTIONS, copyText, typeLabel } from "../shared"
 import BookDrawer from "./book-drawer.vue"
-import PromoCreateDialog from "../components/promo-create-dialog.vue"
 
 const drawerRef = ref(null)
 const stores = ref([])
 const todayInfo = reactive({ imported: 0 })
 const importing = ref(false)
-const promoVisible = ref(false)
-const promoBookId = ref("")
-const promoBookName = ref("")
 const recentVisible = ref(false)
 const recentBatches = ref([])
 
@@ -178,12 +167,6 @@ async function loadToday() {
 async function loadRecent() {
   const res = await request({ url: "/admin-api/novel/sync/recent", method: "GET" })
   if (res.code === 0) recentBatches.value = res.data || []
-}
-
-function openPromo(row) {
-  promoBookId.value = row.id
-  promoBookName.value = row.name || ""
-  promoVisible.value = true
 }
 
 async function setLaunch(row, launched) {

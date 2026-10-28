@@ -16,7 +16,16 @@ const {
   mapPackRow,
   runImport,
 } = require('../services/novelImportService')
-const { parseChannels, signKey, normalizeMediaSource } = require('../services/dianzhongPromoClient')
+const {
+  parseChannels,
+  signKey,
+  normalizeMediaSource,
+  isLockedRechargeName,
+  isDisabledRechargeName,
+  publicConfigPromoName,
+  isRealBookName,
+  parseBookIds,
+} = require('../services/dianzhongPromoClient')
 
 assert.strictEqual(parseNumber('1,286.5'), 1286.5)
 assert.strictEqual(parseNumber('5.0W'), 50000)
@@ -396,5 +405,19 @@ assert.strictEqual(parsed[3].id, '117113')
 assert.deepStrictEqual(parseChannels('117110'), [{ id: '117110', label: '117110' }])
 assert.deepStrictEqual(parseChannels(''), [])
 assert.strictEqual(parseChannels('117110:巨量1,117110:重复').length, 1)
+
+assert.strictEqual(isLockedRechargeName('9.9'), true)
+assert.strictEqual(isLockedRechargeName('39.9'), true)
+assert.strictEqual(isLockedRechargeName('爆量模板系统推荐'), false)
+assert.strictEqual(isDisabledRechargeName('爆量模板系统推荐'), true)
+assert.strictEqual(isDisabledRechargeName('保留档'), true)
+assert.strictEqual(isDisabledRechargeName('9.9'), false)
+assert.strictEqual(isRealBookName('夏日谎'), true)
+assert.strictEqual(isRealBookName(''), false)
+assert.strictEqual(isRealBookName('点众-倾心书馆-公共配置-9.9'), false)
+assert.strictEqual(publicConfigPromoName('9.9'), '点众-倾心书馆-公共配置-9.9')
+assert.strictEqual(publicConfigPromoName('39.9'), '点众-倾心书馆-公共配置-39.9')
+assert.deepStrictEqual(parseBookIds('11010566526\n11010558571'), ['11010566526', '11010558571'])
+assert.deepStrictEqual(parseBookIds('11010566526, 11010558571，11010566526'), ['11010566526', '11010558571'])
 
 console.log('novel-import.test.cjs ok')

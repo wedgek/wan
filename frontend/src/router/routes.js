@@ -218,6 +218,17 @@ export const staticRoutes = [
     },
   },
   {
+    path: "/novel/recharge-templates",
+    name: "menuNovelRechargeTemplates",
+    component: () => import("@/views/novel/recharge-templates/index.vue"),
+    meta: {
+      requiresAuth: true,
+      showNavbar: true,
+      showSidebar: true,
+      title: "充值模板",
+    },
+  },
+  {
     path: "/novel/promo-links",
     name: "menuNovelPromoLinks",
     component: () => import("@/views/novel/promo-links/index.vue"),
@@ -237,17 +248,6 @@ export const staticRoutes = [
       showNavbar: true,
       showSidebar: true,
       title: "推广模板",
-    },
-  },
-  {
-    path: "/novel/recharge-templates",
-    name: "menuNovelRechargeTemplates",
-    component: () => import("@/views/novel/recharge-templates/index.vue"),
-    meta: {
-      requiresAuth: true,
-      showNavbar: true,
-      showSidebar: true,
-      title: "充值模板",
     },
   },
   {

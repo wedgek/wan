@@ -202,32 +202,107 @@ function rowToMaterial(r) {
   }
 }
 
+function blankZero(v) {
+  const s = String(v == null ? '' : v).trim()
+  return !s || s === '0' ? '' : s
+}
+
+function splitLaunchPath(path) {
+  const s = String(path || '').trim()
+  const i = s.indexOf('?')
+  if (i < 0) return { launchPage: s, launchQuery: '' }
+  return { launchPage: s.slice(0, i), launchQuery: s.slice(i + 1) }
+}
+
+function goodsTypeLabel(goods) {
+  const n = Number(goods)
+  if (n === 0) return '自定义模板'
+  if (n === 1) return '系统模板'
+  return blankZero(goods) || '自定义模板'
+}
+
+function rechargeNameOf(r) {
+  const named = String(r.recharge_name || '').trim()
+  if (named) return named
+  const m = String(r.name || '').match(/(\d+(?:\.\d+)?)\s*$/)
+  return m ? m[1] : ''
+}
+
+function displayBookName(name) {
+  const n = String(name || '').trim()
+  return dianzhong.isRealBookName(n) ? n : ''
+}
+
+function bookHasRealName(d, bookId) {
+  if (!bookId) return false
+  const row = d.prepare('SELECT name FROM novel_books WHERE id = ?').get(bookId)
+  return dianzhong.isRealBookName(row && row.name)
+}
+
+function applyRemoteBookTitle(d, bookId, rawTitle) {
+  const title = displayBookName(rawTitle)
+  if (!bookId || !title) return false
+  d.prepare(
+    `UPDATE novel_books SET name = CASE
+         WHEN name = '' OR name LIKE '点众-%' THEN ?
+         ELSE name END,
+       last_seen_at = datetime('now') WHERE id = ?`,
+  ).run(title, bookId)
+  return true
+}
+
+function asNullableNumber(v) {
+  if (v == null || v === '') return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
 function rowToPromo(r) {
   if (!r) return null
+  const path = r.path || r.url || ''
+  const launch = splitLaunchPath(path)
+  const callbackConfigId = blankZero(r.callback_config_id)
+  const rechargeAmount = asNullableNumber(r.snap_recharge_amount)
+  const rechargeUsers = asNullableNumber(r.snap_recharge_users)
+  const costRaw = asNullableNumber(r.mat_cost)
+  const cost = costRaw != null && costRaw > 0 ? costRaw : null
+  const recovery = cost != null && rechargeAmount != null ? rechargeAmount / cost : null
   return {
     id: r.id,
     bookId: r.book_id,
-    bookName: r.book_name || '',
+    bookName: displayBookName(r.book_name),
     externalBookId: r.external_book_id || '',
     store: r.store || r.book_store || '',
     name: r.name || '',
     url: r.url || '',
     channel: r.channel || '',
     status: r.status || 'active',
+    linkStatus: r.status === 'inactive' ? '下架' : '上架',
+    entryType: '小说',
     remark: r.remark || '',
     externalId: r.external_id || '',
     source: r.source || 'manual',
     referralId: r.referral_id || '',
     mediaSource: r.media_source || '',
-    path: r.path || '',
+    path,
+    launchPage: launch.launchPage,
+    launchQuery: launch.launchQuery,
     monitor1: r.monitor1 || '',
     monitor2: r.monitor2 || '',
     chapterIdx: r.chapter_idx != null && r.chapter_idx !== '' ? Number(r.chapter_idx) : null,
     chapterChargeStart: r.chapter_charge_start != null && r.chapter_charge_start !== '' ? Number(r.chapter_charge_start) : null,
     chapterKandian: r.chapter_kandian != null && r.chapter_kandian !== '' ? Number(r.chapter_kandian) : null,
     goods: r.goods || '',
+    goodsType: goodsTypeLabel(r.goods),
     goodsBatchId: r.goods_batch_id || '',
-    callbackConfigId: r.callback_config_id || '',
+    rechargeName: rechargeNameOf(r),
+    callbackSwitch: callbackConfigId ? '指定配置' : '按公共配置回传',
+    callbackConfigId,
+    rechargeAmount,
+    rechargeUsers,
+    cost,
+    recovery,
+    snapDate: r.snap_stat_date || '',
     createTime: fmtTime(r.created_at),
     updateTime: fmtTime(r.updated_at),
   }
@@ -480,9 +555,10 @@ router.get('/books/:id', requirePerm(PERM.books, '书籍'), (req, res) => {
       .all(id)
     const promoLinks = d
       .prepare(
-        `SELECT p.*, b.name AS book_name, b.external_book_id, b.store AS book_store
+        `SELECT p.*, b.name AS book_name, b.external_book_id, b.store AS book_store, rt.name AS recharge_name
          FROM novel_promo_links p
          LEFT JOIN novel_books b ON b.id = p.book_id
+         LEFT JOIN novel_recharge_templates rt ON rt.batch_id != '' AND rt.batch_id = p.goods_batch_id
          WHERE p.book_id = ?
          ORDER BY p.id DESC`,
       )
@@ -670,12 +746,28 @@ router.get('/promo-links/page', requirePerm(PERM.promo, '推广链接'), (req, r
     const from = `
       FROM novel_promo_links p
       LEFT JOIN novel_books b ON b.id = p.book_id
+      LEFT JOIN novel_recharge_templates rt ON rt.batch_id != '' AND rt.batch_id = p.goods_batch_id
+      LEFT JOIN (
+        SELECT book_id, MAX(id) AS max_id FROM novel_book_snapshots GROUP BY book_id
+      ) snap_idx ON snap_idx.book_id = p.book_id
+      LEFT JOIN novel_book_snapshots bs ON bs.id = snap_idx.max_id
+      LEFT JOIN (
+        SELECT m.book_id AS book_id, SUM(ms.cost) AS cost
+        FROM novel_materials m
+        INNER JOIN (
+          SELECT material_id, MAX(id) AS max_id FROM novel_material_snapshots GROUP BY material_id
+        ) lm ON lm.material_id = m.id
+        INNER JOIN novel_material_snapshots ms ON ms.id = lm.max_id
+        GROUP BY m.book_id
+      ) mc ON mc.book_id = p.book_id
       WHERE ${where}
     `
     const total = d.prepare(`SELECT COUNT(*) AS c ${from}`).get(...params).c
     const rows = d
       .prepare(
-        `SELECT p.*, b.name AS book_name, b.external_book_id, b.store AS book_store
+        `SELECT p.*, b.name AS book_name, b.external_book_id, b.store AS book_store, rt.name AS recharge_name,
+                bs.recharge_amount AS snap_recharge_amount, bs.recharge_users AS snap_recharge_users,
+                bs.stat_date AS snap_stat_date, mc.cost AS mat_cost
          ${from}
          ORDER BY p.id DESC
          LIMIT ? OFFSET ?`,
@@ -727,8 +819,10 @@ function normalizePromoBody(body) {
 function fetchPromoRow(d, id) {
   return d
     .prepare(
-      `SELECT p.*, b.name AS book_name, b.external_book_id, b.store AS book_store
-       FROM novel_promo_links p LEFT JOIN novel_books b ON b.id = p.book_id
+      `SELECT p.*, b.name AS book_name, b.external_book_id, b.store AS book_store, rt.name AS recharge_name
+       FROM novel_promo_links p
+       LEFT JOIN novel_books b ON b.id = p.book_id
+       LEFT JOIN novel_recharge_templates rt ON rt.batch_id != '' AND rt.batch_id = p.goods_batch_id
        WHERE p.id = ?`,
     )
     .get(id)
@@ -750,18 +844,19 @@ function asOptInt(v) {
 
 function stringifyGoods(raw) {
   if (raw == null || raw === '') return ''
+  if (typeof raw === 'number') return String(raw)
   if (typeof raw === 'string') return raw.trim()
   if (Array.isArray(raw)) return raw.map((x) => stringifyGoods(x)).filter(Boolean).join(' / ')
   if (typeof raw === 'object') {
     const n = raw.name || raw.title || raw.goodsName || raw.goods_name || raw.desc
     if (n) return String(n).trim()
-    try {
-      return JSON.stringify(raw)
-    } catch {
-      return ''
-    }
+    return ''
   }
   return String(raw)
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function pickReferralList(data) {
@@ -794,21 +889,34 @@ function findOrCreateBookByExternal(d, externalBookId, store, name) {
   return Number(r.lastInsertRowid)
 }
 
+function asReferralItem(data, extra = {}) {
+  if (data == null) return extra
+  if (typeof data === 'number' || typeof data === 'string') {
+    return { ...extra, referralId: data }
+  }
+  if (typeof data === 'object') return { ...extra, ...data }
+  return extra
+}
+
 function upsertDianzhongReferral(d, item, fallbackBookId, fallbackChannel) {
   const referralId = String(pickField(item, ['referralId', 'referral_id', 'id']) || '').trim()
   const path = String(pickField(item, ['path', 'url', 'link', 'miniPath']) || '').trim()
   const monitor1 = String(pickField(item, ['monitor1', 'monitor_1', 'monitorUrl1']) || '').trim()
   const monitor2 = String(pickField(item, ['monitor2', 'monitor_2', 'monitorUrl2']) || '').trim()
   const name = String(pickField(item, ['name', 'channelName', 'title']) || '').trim()
+  const bookTitle = String(pickField(item, ['bookName', 'book_name', 'bookTitle', 'book_title']) || '').trim()
   const mediaSource = dianzhong.normalizeMediaSource(pickField(item, ['mediaSource', 'media_source', 'from']))
   const extBookId = String(pickField(item, ['bookId', 'book_id']) || '').trim()
   const channel = String(
     pickField(item, ['channelId', 'channel_id', 'channel']) || fallbackChannel || '',
   ).trim()
-  const url = path || monitor2 || monitor1 || (referralId ? `dianzhong:${referralId}` : '')
+  const url = path || (referralId ? `dianzhong:${referralId}` : '') || monitor2 || monitor1
   if (!url) return { error: '缺少 path' }
-  const bookId = fallbackBookId || findOrCreateBookByExternal(d, extBookId, '', name)
+  const bookId = fallbackBookId || findOrCreateBookByExternal(d, extBookId, '', bookTitle)
   if (!bookId) return { error: '找不到对应书籍' }
+  if (!applyRemoteBookTitle(d, bookId, bookTitle)) {
+    d.prepare(`UPDATE novel_books SET last_seen_at = datetime('now') WHERE id = ?`).run(bookId)
+  }
 
   const byRef = referralId
     ? d.prepare('SELECT id FROM novel_promo_links WHERE referral_id = ?').get(referralId)
@@ -873,7 +981,9 @@ function upsertDianzhongReferral(d, item, fallbackBookId, fallbackChannel) {
     )
     return { id: byRef.id, created: false }
   }
-  const byUrl = d.prepare('SELECT id FROM novel_promo_links WHERE book_id = ? AND url = ?').get(bookId, url)
+  const byUrl = referralId
+    ? null
+    : d.prepare('SELECT id FROM novel_promo_links WHERE book_id = ? AND url = ?').get(bookId, url)
   if (byUrl) {
     d.prepare(
       `UPDATE novel_promo_links SET
@@ -973,6 +1083,25 @@ async function syncReferralsFromRemote(d, input, fallbackBookId) {
   return { upserted, created, total, list: rows, channelId }
 }
 
+async function syncBookReferralsWithRetry(d, extBookId, channelId, localBookId, minCount) {
+  let synced
+  const need = Math.max(1, Number(minCount) || 1)
+  for (let i = 0; i < 5; i += 1) {
+    synced = await syncReferralsFromRemote(
+      d,
+      { bookId: extBookId, size: 100, channelId },
+      localBookId,
+    )
+    if (synced.error) return synced
+    const localCount = d
+      .prepare('SELECT COUNT(*) AS c FROM novel_promo_links WHERE book_id = ?')
+      .get(localBookId).c
+    if (localCount >= need && bookHasRealName(d, localBookId)) return synced
+    await sleep(i === 0 ? 500 : 800)
+  }
+  return synced
+}
+
 function promoTemplateSelectSql() {
   return `
     SELECT t.*, r.name AS recharge_name, r.batch_id AS recharge_batch_id
@@ -1030,6 +1159,21 @@ function rechargeSelectSql() {
   `
 }
 
+function unixToLocal(sec) {
+  const n = Number(sec)
+  if (!Number.isFinite(n) || n <= 0) return ''
+  const d = new Date(n * 1000)
+  if (Number.isNaN(d.getTime())) return ''
+  const p = (x) => String(x).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+
+function rechargeLockFlags(name) {
+  const locked = dianzhong.isLockedRechargeName(name) ? 1 : 0
+  const enabled = locked ? 1 : dianzhong.isDisabledRechargeName(name) ? 0 : 1
+  return { locked, enabled }
+}
+
 function rowToRechargeTemplate(r) {
   if (!r) return null
   return {
@@ -1037,10 +1181,15 @@ function rowToRechargeTemplate(r) {
     name: r.name || '',
     batchId: r.batch_id || '',
     remark: r.remark || '',
+    channelId: r.channel_id || '',
+    enabled: Number(r.enabled) === 1,
+    locked: Number(r.locked) === 1,
+    creator: r.creator || '',
     promoTplCount: Number(r.promo_tpl_count) || 0,
     linkCount: Number(r.link_count) || 0,
-    createTime: fmtTime(r.created_at),
-    updateTime: fmtTime(r.updated_at),
+    remoteCreateTime: fmtTime(r.remote_created_at),
+    createTime: fmtTime(r.remote_created_at || r.created_at),
+    updateTime: fmtTime(r.remote_updated_at || r.updated_at),
   }
 }
 
@@ -1048,7 +1197,9 @@ function normalizeRechargeTemplateBody(body) {
   const name = String((body && body.name) || '').trim()
   const batchId = String((body && body.batchId) || '').trim()
   const remark = String((body && body.remark) || '').trim()
-  return { name, batchId, remark }
+  const channelId = String((body && body.channelId) || '').trim()
+  const creator = String((body && body.creator) || '').trim()
+  return { name, batchId, remark, channelId, creator }
 }
 
 function findDupRechargeBatch(d, batchId, excludeId) {
@@ -1059,6 +1210,55 @@ function findDupRechargeBatch(d, batchId, excludeId) {
       .get(batchId, excludeId)
   }
   return d.prepare('SELECT id FROM novel_recharge_templates WHERE batch_id = ?').get(batchId)
+}
+
+function upsertRemoteRechargeTemplate(d, item, channelId) {
+  const batchId = String(pickField(item, ['id', 'batchId', 'batch_id']) || '').trim()
+  const name = String(pickField(item, ['name', 'title', 'goodsName']) || '').trim()
+  if (!batchId || !name) return { skipped: true }
+  const creator = String(pickField(item, ['creator', 'createUser', 'username', 'userName']) || '').trim()
+  const remoteCreated = unixToLocal(pickField(item, ['createtime', 'createTime', 'created_at']))
+  const remoteUpdated = unixToLocal(pickField(item, ['updatetime', 'updateTime', 'updated_at'])) || remoteCreated
+  const exist = d.prepare('SELECT * FROM novel_recharge_templates WHERE batch_id = ?').get(batchId)
+  if (exist) {
+    d.prepare(
+      `UPDATE novel_recharge_templates
+       SET name = ?, creator = CASE WHEN ? != '' THEN ? ELSE creator END,
+           channel_id = CASE WHEN channel_id = '' THEN ? ELSE channel_id END,
+           remote_created_at = CASE WHEN ? != '' THEN ? ELSE remote_created_at END,
+           remote_updated_at = CASE WHEN ? != '' THEN ? ELSE remote_updated_at END,
+           updated_at = datetime('now')
+       WHERE id = ?`,
+    ).run(
+      name,
+      creator,
+      creator,
+      channelId,
+      remoteCreated,
+      remoteCreated,
+      remoteUpdated,
+      remoteUpdated,
+      exist.id,
+    )
+    if (dianzhong.isLockedRechargeName(name) && Number(exist.locked) !== 1) {
+      d.prepare(
+        `UPDATE novel_recharge_templates SET locked = 1, enabled = 1, updated_at = datetime('now') WHERE id = ?`,
+      ).run(exist.id)
+    }
+    return { id: exist.id, created: false }
+  }
+  const flags = rechargeLockFlags(name)
+  const removed = d.prepare('SELECT 1 AS x FROM novel_recharge_removed WHERE batch_id = ?').get(batchId)
+  if (removed && Number(flags.locked) !== 1) flags.enabled = 0
+  const r = d
+    .prepare(
+      `INSERT INTO novel_recharge_templates
+         (name, batch_id, remark, channel_id, enabled, locked, creator, remote_created_at, remote_updated_at, updated_at)
+       VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, datetime('now'))`,
+    )
+    .run(name, batchId, channelId, flags.enabled, flags.locked, creator, remoteCreated, remoteUpdated)
+  if (removed) d.prepare('DELETE FROM novel_recharge_removed WHERE batch_id = ?').run(batchId)
+  return { id: Number(r.lastInsertRowid), created: true }
 }
 
 router.get('/promo-links/dianzhong/channels', requirePerm(PERM.promo, '推广链接'), (req, res) => {
@@ -1175,11 +1375,34 @@ router.delete('/promo-links/templates/:id', requirePerm(PERM.promo, '推广链�
   }
 })
 
+function rechargeWhere(query) {
+  const keyword = String((query && query.keyword) || '').trim()
+  const channel = String((query && (query.channel || query.channelId)) || '').trim()
+  const enabledRaw = String((query && query.enabled) || '').trim()
+  const where = []
+  const args = []
+  if (keyword) {
+    where.push(`(r.name LIKE ? OR r.batch_id LIKE ? OR r.remark LIKE ? OR r.creator LIKE ?)`)
+    const like = `%${keyword}%`
+    args.push(like, like, like, like)
+  }
+  if (channel) {
+    where.push('r.channel_id = ?')
+    args.push(channel)
+  }
+  if (enabledRaw === '1' || enabledRaw === '0') {
+    where.push('r.enabled = ?')
+    args.push(Number(enabledRaw))
+  }
+  return { clause: where.length ? `WHERE ${where.join(' AND ')}` : '', args }
+}
+
 router.get('/recharge-templates', requirePerm(PERM.promo, '充值模板'), (req, res) => {
   try {
+    const { clause, args } = rechargeWhere(req.query)
     const rows = database()
-      .prepare(`${rechargeSelectSql()} ORDER BY r.id DESC`)
-      .all()
+      .prepare(`${rechargeSelectSql()} ${clause} ORDER BY r.enabled DESC, r.id DESC`)
+      .all(...args)
     res.json(ok(rows.map(rowToRechargeTemplate)))
   } catch (e) {
     console.error('[novel] recharge templates list', e.message)
@@ -1190,19 +1413,11 @@ router.get('/recharge-templates', requirePerm(PERM.promo, '充值模板'), (req,
 router.get('/recharge-templates/page', requirePerm(PERM.promo, '充值模板'), (req, res) => {
   try {
     const { pageSize, offset } = pageParams(req.query)
-    const keyword = String(req.query.keyword || '').trim()
-    const where = []
-    const args = []
-    if (keyword) {
-      where.push(`(r.name LIKE ? OR r.batch_id LIKE ? OR r.remark LIKE ?)`)
-      const like = `%${keyword}%`
-      args.push(like, like, like)
-    }
-    const clause = where.length ? `WHERE ${where.join(' AND ')}` : ''
+    const { clause, args } = rechargeWhere(req.query)
     const d = database()
     const total = d.prepare(`SELECT COUNT(*) AS c FROM novel_recharge_templates r ${clause}`).get(...args).c
     const rows = d
-      .prepare(`${rechargeSelectSql()} ${clause} ORDER BY r.id DESC LIMIT ? OFFSET ?`)
+      .prepare(`${rechargeSelectSql()} ${clause} ORDER BY r.enabled DESC, r.id DESC LIMIT ? OFFSET ?`)
       .all(...args, pageSize, offset)
     res.json(ok({ list: rows.map(rowToRechargeTemplate), total }))
   } catch (e) {
@@ -1215,14 +1430,18 @@ router.post('/recharge-templates', requirePerm(PERM.promo, '充值模板'), (req
   try {
     const p = normalizeRechargeTemplateBody(req.body)
     if (!p.name) return res.json(fail(400, '请填写模板名称'))
+    if (!p.batchId) return res.json(fail(400, '请填写档位ID'))
     const d = database()
     if (findDupRechargeBatch(d, p.batchId)) return res.json(fail(400, '该档位ID已存在'))
+    if (p.channelId && !dianzhong.findChannel(p.channelId)) return res.json(fail(400, '投放账号不在已配置列表中'))
+    const flags = rechargeLockFlags(p.name)
     const r = d
       .prepare(
-        `INSERT INTO novel_recharge_templates (name, batch_id, remark, updated_at)
-         VALUES (?, ?, ?, datetime('now'))`,
+        `INSERT INTO novel_recharge_templates
+           (name, batch_id, remark, channel_id, enabled, locked, creator, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
       )
-      .run(p.name, p.batchId, p.remark)
+      .run(p.name, p.batchId, p.remark, p.channelId, flags.enabled, flags.locked, p.creator)
     const row = d.prepare(`${rechargeSelectSql()} WHERE r.id = ?`).get(Number(r.lastInsertRowid))
     res.json(ok(rowToRechargeTemplate(row)))
   } catch (e) {
@@ -1235,16 +1454,19 @@ router.put('/recharge-templates/:id', requirePerm(PERM.promo, '充值模板'), (
   try {
     const id = parseInt(req.params.id, 10) || 0
     const d = database()
-    const exist = d.prepare('SELECT id FROM novel_recharge_templates WHERE id = ?').get(id)
+    const exist = d.prepare('SELECT * FROM novel_recharge_templates WHERE id = ?').get(id)
     if (!exist) return res.json(fail(400, '充值模板不存在'))
     const p = normalizeRechargeTemplateBody(req.body)
     if (!p.name) return res.json(fail(400, '请填写模板名称'))
+    if (!p.batchId) return res.json(fail(400, '请填写档位ID'))
     if (findDupRechargeBatch(d, p.batchId, id)) return res.json(fail(400, '该档位ID已存在'))
+    if (p.channelId && !dianzhong.findChannel(p.channelId)) return res.json(fail(400, '投放账号不在已配置列表中'))
     d.prepare(
       `UPDATE novel_recharge_templates
-       SET name = ?, batch_id = ?, remark = ?, updated_at = datetime('now')
+       SET name = ?, batch_id = ?, remark = ?, channel_id = ?,
+           creator = CASE WHEN ? != '' THEN ? ELSE creator END, updated_at = datetime('now')
        WHERE id = ?`,
-    ).run(p.name, p.batchId, p.remark, id)
+    ).run(p.name, p.batchId, p.remark, p.channelId, p.creator, p.creator, id)
     res.json(ok(rowToRechargeTemplate(d.prepare(`${rechargeSelectSql()} WHERE r.id = ?`).get(id))))
   } catch (e) {
     console.error('[novel] recharge templates update', e.message)
@@ -1252,18 +1474,91 @@ router.put('/recharge-templates/:id', requirePerm(PERM.promo, '充值模板'), (
   }
 })
 
-router.delete('/recharge-templates/:id', requirePerm(PERM.promo, '充值模板'), (req, res) => {
+router.patch('/recharge-templates/:id/enabled', requirePerm(PERM.promo, '充值模板'), (req, res) => {
   try {
     const id = parseInt(req.params.id, 10) || 0
     const d = database()
     const exist = d.prepare('SELECT id FROM novel_recharge_templates WHERE id = ?').get(id)
     if (!exist) return res.json(fail(400, '充值模板不存在'))
+    const enabled = req.body && (req.body.enabled === false || req.body.enabled === 0 || req.body.enabled === '0') ? 0 : 1
+    d.prepare(`UPDATE novel_recharge_templates SET enabled = ?, updated_at = datetime('now') WHERE id = ?`).run(
+      enabled,
+      id,
+    )
+    res.json(ok(rowToRechargeTemplate(d.prepare(`${rechargeSelectSql()} WHERE r.id = ?`).get(id))))
+  } catch (e) {
+    console.error('[novel] recharge templates enabled', e.message)
+    res.json(fail(500, '更新投入使用状态失败'))
+  }
+})
+
+router.delete('/recharge-templates/:id', requirePerm(PERM.promo, '充值模板'), (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10) || 0
+    const d = database()
+    const exist = d.prepare('SELECT * FROM novel_recharge_templates WHERE id = ?').get(id)
+    if (!exist) return res.json(fail(400, '充值模板不存在'))
+    if (Number(exist.locked) === 1) return res.json(fail(400, '该模板已锁定，不能删除'))
     d.prepare('UPDATE novel_promo_templates SET recharge_template_id = NULL WHERE recharge_template_id = ?').run(id)
+    if (exist.batch_id) {
+      d.prepare('INSERT OR IGNORE INTO novel_recharge_removed (batch_id) VALUES (?)').run(exist.batch_id)
+    }
     d.prepare('DELETE FROM novel_recharge_templates WHERE id = ?').run(id)
     res.json(ok(true))
   } catch (e) {
     console.error('[novel] recharge templates delete', e.message)
     res.json(fail(500, '删除充值模板失败'))
+  }
+})
+
+router.post('/recharge-templates/dianzhong/refresh', requirePerm(PERM.promo, '充值模板'), async (req, res) => {
+  try {
+    const ready = dianzhong.assertConfig()
+    if (ready.error) return res.json(fail(400, ready.error))
+    const one = String((req.body && req.body.channelId) || '').trim()
+    const targets = one ? ready.cfg.channels.filter((c) => c.id === one) : ready.cfg.channels
+    if (!targets.length) return res.json(fail(400, '投放账号不在已配置列表中'))
+    const d = database()
+    let upserted = 0
+    let created = 0
+    let disabled = 0
+    const warnings = []
+    for (const ch of targets) {
+      const remote = await dianzhong.listBatches({ channelId: ch.id })
+      if (remote.error) {
+        warnings.push(`${ch.label}：${remote.error}`)
+        continue
+      }
+      const items = remote.data || []
+      if (!items.length) continue
+      const seen = new Set()
+      for (const item of items) {
+        const r = upsertRemoteRechargeTemplate(d, item, ch.id)
+        if (r.skipped) continue
+        const batchId = String(pickField(item, ['id', 'batchId', 'batch_id']) || '').trim()
+        if (batchId) seen.add(batchId)
+        upserted += 1
+        if (r.created) created += 1
+      }
+      const locals = d
+        .prepare(
+          `SELECT id, batch_id, locked, enabled FROM novel_recharge_templates
+           WHERE channel_id = ? AND batch_id != ''`,
+        )
+        .all(ch.id)
+      for (const row of locals) {
+        if (seen.has(String(row.batch_id)) || Number(row.locked) === 1 || Number(row.enabled) !== 1) continue
+        d.prepare(
+          `UPDATE novel_recharge_templates SET enabled = 0, updated_at = datetime('now') WHERE id = ?`,
+        ).run(row.id)
+        disabled += 1
+      }
+    }
+    if (warnings.length && !upserted) return res.json(fail(400, warnings.join('；')))
+    res.json(ok({ upserted, created, disabled, warnings }))
+  } catch (e) {
+    console.error('[novel] recharge templates refresh', e.message)
+    res.json(fail(500, '从点众拉取充值模板失败'))
   }
 })
 
@@ -1280,8 +1575,8 @@ router.post('/recharge-templates/import-from-links', requirePerm(PERM.promo, '�
     let created = 0
     let skipped = 0
     const ins = d.prepare(
-      `INSERT INTO novel_recharge_templates (name, batch_id, remark, updated_at)
-       VALUES (?, ?, '', datetime('now'))`,
+      `INSERT INTO novel_recharge_templates (name, batch_id, remark, enabled, locked, updated_at)
+       VALUES (?, ?, '', ?, ?, datetime('now'))`,
     )
     for (const row of rows) {
       const batchId = String(row.batch_id || '').trim()
@@ -1305,7 +1600,8 @@ router.post('/recharge-templates/import-from-links', requirePerm(PERM.promo, '�
           continue
         }
       }
-      ins.run(name, batchId)
+      const flags = rechargeLockFlags(name)
+      ins.run(name, batchId, flags.enabled, flags.locked)
       created += 1
     }
     res.json(ok({ created, skipped, scanned: rows.length }))
@@ -1360,10 +1656,12 @@ router.post('/promo-links/dianzhong/create', requirePerm(PERM.promo, '推广链�
       createdItems.push(created.data)
     }
     if (!createdItems.length) return res.json(fail(400, warnings.join('；') || '创建失败'))
-    const synced = await syncReferralsFromRemote(
+    const synced = await syncBookReferralsWithRetry(
       d,
-      { bookId: book.external_book_id, size: 100, channelId },
+      book.external_book_id,
+      channelId,
       book.id,
+      createdItems.length,
     )
     if (synced.error) {
       warnings.push(synced.error)
@@ -1389,6 +1687,87 @@ router.post('/promo-links/dianzhong/create', requirePerm(PERM.promo, '推广链�
   } catch (e) {
     console.error('[novel] promo dianzhong create', e.message)
     res.json(fail(500, '创建推广链接失败'))
+  }
+})
+
+router.post('/promo-links/dianzhong/batch-create', requirePerm(PERM.promo, '推广链接'), async (req, res) => {
+  try {
+    const body = req.body || {}
+    const channelId = String(body.channelId || '').trim()
+    if (!channelId) return res.json(fail(400, '请选择投放账号'))
+    if (!dianzhong.findChannel(channelId)) return res.json(fail(400, '投放账号不在已配置列表中'))
+    const bookIds = dianzhong.parseBookIds(body.bookIds != null ? body.bookIds : body.bookId)
+    if (!bookIds.length) return res.json(fail(400, '请填写书籍ID'))
+    const d = database()
+    const templates = d
+      .prepare(
+        `SELECT * FROM novel_recharge_templates
+         WHERE enabled = 1 AND batch_id != '' AND (channel_id = ? OR channel_id = '')
+         ORDER BY id ASC`,
+      )
+      .all(channelId)
+    if (!templates.length) return res.json(fail(400, '该账号没有投入使用的充值模板，请先到充值模板页从点众拉取并打开开关'))
+    const createdItems = []
+    const warnings = []
+    const syncedBooks = new Set()
+    for (const extBookId of bookIds) {
+      const localBookId = findOrCreateBookByExternal(d, extBookId, '', '')
+      let createdForBook = 0
+      for (const tpl of templates) {
+        const name = dianzhong.publicConfigPromoName(tpl.name)
+        const created = await dianzhong.createReferral({
+          bookId: extBookId,
+          name,
+          mediaSource: 'dy',
+          chapterIdx: 1,
+          channelId,
+          batchId: tpl.batch_id,
+        })
+        if (created.error) {
+          warnings.push(`${extBookId} / ${tpl.name}：${created.error}`)
+          continue
+        }
+        createdItems.push(created.data)
+        createdForBook += 1
+        upsertDianzhongReferral(
+          d,
+          asReferralItem(created.data, {
+            bookId: extBookId,
+            name,
+            mediaSource: 'dy',
+            chapterIdx: 1,
+            goods: 0,
+            referral_goods_batch_id: tpl.batch_id,
+          }),
+          localBookId,
+          channelId,
+        )
+      }
+      if (!createdForBook) continue
+      const synced = await syncBookReferralsWithRetry(
+        d,
+        extBookId,
+        channelId,
+        localBookId,
+        createdForBook,
+      )
+      if (synced && synced.error) warnings.push(`${extBookId} 回写：${synced.error}`)
+      else syncedBooks.add(extBookId)
+    }
+    if (!createdItems.length) return res.json(fail(400, warnings.join('；') || '创建失败'))
+    res.json(
+      ok({
+        createdCount: createdItems.length,
+        planned: bookIds.length * templates.length,
+        bookCount: bookIds.length,
+        templateCount: templates.length,
+        syncedBooks: syncedBooks.size,
+        warning: warnings.length ? warnings.join('；') : '',
+      }),
+    )
+  } catch (e) {
+    console.error('[novel] promo dianzhong batch-create', e.message)
+    res.json(fail(500, '批量创建推广链接失败'))
   }
 })
 

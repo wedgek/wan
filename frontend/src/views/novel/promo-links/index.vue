@@ -4,13 +4,12 @@
       <div class="page-filter-left filters-wrap">
         <el-input
           v-model="tableParams.keyword"
-          placeholder="名称 / path / 书名 / referralId"
+          placeholder="书名 / 书籍ID / 推广ID / 添量渠道"
           class="filter-input-keyword"
           :suffix-icon="$icons.Search"
           clearable
           clear-icon="Close"
         />
-        <BookSelect v-model="tableParams.bookId" class="filter-select-book" placeholder="所属书籍" />
         <el-select
           v-model="tableParams.channel"
           placeholder="投放账号"
@@ -20,16 +19,6 @@
           :suffix-icon="$icons.ArrowDown"
         >
           <el-option v-for="c in channels" :key="c.id" :label="c.label" :value="c.id" />
-        </el-select>
-        <el-select
-          v-model="tableParams.mediaSource"
-          placeholder="回传媒体"
-          class="filter-select-sm"
-          clearable
-          clear-icon="Close"
-          :suffix-icon="$icons.ArrowDown"
-        >
-          <el-option v-for="s in MEDIA_SOURCE_OPTIONS" :key="s.value" :label="s.label" :value="s.value" />
         </el-select>
         <el-date-picker
           v-model="createRange"
@@ -47,7 +36,7 @@
     </div>
 
     <div class="page-table-header">
-      <el-button type="primary" :icon="$icons.Plus" @click="createVisible = true">创建</el-button>
+      <el-button type="primary" @click="batchVisible = true">批量打链接</el-button>
       <el-button :icon="$icons.Refresh" :loading="refreshing" @click="refreshRemote">从点众刷新</el-button>
     </div>
 
@@ -59,79 +48,60 @@
         height="100%"
         :header-cell-style="{ 'text-align': 'center' }"
       >
-        <el-table-column prop="name" label="链接名称" min-width="140" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.name || "—" }}</template>
+        <el-table-column prop="referralId" label="推广ID" width="120" align="center">
+          <template #default="{ row }">{{ row.referralId || "—" }}</template>
         </el-table-column>
-        <el-table-column label="path" min-width="220" show-overflow-tooltip>
-          <template #default="{ row }">
-            <span v-if="row.path || row.url">{{ row.path || row.url }}</span>
-            <span v-else class="muted">—</span>
-            <el-button
-              v-if="row.path || row.url"
-              type="primary"
-              link
-              @click="copyText(row.path || row.url)"
-            >
-              复制
-            </el-button>
-          </template>
+        <el-table-column label="书名" min-width="220" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.bookName || "—" }}</template>
         </el-table-column>
-        <el-table-column label="监测链接" min-width="180" show-overflow-tooltip>
+        <el-table-column label="书 ID" width="140" align="center">
+          <template #default="{ row }">{{ row.externalBookId || "—" }}</template>
+        </el-table-column>
+        <el-table-column label="充值模板" width="96" align="center">
+          <template #default="{ row }">{{ row.rechargeName || "—" }}</template>
+        </el-table-column>
+        <el-table-column label="启动页面" min-width="200">
           <template #default="{ row }">
-            <div v-if="row.monitor1 || row.monitor2" class="monitor-cell">
-              <a v-if="row.monitor1" :href="row.monitor1" target="_blank" rel="noopener" class="link-a">监测1</a>
-              <a v-if="row.monitor2" :href="row.monitor2" target="_blank" rel="noopener" class="link-a">监测2</a>
-              <el-button v-if="row.monitor1" type="primary" link @click="copyText(row.monitor1)">复制</el-button>
+            <div v-if="row.launchPage" class="copy-cell">
+              <span class="copy-text" :title="row.launchPage">{{ row.launchPage }}</span>
+              <el-button type="primary" link @click="copyText(row.launchPage)">复制</el-button>
             </div>
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="所属书籍" min-width="150" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.bookName || "—" }}</template>
-        </el-table-column>
-        <el-table-column label="投放账号" width="100" align="center">
-          <template #default="{ row }">{{ channelLabel(row.channel, channels) }}</template>
-        </el-table-column>
-        <el-table-column label="媒体" width="90" align="center">
-          <template #default="{ row }">{{ mediaSourceLabel(row.mediaSource) }}</template>
-        </el-table-column>
-        <el-table-column label="起始章节" width="88" align="center">
-          <template #default="{ row }">{{ row.chapterIdx != null ? row.chapterIdx : "—" }}</template>
-        </el-table-column>
-        <el-table-column label="收费起始" width="88" align="center">
-          <template #default="{ row }">{{ row.chapterChargeStart != null ? row.chapterChargeStart : "—" }}</template>
-        </el-table-column>
-        <el-table-column label="看点" width="72" align="center">
-          <template #default="{ row }">{{ row.chapterKandian != null ? row.chapterKandian : "—" }}</template>
-        </el-table-column>
-        <el-table-column label="充值档" min-width="140" show-overflow-tooltip>
+        <el-table-column label="启动参数" min-width="260">
           <template #default="{ row }">
-            <span v-if="row.goods || row.goodsBatchId">
-              {{ row.goods || "—" }}
-              <span v-if="row.goodsBatchId" class="muted">（{{ row.goodsBatchId }}）</span>
-            </span>
+            <div v-if="row.launchQuery" class="copy-cell">
+              <span class="copy-text" :title="row.launchQuery">{{ row.launchQuery }}</span>
+              <el-button type="primary" link @click="copyText(row.launchQuery)">复制</el-button>
+            </div>
             <span v-else class="muted">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="回传配置" width="110" align="center" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.callbackConfigId || "—" }}</template>
+        <el-table-column label="添量渠道" min-width="210" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.name || "—" }}</template>
         </el-table-column>
-        <el-table-column prop="referralId" label="referralId" width="130" align="center">
-          <template #default="{ row }">{{ row.referralId || "—" }}</template>
+        <el-table-column label="推广链接" min-width="200" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.path || "—" }}</template>
         </el-table-column>
-        <el-table-column label="来源" width="80" align="center">
+        <el-table-column label="投放账号" width="110" align="center">
+          <template #default="{ row }">{{ channelLabel(row.channel, channels) }}</template>
+        </el-table-column>
+        <el-table-column label="媒体" width="80" align="center">
+          <template #default="{ row }">{{ mediaSourceLabel(row.mediaSource) }}</template>
+        </el-table-column>
+        <el-table-column label="充值" width="100" align="center">
           <template #default="{ row }">
-            <el-tag size="small" :type="row.source === 'dianzhong' ? 'success' : 'info'">
-              {{ sourceLabel(row.source) }}
-            </el-tag>
+            <span :title="row.snapDate ? `书籍快照 ${row.snapDate}` : ''">{{ fmtNum(row.rechargeAmount) }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="createTime" label="创建时间" width="170" align="center" />
-        <el-table-column label="操作" width="80" fixed="right" align="center">
-          <template #default="{ row }">
-            <el-button type="danger" link :icon="$icons.Delete" @click="onDelete(row)">删除</el-button>
-          </template>
+        <el-table-column label="消耗" width="100" align="center">
+          <template #default="{ row }">{{ fmtNum(row.cost) }}</template>
         </el-table-column>
+        <el-table-column label="回收" width="88" align="center">
+          <template #default="{ row }">{{ fmtPct(row.recovery) }}</template>
+        </el-table-column>
+        <el-table-column prop="createTime" label="创建时间" width="170" align="center" fixed="right" />
       </el-table>
     </div>
 
@@ -144,7 +114,7 @@
       />
     </div>
 
-    <PromoCreateDialog v-model="createVisible" @created="getTableData" />
+    <PromoBatchCreateDialog v-model="batchVisible" @created="getTableData" />
   </div>
 </template>
 
@@ -152,20 +122,17 @@
 import { useTable } from "@/hooks/useTable"
 import CzPagination from "@/components/cz-pagination/index.vue"
 import request from "@/request"
-import BookSelect from "../components/book-select.vue"
-import PromoCreateDialog from "../components/promo-create-dialog.vue"
-import { MEDIA_SOURCE_OPTIONS, channelLabel, copyText, mediaSourceLabel, sourceLabel } from "../shared"
+import PromoBatchCreateDialog from "../components/promo-batch-create-dialog.vue"
+import { channelLabel, copyText, fmtNum, fmtPct, mediaSourceLabel } from "../shared"
 
 const createRange = ref([])
-const createVisible = ref(false)
+const batchVisible = ref(false)
 const refreshing = ref(false)
 const channels = ref([])
 
 const defaultTableParams = () => ({
   keyword: "",
-  bookId: "",
   channel: "",
-  mediaSource: "",
   startTime: "",
   endTime: "",
   pageNo: 1,
@@ -202,6 +169,11 @@ function resetAll() {
   resetTable()
 }
 
+function keywordBookId() {
+  const s = String(tableParams.keyword || "").trim()
+  return /^\d{6,}$/.test(s) ? s : ""
+}
+
 async function refreshRemote() {
   refreshing.value = true
   try {
@@ -210,7 +182,7 @@ async function refreshRemote() {
       url: "/admin-api/novel/promo-links/dianzhong/refresh",
       method: "POST",
       data: {
-        bookId: tableParams.bookId || undefined,
+        externalBookId: keywordBookId() || undefined,
         channelId: tableParams.channel || undefined,
         startTime: range[0],
         endTime: range[1],
@@ -227,34 +199,27 @@ async function refreshRemote() {
     refreshing.value = false
   }
 }
-
-async function onDelete(row) {
-  try {
-    await ElMessageBox.confirm("是否删除该推广链接？", "提示", {
-      confirmButtonText: "确定",
-      cancelButtonText: "取消",
-      type: "warning",
-    })
-    const res = await request({ url: `/admin-api/novel/promo-links/${row.id}`, method: "DELETE" })
-    if (res.code === 0) {
-      ElMessage.success("已删除")
-      getTableData()
-    } else {
-      ElMessage.error(res.msg || "删除失败")
-    }
-  } catch (_) {
-    /* 取消 */
-  }
-}
 </script>
 
 <style scoped lang="scss">
 @use "../novel-page.scss";
 
-.monitor-cell {
+.copy-cell {
   display: flex;
-  gap: 8px;
   align-items: center;
-  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.copy-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.novel-promo :deep(.filter-input-keyword.el-input) {
+  width: 280px;
 }
 </style>

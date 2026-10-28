@@ -88,9 +88,6 @@
           </el-tab-pane>
 
           <el-tab-pane :label="`推广链接 (${detail.promoLinks.length})`" name="promo">
-            <div class="promo-head">
-              <el-button type="primary" size="small" :icon="$icons.Plus" @click="promoVisible = true">创建链接</el-button>
-            </div>
             <el-table :data="detail.promoLinks" border size="small" max-height="420">
               <el-table-column prop="name" label="名称" min-width="120" show-overflow-tooltip>
                 <template #default="{ row }">{{ row.name || "—" }}</template>
@@ -105,7 +102,7 @@
                 <template #default="{ row }">{{ row.chapterIdx != null ? row.chapterIdx : "—" }}</template>
               </el-table-column>
               <el-table-column label="充值档" min-width="100" show-overflow-tooltip>
-                <template #default="{ row }">{{ row.goods || "—" }}</template>
+                <template #default="{ row }">{{ row.rechargeName || row.goods || "—" }}</template>
               </el-table-column>
               <el-table-column label="来源" width="80" align="center">
                 <template #default="{ row }">{{ sourceLabel(row.source) }}</template>
@@ -123,26 +120,17 @@
       </template>
     </div>
 
-    <PromoCreateDialog
-      v-if="detail?.book?.id"
-      v-model="promoVisible"
-      :book-id="detail.book.id"
-      :book-name="detail.book.name"
-      @created="onPromoCreated"
-    />
   </el-drawer>
 </template>
 
 <script setup>
 import request from "@/request"
-import PromoCreateDialog from "../components/promo-create-dialog.vue"
 import { convertLabel, convertTagType, copyText, fmtNum, launchLabel, mediaSourceLabel, slotLabel, sourceLabel } from "../shared"
 
 const visible = ref(false)
 const loading = ref(false)
 const detail = ref(null)
 const tab = ref("mat")
-const promoVisible = ref(false)
 
 const title = computed(() => (detail.value?.book?.name ? detail.value.book.name : "书籍详情"))
 
@@ -162,12 +150,6 @@ async function show(bookId, nextTab) {
 
 function onClosed() {
   detail.value = null
-}
-
-async function onPromoCreated() {
-  if (detail.value?.book?.id) {
-    await show(detail.value.book.id, "promo")
-  }
 }
 
 async function onDeletePromo(row) {
@@ -218,8 +200,5 @@ defineExpose({ show })
 }
 .link-a {
   color: var(--el-color-primary);
-}
-.promo-head {
-  margin-bottom: 8px;
 }
 </style>

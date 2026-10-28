@@ -576,7 +576,7 @@ function ensureDouyinParseMenu(dbi) {
   }
 }
 
-/** 顶级「小说投流」：书籍 / 素材 / 推广链接（同步记录菜单隐藏） */
+/** 顶级「小说投流」：书籍 / 素材 / 充值模板 / 推广链接（同步记录菜单隐藏） */
 function ensureNovelMenu(dbi) {
   const existing = dbi.prepare(`SELECT id FROM menus WHERE parent_id = 0 AND path = '/novel' LIMIT 1`).get()
   if (existing) return existing.id
@@ -603,9 +603,9 @@ function ensureNovelMenus(dbi) {
   const children = [
     { name: '书籍', path: 'books', component: 'novelBooks', icon: 'Notebook', sort: 1, perm: 'novel:books:list', visible: 1 },
     { name: '素材', path: 'materials', component: 'novelMaterials', icon: 'VideoCamera', sort: 2, perm: 'novel:materials:list', visible: 1 },
-    { name: '推广链接', path: 'promo-links', component: 'novelPromoLinks', icon: 'Link', sort: 3, perm: 'novel:promo:list', visible: 1 },
-    { name: '推广模板', path: 'promo-templates', component: 'novelPromoTemplates', icon: 'Ticket', sort: 4, perm: 'novel:promo:list', visible: 1 },
-    { name: '充值模板', path: 'recharge-templates', component: 'novelRechargeTemplates', icon: 'Coin', sort: 5, perm: 'novel:promo:list', visible: 1 },
+    { name: '充值模板', path: 'recharge-templates', component: 'novelRechargeTemplates', icon: 'Coin', sort: 3, perm: 'novel:promo:list', visible: 1 },
+    { name: '推广链接', path: 'promo-links', component: 'novelPromoLinks', icon: 'Link', sort: 4, perm: 'novel:promo:list', visible: 1 },
+    { name: '推广模板', path: 'promo-templates', component: 'novelPromoTemplates', icon: 'Ticket', sort: 5, perm: 'novel:promo:list', visible: 0 },
     { name: '同步记录', path: 'sync', component: 'novelSync', icon: 'Upload', sort: 6, perm: 'novel:sync:list', visible: 0 },
     { name: '抖音素材提取', path: 'douyin-parse', component: 'novelDouyinParse', icon: 'Film', sort: 7, perm: 'novel:douyin-parse:list', visible: 1 },
   ]
@@ -773,8 +773,17 @@ function ensureNovelSchema(dbi) {
       name TEXT NOT NULL,
       batch_id TEXT NOT NULL DEFAULT '',
       remark TEXT NOT NULL DEFAULT '',
+      channel_id TEXT NOT NULL DEFAULT '',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      locked INTEGER NOT NULL DEFAULT 0,
+      creator TEXT NOT NULL DEFAULT '',
+      remote_created_at TEXT,
+      remote_updated_at TEXT,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS novel_recharge_removed (
+      batch_id TEXT NOT NULL PRIMARY KEY
     );
     CREATE TABLE IF NOT EXISTS novel_sync_batches (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -816,10 +825,24 @@ function ensureNovelSchema(dbi) {
   ensureColumn(dbi, 'novel_promo_links', 'callback_config_id', "TEXT NOT NULL DEFAULT ''")
   ensureColumn(dbi, 'novel_promo_links', 'goods_batch_id', "TEXT NOT NULL DEFAULT ''")
   ensureColumn(dbi, 'novel_promo_templates', 'recharge_template_id', 'INTEGER')
+  ensureColumn(dbi, 'novel_recharge_templates', 'channel_id', "TEXT NOT NULL DEFAULT ''")
+  ensureColumn(dbi, 'novel_recharge_templates', 'enabled', 'INTEGER NOT NULL DEFAULT 1')
+  ensureColumn(dbi, 'novel_recharge_templates', 'locked', 'INTEGER NOT NULL DEFAULT 0')
+  ensureColumn(dbi, 'novel_recharge_templates', 'creator', "TEXT NOT NULL DEFAULT ''")
+  ensureColumn(dbi, 'novel_recharge_templates', 'remote_created_at', 'TEXT')
+  ensureColumn(dbi, 'novel_recharge_templates', 'remote_updated_at', 'TEXT')
   try {
     dbi.exec(
       `CREATE UNIQUE INDEX IF NOT EXISTS idx_novel_recharge_batch
        ON novel_recharge_templates(batch_id) WHERE batch_id != ''`,
+    )
+  } catch (_) {
+    /* 旧数据可能冲突 */
+  }
+  try {
+    dbi.exec(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_novel_recharge_channel_batch
+       ON novel_recharge_templates(channel_id, batch_id) WHERE batch_id != ''`,
     )
   } catch (_) {
     /* 旧数据可能冲突 */

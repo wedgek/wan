@@ -22,7 +22,6 @@ const fs = require("fs")
 
 /** 本地可从 backend/.env 加载；已有环境变量不会被覆盖（dotenv 默认行为） */
 require("dotenv").config({ path: path.join(__dirname, ".env") })
-require("dotenv").config({ path: path.join(__dirname, ".env.dianzhong") })
 const http = require("http")
 const express = require("express")
 const db = require("./db")

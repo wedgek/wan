@@ -98,6 +98,27 @@ function fmtTime(v) {
   return v ? String(v).replace('T', ' ').slice(0, 19) : ''
 }
 
+function formatShanghai(date) {
+  const d = date instanceof Date ? date : new Date(date)
+  if (Number.isNaN(d.getTime())) return ''
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(d)
+  const get = (t) => (parts.find((p) => p.type === t) || {}).value || ''
+  return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}:${get('second')}`
+}
+
+function nowShanghai() {
+  return formatShanghai(new Date())
+}
+
 function isNewBookRow(r) {
   if (!r) return false
   if (String(r.launch_status || 'pending') !== 'pending') return false
@@ -763,13 +784,15 @@ router.get('/promo-links/page', requirePerm(PERM.promo, '推广链接'), (req, r
       WHERE ${where}
     `
     const total = d.prepare(`SELECT COUNT(*) AS c ${from}`).get(...params).c
+    const sortAsc = String(req.query.order || req.query.sortOrder || 'desc').toLowerCase() === 'asc'
+    const dir = sortAsc ? 'ASC' : 'DESC'
     const rows = d
       .prepare(
         `SELECT p.*, b.name AS book_name, b.external_book_id, b.store AS book_store, rt.name AS recharge_name,
                 bs.recharge_amount AS snap_recharge_amount, bs.recharge_users AS snap_recharge_users,
                 bs.stat_date AS snap_stat_date, mc.cost AS mat_cost
          ${from}
-         ORDER BY p.id DESC
+         ORDER BY datetime(p.created_at) ${dir}, CAST(NULLIF(p.referral_id, '') AS INTEGER) ${dir}, p.id ${dir}
          LIMIT ? OFFSET ?`,
       )
       .all(...params, pageSize, offset)
@@ -834,6 +857,35 @@ function pickField(obj, keys) {
     if (obj[k] != null && String(obj[k]).trim() !== '') return obj[k]
   }
   return ''
+}
+
+function parseRemoteCreatedAt(item) {
+  if (!item || typeof item !== 'object') return ''
+  const raw = pickField(item, [
+    'createTime',
+    'createdAt',
+    'created_at',
+    'create_time',
+    'ctime',
+    'addTime',
+    'add_time',
+    'created',
+    'createDate',
+    'create_date',
+    'gmtCreate',
+    'gmt_create',
+  ])
+  if (raw === '' || raw == null) return ''
+  if (typeof raw === 'number' || /^\d{10,13}$/.test(String(raw).trim())) {
+    const n = Number(raw)
+    if (!Number.isFinite(n) || n <= 0) return ''
+    const ms = n > 1e12 ? n : n * 1000
+    return formatShanghai(new Date(ms))
+  }
+  const s = String(raw).trim().replace('T', ' ').replace(/\//g, '-')
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})[ ](\d{2}:\d{2})(?::(\d{2}))?/)
+  if (m) return `${m[1]} ${m[2]}:${m[3] || '00'}`
+  return fmtTime(s)
 }
 
 function asOptInt(v) {
@@ -940,6 +992,7 @@ function upsertDianzhongReferral(d, item, fallbackBookId, fallbackChannel) {
     callbackConfigId: String(
       pickField(item, ['callback_config_id', 'callbackConfigId', 'CallbackConfigId']) || '',
     ).trim(),
+    remoteCreatedAt: parseRemoteCreatedAt(item),
   }
   if (byRef) {
     d.prepare(
@@ -952,6 +1005,7 @@ function upsertDianzhongReferral(d, item, fallbackBookId, fallbackChannel) {
          goods = CASE WHEN ? != '' THEN ? ELSE goods END,
          goods_batch_id = CASE WHEN ? != '' THEN ? ELSE goods_batch_id END,
          callback_config_id = CASE WHEN ? != '' THEN ? ELSE callback_config_id END,
+         created_at = CASE WHEN ? != '' THEN ? ELSE created_at END,
          updated_at = datetime('now')
        WHERE id = ?`,
     ).run(
@@ -977,6 +1031,8 @@ function upsertDianzhongReferral(d, item, fallbackBookId, fallbackChannel) {
       payload.goodsBatchId,
       payload.callbackConfigId,
       payload.callbackConfigId,
+      payload.remoteCreatedAt,
+      payload.remoteCreatedAt,
       byRef.id,
     )
     return { id: byRef.id, created: false }
@@ -996,6 +1052,7 @@ function upsertDianzhongReferral(d, item, fallbackBookId, fallbackChannel) {
          goods = CASE WHEN ? != '' THEN ? ELSE goods END,
          goods_batch_id = CASE WHEN ? != '' THEN ? ELSE goods_batch_id END,
          callback_config_id = CASE WHEN ? != '' THEN ? ELSE callback_config_id END,
+         created_at = CASE WHEN ? != '' THEN ? ELSE created_at END,
          updated_at = datetime('now')
        WHERE id = ?`,
     ).run(
@@ -1020,6 +1077,8 @@ function upsertDianzhongReferral(d, item, fallbackBookId, fallbackChannel) {
       payload.goodsBatchId,
       payload.callbackConfigId,
       payload.callbackConfigId,
+      payload.remoteCreatedAt,
+      payload.remoteCreatedAt,
       byUrl.id,
     )
     return { id: byUrl.id, created: false }
@@ -1029,8 +1088,9 @@ function upsertDianzhongReferral(d, item, fallbackBookId, fallbackChannel) {
       `INSERT INTO novel_promo_links
          (book_id, name, url, store, channel, status, remark, external_id, source,
           referral_id, media_source, path, monitor1, monitor2,
-          chapter_idx, chapter_charge_start, chapter_kandian, goods, goods_batch_id, callback_config_id, updated_at)
-       VALUES (?, ?, ?, '', ?, 'active', '', ?, 'dianzhong', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+          chapter_idx, chapter_charge_start, chapter_kandian, goods, goods_batch_id, callback_config_id,
+          created_at, updated_at)
+       VALUES (?, ?, ?, '', ?, 'active', '', ?, 'dianzhong', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
     )
     .run(
       bookId,
@@ -1049,6 +1109,7 @@ function upsertDianzhongReferral(d, item, fallbackBookId, fallbackChannel) {
       payload.goods,
       payload.goodsBatchId,
       payload.callbackConfigId,
+      payload.remoteCreatedAt || nowShanghai(),
     )
   return { id: Number(r.lastInsertRowid), created: true }
 }
@@ -1654,6 +1715,18 @@ router.post('/promo-links/dianzhong/create', requirePerm(PERM.promo, '推广链�
         continue
       }
       createdItems.push(created.data)
+      upsertDianzhongReferral(
+        d,
+        asReferralItem(created.data, {
+          bookId: book.external_book_id,
+          name,
+          mediaSource: body.mediaSource,
+          chapterIdx: body.chapterIdx,
+          createTime: nowShanghai(),
+        }),
+        book.id,
+        channelId,
+      )
     }
     if (!createdItems.length) return res.json(fail(400, warnings.join('；') || '创建失败'))
     const synced = await syncBookReferralsWithRetry(
@@ -1738,6 +1811,7 @@ router.post('/promo-links/dianzhong/batch-create', requirePerm(PERM.promo, '推�
             chapterIdx: 1,
             goods: 0,
             referral_goods_batch_id: tpl.batch_id,
+            createTime: nowShanghai(),
           }),
           localBookId,
           channelId,

@@ -47,6 +47,8 @@
         border
         height="100%"
         :header-cell-style="{ 'text-align': 'center' }"
+        :default-sort="{ prop: 'createTime', order: 'descending' }"
+        @sort-change="onSortChange"
       >
         <el-table-column prop="referralId" label="推广ID" width="120" align="center">
           <template #default="{ row }">{{ row.referralId || "—" }}</template>
@@ -101,7 +103,14 @@
         <el-table-column label="回收" width="88" align="center">
           <template #default="{ row }">{{ fmtPct(row.recovery) }}</template>
         </el-table-column>
-        <el-table-column prop="createTime" label="创建时间" width="170" align="center" fixed="right" />
+        <el-table-column
+          prop="createTime"
+          label="创建时间"
+          width="170"
+          align="center"
+          fixed="right"
+          sortable="custom"
+        />
       </el-table>
     </div>
 
@@ -135,6 +144,7 @@ const defaultTableParams = () => ({
   channel: "",
   startTime: "",
   endTime: "",
+  order: "desc",
   pageNo: 1,
   pageSize: 20,
 })
@@ -167,6 +177,15 @@ async function loadChannels() {
 function resetAll() {
   createRange.value = []
   resetTable()
+}
+
+function onSortChange({ prop, order }) {
+  if (prop && prop !== "createTime") return
+  const next = order === "ascending" ? "asc" : "desc"
+  if (tableParams.order === next) return
+  tableParams.order = next
+  tableParams.pageNo = 1
+  getTableData()
 }
 
 function keywordBookId() {

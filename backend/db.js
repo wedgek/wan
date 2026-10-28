@@ -1,3 +1,5 @@
+process.env.TZ = 'Asia/Shanghai'
+
 const fs = require('fs')
 const path = require('path')
 const crypto = require('crypto')
@@ -18,6 +20,72 @@ function hashPassword(password) {
 }
 
 let dbInstance = null
+let clockInstalled = false
+
+function rewriteClockSql(sql) {
+  if (typeof sql !== 'string') return sql
+  if (!sql.includes('datetime')) return sql
+  return sql
+    .replace(/datetime\(\s*'now'\s*\)/g, "datetime('now', 'localtime')")
+    .replace(/datetime\(\s*([A-Za-z_][\w.]*)\s*,\s*'localtime'\s*\)/g, '$1')
+}
+
+function installBeijingClock(db) {
+  if (clockInstalled) return
+  const prepare = db.prepare.bind(db)
+  const exec = db.exec.bind(db)
+  db.prepare = (sql) => prepare(rewriteClockSql(sql))
+  db.exec = (sql) => exec(rewriteClockSql(sql))
+  clockInstalled = true
+}
+
+function quoteSqlIdent(name) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return ''
+  return `"${name}"`
+}
+
+const CLOCK_COLUMNS = new Set([
+  'created_at',
+  'updated_at',
+  'first_seen_at',
+  'last_seen_at',
+  'launched_at',
+  'finished_at',
+  'convert_at',
+  'synced_at',
+  'summary_updated_at',
+])
+
+function shiftStoredUtcToBeijing(dbi) {
+  const key = 'time.beijing_wall_v1'
+  try {
+    if (dbi.prepare('SELECT 1 FROM app_settings WHERE key = ?').get(key)) return
+    const tables = dbi.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all()
+    dbi.transaction(() => {
+      for (const { name } of tables) {
+        const table = quoteSqlIdent(name)
+        if (!table) continue
+        for (const col of dbi.prepare(`PRAGMA table_info(${table})`).all()) {
+          if (!CLOCK_COLUMNS.has(col.name)) continue
+          const ident = quoteSqlIdent(col.name)
+          dbi
+            .prepare(
+              `UPDATE ${table}
+               SET ${ident} = datetime(${ident}, '+8 hours')
+               WHERE ${ident} GLOB '????-??-?? ??:??:??'
+                 AND datetime(${ident}) <= datetime('now', '+2 hours')`,
+            )
+            .run()
+        }
+      }
+      dbi
+        .prepare(`INSERT INTO app_settings (key, value, updated_at) VALUES (?, '1', datetime('now'))`)
+        .run(key)
+    })()
+  } catch (e) {
+    console.error('[db] shift utc to beijing', e.message)
+  }
+}
 
 function getDataDir() {
   const dir = process.env.DATA_DIR || path.join(__dirname, 'data')
@@ -1329,6 +1397,8 @@ function initDb() {
 
   /* 菜单等种子数据写入后再跑一次补丁，保证新库也能挂上视频相关菜单 */
   applySchemaPatches(dbInstance)
+  shiftStoredUtcToBeijing(dbInstance)
+  installBeijingClock(dbInstance)
 
   return dbInstance
 }

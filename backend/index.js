@@ -1,3 +1,5 @@
+process.env.TZ = "Asia/Shanghai"
+
 /**
  * 强制对外网络走 IPv4，必须在任何网络请求之前执行。
  * 线上服务器无可用的全局 IPv6，但 Node/undici 默认会尝试 IPv6/AAAA，

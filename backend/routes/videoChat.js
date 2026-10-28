@@ -56,18 +56,13 @@ function normalizeChatVideoOptions(body) {
   return base
 }
 
-/**
- * SQLite 存的是 UTC 无时区字符串（datetime('now')）；下发 ISO 带 Z，前端才能按用户本地时区显示。
- */
 function sqliteUtcTextToIso(ts) {
   if (ts == null || ts === '') return ''
   const s = String(ts).replace('T', ' ').trim().slice(0, 19)
   if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s)) {
     return String(ts).replace('T', ' ').slice(0, 19)
   }
-  const ms = Date.parse(`${s.replace(' ', 'T')}Z`)
-  if (!Number.isFinite(ms)) return s
-  return new Date(ms).toISOString()
+  return `${s.replace(' ', 'T')}+08:00`
 }
 
 /** 第一行非空文字，折叠空白，截断 max 字符（仅文本） */

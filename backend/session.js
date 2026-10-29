@@ -34,6 +34,17 @@ function getSession(token) {
   return { userId: row.user_id, exp: row.exp_ms }
 }
 
+function createAccessToken(userId, ttlMs = DEFAULT_TTL_MS) {
+  const accessToken = crypto.randomBytes(32).toString('hex')
+  const exp = Date.now() + ttlMs
+  dbi().prepare('INSERT INTO auth_access_tokens (token, user_id, exp_ms) VALUES (?, ?, ?)').run(accessToken, userId, exp)
+  return { accessToken, expiresTime: exp }
+}
+
+/**
+ * 校验 refreshToken。不在换票成功后立刻作废：
+ * 本地 watch 重启时刷新请求经常丢响应，单次作废会逼用户重新登录。
+ */
 function consumeRefreshToken(refreshToken) {
   if (!refreshToken) return null
   const now = Date.now()
@@ -43,7 +54,6 @@ function consumeRefreshToken(refreshToken) {
     dbi().prepare('DELETE FROM auth_refresh_tokens WHERE token = ?').run(refreshToken)
     return null
   }
-  dbi().prepare('DELETE FROM auth_refresh_tokens WHERE token = ?').run(refreshToken)
   return row.user_id
 }
 
@@ -59,6 +69,7 @@ function revokeAllForUser(userId) {
 
 module.exports = {
   createSession,
+  createAccessToken,
   getSession,
   consumeRefreshToken,
   revokeToken,

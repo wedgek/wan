@@ -7,6 +7,7 @@ const productLibraryRouter = require('./productLibrary')
 const storageRouter = require('./storage')
 const douyinRouter = require('./douyin')
 const novelRouter = require('./novel')
+const oceanengineRouter = require('./oceanengine')
 const { requireAuth } = require('./auth')
 
 const router = express.Router()
@@ -29,6 +30,7 @@ router.use('/product-library', productLibraryRouter)
 router.use('/storage', storageRouter)
 router.use('/douyin', douyinRouter)
 router.use('/novel', novelRouter)
+router.use('/oceanengine', oceanengineRouter)
 
 /** 占位：企微 SDK */
 router.get('/qiwei/app-sdk/page', requireAuth, (req, res) => {

@@ -146,6 +146,11 @@ function applySchemaPatches(dbi) {
     ensureDouyinParseMenu(dbi)
     ensureNovelSchema(dbi)
     ensureNovelMenus(dbi)
+    ensureOceanEngineSchema(dbi)
+    ensureColumn(dbi, 'oceanengine_catalog_items', 'first_category', "TEXT NOT NULL DEFAULT ''")
+    ensureColumn(dbi, 'oceanengine_catalog_items', 'sub_category', "TEXT NOT NULL DEFAULT ''")
+    ensureColumn(dbi, 'oceanengine_catalog_items', 'third_category', "TEXT NOT NULL DEFAULT ''")
+    ensureColumn(dbi, 'oceanengine_catalog_items', 'online_time', 'INTEGER NOT NULL DEFAULT 0')
     ensureAiVideoModelMenuInSidebar(dbi)
     ensureModelCatalogSchema(dbi)
     ensureModelCatalogMenu(dbi)
@@ -644,7 +649,7 @@ function ensureDouyinParseMenu(dbi) {
   }
 }
 
-/** 顶级「小说投流」：书籍 / 素材 / 充值模板 / 推广链接（同步记录菜单隐藏） */
+/** 顶级「小说投流」：抖音素材提取 / 素材 / 书籍，其后为产品图与商品库等（同步记录菜单隐藏） */
 function ensureNovelMenu(dbi) {
   const existing = dbi.prepare(`SELECT id FROM menus WHERE parent_id = 0 AND path = '/novel' LIMIT 1`).get()
   if (existing) return existing.id
@@ -669,13 +674,16 @@ function ensureNovelMenus(dbi) {
   const parentId = ensureNovelMenu(dbi)
   if (!parentId) return
   const children = [
-    { name: '书籍', path: 'books', component: 'novelBooks', icon: 'Notebook', sort: 1, perm: 'novel:books:list', visible: 1 },
+    { name: '抖音素材提取', path: 'douyin-parse', component: 'novelDouyinParse', icon: 'Film', sort: 1, perm: 'novel:douyin-parse:list', visible: 1 },
     { name: '素材', path: 'materials', component: 'novelMaterials', icon: 'VideoCamera', sort: 2, perm: 'novel:materials:list', visible: 1 },
-    { name: '充值模板', path: 'recharge-templates', component: 'novelRechargeTemplates', icon: 'Coin', sort: 3, perm: 'novel:promo:list', visible: 1 },
-    { name: '推广链接', path: 'promo-links', component: 'novelPromoLinks', icon: 'Link', sort: 4, perm: 'novel:promo:list', visible: 1 },
-    { name: '推广模板', path: 'promo-templates', component: 'novelPromoTemplates', icon: 'Ticket', sort: 5, perm: 'novel:promo:list', visible: 0 },
-    { name: '同步记录', path: 'sync', component: 'novelSync', icon: 'Upload', sort: 6, perm: 'novel:sync:list', visible: 0 },
-    { name: '抖音素材提取', path: 'douyin-parse', component: 'novelDouyinParse', icon: 'Film', sort: 7, perm: 'novel:douyin-parse:list', visible: 1 },
+    { name: '书籍', path: 'books', component: 'novelBooks', icon: 'Notebook', sort: 3, perm: 'novel:books:list', visible: 1 },
+    { name: '巨量配置', path: 'ocean-settings', component: 'novelOceanSettings', icon: 'Setting', sort: 4, perm: 'novel:ocean-product:list', visible: 1 },
+    { name: '产品图', path: 'product-images', component: 'novelProductImages', icon: 'Picture', sort: 5, perm: 'novel:ocean-product:list', visible: 1 },
+    { name: '商品库', path: 'ocean-products', component: 'novelOceanProducts', icon: 'Goods', sort: 6, perm: 'novel:ocean-product:list', visible: 1 },
+    { name: '充值模板', path: 'recharge-templates', component: 'novelRechargeTemplates', icon: 'Coin', sort: 7, perm: 'novel:promo:list', visible: 1 },
+    { name: '推广链接', path: 'promo-links', component: 'novelPromoLinks', icon: 'Link', sort: 8, perm: 'novel:promo:list', visible: 1 },
+    { name: '推广模板', path: 'promo-templates', component: 'novelPromoTemplates', icon: 'Ticket', sort: 9, perm: 'novel:promo:list', visible: 0 },
+    { name: '同步记录', path: 'sync', component: 'novelSync', icon: 'Upload', sort: 10, perm: 'novel:sync:list', visible: 0 },
   ]
   const ins = dbi.prepare(`
     INSERT INTO menus (id, parent_id, type, name, path, component_name, icon, sort, permission, status, visible, keep_alive)
@@ -705,6 +713,21 @@ function ensureNovelMenus(dbi) {
       /* ignore */
     }
   }
+  const oceanMenus = dbi
+    .prepare(`SELECT id FROM menus WHERE component_name IN ('novelOceanProducts', 'novelProductImages', 'novelOceanSettings')`)
+    .all()
+  if (oceanMenus.length) {
+    const sources = dbi
+      .prepare(`SELECT id FROM menus WHERE component_name IN ('novelBooks', 'novelRechargeTemplates', 'novelPromoLinks')`)
+      .all()
+    const irOcean = dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (?, ?)')
+    for (const src of sources) {
+      const roles = dbi.prepare('SELECT role_id FROM role_menus WHERE menu_id = ?').all(src.id)
+      for (const menu of oceanMenus) {
+        for (const r of roles) irOcean.run(r.role_id, menu.id)
+      }
+    }
+  }
   const promo = dbi.prepare(`SELECT id FROM menus WHERE component_name = 'novelPromoLinks' LIMIT 1`).get()
   if (promo) {
     const extra = dbi
@@ -720,6 +743,116 @@ function ensureNovelMenus(dbi) {
   }
 }
 
+/** 巨量引擎授权 Token，与点众 novel_dianzhong_callbacks 分开 */
+function ensureOceanEngineSchema(dbi) {
+  dbi.exec(`
+    CREATE TABLE IF NOT EXISTS oceanengine_tokens (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      app_id TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT '',
+      access_token TEXT NOT NULL DEFAULT '',
+      refresh_token TEXT NOT NULL DEFAULT '',
+      advertiser_ids TEXT NOT NULL DEFAULT '',
+      access_expires_at TEXT,
+      refresh_expires_at TEXT,
+      last_error TEXT NOT NULL DEFAULT '',
+      updated_at TEXT,
+      UNIQUE(app_id)
+    );
+    CREATE TABLE IF NOT EXISTS oceanengine_apps (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      app_id TEXT NOT NULL,
+      secret TEXT NOT NULL DEFAULT '',
+      redirect_uri TEXT NOT NULL DEFAULT '',
+      account_id TEXT NOT NULL DEFAULT '',
+      platform_id TEXT NOT NULL DEFAULT '',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT,
+      UNIQUE(app_id)
+    );
+    CREATE TABLE IF NOT EXISTS oceanengine_authorizations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      app_pk INTEGER NOT NULL,
+      access_token TEXT NOT NULL DEFAULT '',
+      refresh_token TEXT NOT NULL DEFAULT '',
+      advertiser_ids TEXT NOT NULL DEFAULT '',
+      access_expires_at TEXT,
+      refresh_expires_at TEXT,
+      last_error TEXT NOT NULL DEFAULT '',
+      updated_at TEXT,
+      UNIQUE(app_pk)
+    );
+    CREATE TABLE IF NOT EXISTS oceanengine_oauth_states (
+      state TEXT PRIMARY KEY,
+      app_pk INTEGER NOT NULL,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS oceanengine_library_prefs (
+      platform_id TEXT PRIMARY KEY,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS oceanengine_novel_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      category_key TEXT NOT NULL DEFAULT 'ancient',
+      gender TEXT NOT NULL DEFAULT '男频书',
+      char_count TEXT NOT NULL DEFAULT '1w-10w',
+      copyright_owner TEXT NOT NULL DEFAULT '点众',
+      author TEXT NOT NULL DEFAULT '无名',
+      pay_start_chapter TEXT NOT NULL DEFAULT '0',
+      chapter_price TEXT NOT NULL DEFAULT '1',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS oceanengine_cover_images (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      url TEXT NOT NULL,
+      name TEXT NOT NULL DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS oceanengine_libraries (
+      platform_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL DEFAULT '',
+      industry TEXT NOT NULL DEFAULT '',
+      product_count INTEGER NOT NULL DEFAULT 0,
+      synced_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS oceanengine_catalog_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      platform_id TEXT NOT NULL,
+      platform_name TEXT NOT NULL DEFAULT '',
+      product_id TEXT NOT NULL,
+      name TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT '',
+      audit_status TEXT NOT NULL DEFAULT '',
+      image_url TEXT NOT NULL DEFAULT '',
+      raw_json TEXT NOT NULL DEFAULT '',
+      first_category TEXT NOT NULL DEFAULT '',
+      sub_category TEXT NOT NULL DEFAULT '',
+      third_category TEXT NOT NULL DEFAULT '',
+      online_time INTEGER NOT NULL DEFAULT 0,
+      synced_at TEXT,
+      UNIQUE(platform_id, product_id)
+    );
+    CREATE TABLE IF NOT EXISTS oceanengine_products (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      book_name TEXT NOT NULL,
+      book_id TEXT NOT NULL DEFAULT '',
+      account_id TEXT NOT NULL DEFAULT '',
+      platform_id TEXT NOT NULL DEFAULT '',
+      platform_name TEXT NOT NULL DEFAULT '',
+      product_id TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT '',
+      error_message TEXT NOT NULL DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+  `)
+}
+
 /** 小说投流：书籍主档、效果快照、素材、推广链接、同步批次 */
 function ensureNovelSchema(dbi) {
   dbi.exec(`
@@ -729,13 +862,10 @@ function ensureNovelSchema(dbi) {
       store TEXT NOT NULL DEFAULT '',
       name TEXT NOT NULL DEFAULT '',
       author TEXT NOT NULL DEFAULT '',
-      word_count INTEGER DEFAULT 0,
+      cover_url TEXT NOT NULL DEFAULT '',
       category TEXT NOT NULL DEFAULT '',
-      first_seen_at TEXT DEFAULT (datetime('now')),
-      last_seen_at TEXT DEFAULT (datetime('now')),
-      launch_status TEXT NOT NULL DEFAULT 'pending',
-      launched_at TEXT,
-      launch_user_id INTEGER,
+      status TEXT NOT NULL DEFAULT '',
+      remark TEXT NOT NULL DEFAULT '',
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT,
       UNIQUE(store, external_book_id)

@@ -98,6 +98,11 @@ server.on("listening", () => {
     console.log(
       `[wan-ai] server listening on http://${listeningUrlHostForLog()}:${port} (${isProd ? "production" : "development"})`,
     )
+    try {
+      require("./services/oceanengineAuth").startTokenRefresh()
+    } catch (e) {
+      console.warn("[wan-ai] 巨量 token 续期未启动:", e.message)
+    }
     if (!isProd) {
       if (!hasExplicitPort && port !== 3000) {
         console.warn(

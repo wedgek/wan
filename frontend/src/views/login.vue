@@ -107,6 +107,7 @@ import { useMenuStore } from '@/stores/menu.js'
 import { ElMessage } from 'element-plus'
 import { getStorage, setStorage, removeStorage } from '@/utils/storage.js'
 import { getTimeGreeting } from '@/utils/time.js'
+import { withTransientRetry } from '@/utils/requestError.js'
 
 const authStore = useAuthStore()
 const menuStore = useMenuStore()
@@ -191,13 +192,23 @@ const handleLogin = async () => {
       removeStorage('remember_password')
     }
 
-    await authStore.getUserInfo()
+    let profileOk = true
+    try {
+      await withTransientRetry(() => authStore.getUserInfo())
+    } catch (error) {
+      if (!authStore.isLoggedIn) throw error
+      profileOk = false
+    }
 
     if (menuStore.menus?.length) {
       addDynamicRoutes(menuStore.menus, { force: true })
     }
 
-    ElMessage.success(getTimeGreeting(authStore.user?.nickname))
+    if (profileOk) {
+      ElMessage.success(getTimeGreeting(authStore.user?.nickname))
+    } else {
+      ElMessage.warning('已登录。用户信息暂时没拉到，登录状态已保留')
+    }
     router.replace('/home')
   } catch (error) {
     console.log('handleLogin error:', error)

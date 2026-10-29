@@ -130,12 +130,12 @@ router.post('/refresh-token', (req, res) => {
   if (!userId) {
     return res.json({ code: 401, msg: 'refreshToken 无效或已过期' })
   }
-  const tokens = session.createSession(userId)
+  const tokens = session.createAccessToken(userId)
   res.json({
     code: 0,
     data: {
       accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
+      refreshToken,
       expiresTime: tokens.expiresTime,
     },
   })

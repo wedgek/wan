@@ -107,7 +107,7 @@ export const useAuthStore = defineStore("auth", () => {
       }
     } catch (error) {
       console.error("获取用户信息失败：", error)
-      throw new Error(error)
+      throw error
     }
   }
 

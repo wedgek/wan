@@ -3,6 +3,7 @@ import { useAuthStore } from "@/stores/auth"
 import { useMenuStore } from "@/stores/menu"
 import { staticRoutes, routeComponents, notFoundRoute, staticMenuRoutePaths } from "./routes"
 import { setupNProgress } from "@/utils/nprogress"
+import { notifyBackendUnreachable, withTransientRetry } from "@/utils/requestError"
 
 const NProgress = setupNProgress()
 
@@ -135,12 +136,14 @@ router.beforeEach(async (to, from, next) => {
   // 获取用户信息（首次或菜单为空时重新获取）
   if (!authStore.user || !menuStore.menus?.length) {
     try {
-      await authStore.getUserInfo()
+      await withTransientRetry(() => authStore.getUserInfo())
     } catch (error) {
       console.error("获取用户信息失败:", error)
-      authStore.logout()
-      NProgress.done()
-      return next("/login")
+      if (!authStore.isLoggedIn) {
+        NProgress.done()
+        return next("/login")
+      }
+      notifyBackendUnreachable()
     }
   }
 

@@ -2,6 +2,7 @@ import axios from "axios"
 import router from "@/router"
 import { useAuthStore } from "@/stores/auth"
 import { getStorage } from "@/utils/storage"
+import { delay, markAuthExpired, markTransient } from "@/utils/requestError"
 
 /**
  * 规范化 API 根地址。避免出现 http://localhost:8 这类误配置（少写端口/笔误），
@@ -45,25 +46,46 @@ function refreshUrl() {
   return (base ? String(base).replace(/\/+$/, "") : "") + "/admin-api/system/auth/refresh-token"
 }
 
-/** 使用独立请求，避免进入本 service 的 401 拦截逻辑 */
+function classifyRefreshBody(body) {
+  if (body?.code === 0 && body.data?.accessToken) {
+    useAuthStore().setTokenPair(body.data)
+    return { accessToken: body.data.accessToken }
+  }
+  if (body?.code === 401 || body?.code === 400) return { invalid: true }
+  return { transient: true }
+}
+
+async function postRefresh(refreshToken) {
+  try {
+    const axiosRes = await axios.post(
+      refreshUrl(),
+      { refreshToken },
+      { timeout: 10000, headers: { "Content-Type": "application/json" } },
+    )
+    return classifyRefreshBody(axiosRes.data)
+  } catch {
+    return { transient: true }
+  }
+}
+
+/**
+ * 使用独立请求，避免进入本 service 的 401 拦截逻辑。
+ * 后端重启、超时、502 记为 transient，不把登录态清掉。
+ */
 function refreshAccessToken() {
   if (refreshPromise) return refreshPromise
   const rt = getStorage("refreshToken")
-  if (rt == null || rt === "") return Promise.resolve(null)
-  refreshPromise = axios
-    .post(refreshUrl(), { refreshToken: rt }, { timeout: 10000, headers: { "Content-Type": "application/json" } })
-    .then((axiosRes) => {
-      const body = axiosRes.data
-      if (body?.code === 0 && body.data?.accessToken) {
-        useAuthStore().setTokenPair(body.data)
-        return body.data.accessToken
-      }
-      return null
-    })
-    .catch(() => null)
-    .finally(() => {
-      refreshPromise = null
-    })
+  if (rt == null || rt === "") return Promise.resolve({ invalid: true })
+  refreshPromise = (async () => {
+    let result = await postRefresh(rt)
+    if (result.transient) {
+      await delay(600)
+      result = await postRefresh(getStorage("refreshToken") || rt)
+    }
+    return result
+  })().finally(() => {
+    refreshPromise = null
+  })
   return refreshPromise
 }
 
@@ -71,16 +93,19 @@ async function handleBusiness401(response) {
   const config = response.config
   if (config.__authRetried) {
     handleUnauthorized()
-    return Promise.reject(new Error("登录已过期，请重新登录"))
+    return Promise.reject(markAuthExpired())
   }
-  const newAccess = await refreshAccessToken()
-  if (!newAccess) {
+  const result = await refreshAccessToken()
+  if (result?.transient) {
+    return Promise.reject(markTransient(new Error("后端暂时不可用，请稍后重试")))
+  }
+  if (!result?.accessToken) {
     handleUnauthorized()
-    return Promise.reject(new Error("登录已过期，请重新登录"))
+    return Promise.reject(markAuthExpired(response.data?.msg))
   }
   config.__authRetried = true
   config.headers = config.headers || {}
-  config.headers.Authorization = `Bearer ${newAccess}`
+  config.headers.Authorization = `Bearer ${result.accessToken}`
   return service.request(config)
 }
 
@@ -107,6 +132,14 @@ service.interceptors.response.use(
     return res
   },
   (error) => {
+    const data = error?.response?.data
+    if (data && typeof data === "object" && Number(data.code) === 401 && error.config) {
+      return handleBusiness401({ data, config: error.config })
+    }
+    const status = error?.response?.status
+    if (!error?.response || status >= 500 || error.code === "ECONNABORTED" || error.code === "ERR_NETWORK") {
+      return Promise.reject(markTransient(error))
+    }
     return Promise.reject(error)
   }
 )

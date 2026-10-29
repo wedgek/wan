@@ -132,20 +132,22 @@ function ensureSeed() {
   const d = database()
   d.prepare(`DELETE FROM oceanengine_oauth_states WHERE created_at < datetime('now', '-1 day')`).run()
   const env = config()
-  const count = d.prepare('SELECT COUNT(*) AS n FROM oceanengine_apps').get().n
-  if (!count && env.appId) {
-    d.prepare(
-      `INSERT INTO oceanengine_apps (name, app_id, secret, redirect_uri, account_id, platform_id, enabled)
-       VALUES ('创漫基建工具', ?, ?, ?, ?, ?, 1)`,
-    ).run(
-      env.appId,
-      env.secret,
-      redirectUri(),
-      String(process.env.OCEANENGINE_EBP_ACCOUNT_ID || '1863711955555339').trim(),
-      String(process.env.OCEANENGINE_PLATFORM_ID || '2068752917202714').trim(),
-    )
-  } else if (env.appId && env.secret) {
-    d.prepare(`UPDATE oceanengine_apps SET secret = ? WHERE app_id = ? AND secret = ''`).run(env.secret, env.appId)
+  if (!env.appId) {
+    console.error('[oceanengine] 未读到 OCEANENGINE_APP_ID，请检查 backend/.env 后重启')
+  } else {
+    const accountId = String(process.env.OCEANENGINE_EBP_ACCOUNT_ID || '1863711955555339').trim()
+    const platformId = String(process.env.OCEANENGINE_PLATFORM_ID || '2068752917202714').trim()
+    const existing = d.prepare('SELECT id, secret FROM oceanengine_apps WHERE app_id = ?').get(env.appId)
+    if (!existing) {
+      d.prepare(
+        `INSERT INTO oceanengine_apps (name, app_id, secret, redirect_uri, account_id, platform_id, enabled)
+         VALUES ('创漫基建工具', ?, ?, ?, ?, ?, 1)`,
+      ).run(env.appId, env.secret, redirectUri(), accountId, platformId)
+      console.log('[oceanengine] 已写入应用', env.appId)
+    } else if (env.secret && existing.secret !== env.secret) {
+      d.prepare(`UPDATE oceanengine_apps SET secret = ?, updated_at = datetime('now') WHERE id = ?`).run(env.secret, existing.id)
+      console.log('[oceanengine] 已更新应用 Secret', env.appId)
+    }
   }
   const legacy = d.prepare(`SELECT * FROM oceanengine_tokens WHERE access_token != ''`).all()
   for (const old of legacy) {

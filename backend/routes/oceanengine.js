@@ -8,6 +8,7 @@ const { requireAuth } = require('./auth')
 const { ok, fail } = require('../utils/response')
 const oceanengine = require('../services/oceanengineAuth')
 const products = require('../services/oceanengineProduct')
+const accounts = require('../services/oceanengineAccount')
 
 const router = express.Router()
 
@@ -35,6 +36,16 @@ function userHasPermission(userId, permission) {
 function requireOceanProducts(req, res, next) {
   if (!userHasPermission(req.userId, 'novel:ocean-product:list')) {
     return res.json(fail(403, '无权限访问商品库'))
+  }
+  next()
+}
+
+function requireOceanAccounts(req, res, next) {
+  if (
+    !userHasPermission(req.userId, 'novel:ocean-account:list') &&
+    !userHasPermission(req.userId, 'novel:ocean-product:list')
+  ) {
+    return res.json(fail(403, '无权限访问账户管理'))
   }
   next()
 }
@@ -101,10 +112,34 @@ router.post('/apps/:id/authorize', requireAuth, requireOceanProducts, (req, res)
   }
 })
 
+router.post('/auth/export', requireAuth, requireOceanProducts, (req, res) => {
+  try {
+    const result = oceanengine.exportAuthText(req.body && req.body.appPk)
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok({ text: result.text }))
+  } catch (e) {
+    console.error('[oceanengine] export auth', e.message)
+    res.json(fail(500, '复制授权失败'))
+  }
+})
+
+router.post('/auth/import', requireAuth, requireOceanProducts, (req, res) => {
+  try {
+    const result = oceanengine.importAuthText(req.body && req.body.text)
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] import auth', e.message)
+    res.json(fail(500, '导入授权失败'))
+  }
+})
+
 router.get('/settings', requireAuth, requireOceanProducts, async (req, res) => {
   try {
     const scope = req.query.scope
-    res.json(ok(await products.settings(req.query.appPk, { authOnly: scope === 'auth', usageOnly: scope === 'usage' })))
+    const data = await products.settings(req.query.appPk, { authOnly: scope === 'auth', usageOnly: scope === 'usage' })
+    data.allowImport = oceanengine.allowTokenImport()
+    res.json(ok(data))
   } catch (e) {
     console.error('[oceanengine] settings', e.message)
     res.json(fail(500, '读取巨量配置失败'))
@@ -242,6 +277,49 @@ router.delete('/covers/:id', requireAuth, requireOceanProducts, (req, res) => {
   } catch (e) {
     console.error('[oceanengine] cover delete', e.message)
     res.json(fail(500, '删除产品图失败'))
+  }
+})
+
+router.get('/accounts/page', requireAuth, requireOceanAccounts, async (req, res) => {
+  try {
+    res.json(ok(await accounts.listPage(req.query)))
+  } catch (e) {
+    console.error('[oceanengine] accounts page', e.message)
+    res.json(fail(500, '读取账户失败'))
+  }
+})
+
+router.post('/accounts/sync', requireAuth, requireOceanAccounts, async (req, res) => {
+  try {
+    const body = req.body || {}
+    const result = await accounts.syncFromOcean(body.appPk)
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] accounts sync', e.message)
+    res.json(fail(500, '同步账户失败'))
+  }
+})
+
+router.post('/accounts/rename', requireAuth, requireOceanAccounts, async (req, res) => {
+  try {
+    const result = await accounts.renameAccounts(req.body || {})
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] accounts rename', e.message)
+    res.json(fail(500, '批量改名失败'))
+  }
+})
+
+router.post('/accounts/avatar', requireAuth, requireOceanAccounts, async (req, res) => {
+  try {
+    const result = await accounts.updateAvatars(req.body || {})
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] accounts avatar', e.message)
+    res.json(fail(500, '批量换头像失败'))
   }
 })
 

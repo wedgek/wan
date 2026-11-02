@@ -4,18 +4,36 @@
       <el-input
         v-model="bookText"
         type="textarea"
-        :rows="8"
-        placeholder="一本书一行&#10;可我只是来捞一顿海底捞&#10;心头血浇的海棠，萧瑟在凤仪时"
+        :rows="4"
+        placeholder="一本书一行，可一次粘贴多本&#10;可我只是来捞一顿海底捞&#10;心头血浇的海棠，萧瑟在凤仪时"
       />
-      <div class="build-actions">
-        <el-button type="primary" :loading="building" @click="buildProducts">批量添加</el-button>
-        <span class="usage-label">添加到</span>
-        <div class="usage-tags">
-          <el-tag v-for="item in enabledLibraries" :key="item.id" size="small" effect="plain">{{ item.name }}</el-tag>
-          <span v-if="usageReady && !enabledLibraries.length" class="usage-empty">未开启</span>
+      <div class="build-fields">
+        <div class="field">
+          <span class="field-label">生成数量</span>
+          <el-input-number v-model="generateCount" :min="1" :max="20" :step="1" @focus="selectInput" />
         </div>
-        <p v-if="usageReady && enabledLibraries.length" class="build-note">当前 {{ enabledLibraries.length }} 个库，每本书各建 {{ enabledLibraries.length }} 条。模板、封面随机，重名加编号。</p>
-        <p v-else-if="usageReady" class="build-note">先在「商品库」里打开要添加的库。</p>
+        <span class="field-split" />
+        <div class="field">
+          <span class="field-label">动态标号</span>
+          <el-switch v-model="withNumber" />
+        </div>
+        <div v-if="withNumber" class="field">
+          <span class="field-label">起始号</span>
+          <el-input-number v-model="startNo" :min="1" :max="9999" :step="1" @focus="selectInput" />
+        </div>
+      </div>
+      <div class="build-actions">
+        <el-button v-if="!building" type="primary" @click="buildProducts">批量添加</el-button>
+        <el-button v-else type="primary" loading>{{ buildProgress || "添加中" }}</el-button>
+        <el-button v-if="building" @click="stopBuild">停止</el-button>
+        <el-button :disabled="building" @click="openPreview">预览</el-button>
+        <div class="build-libraries">
+          <div v-if="enabledLibraries.length" class="usage-tags">
+            <el-tag v-for="item in enabledLibraries" :key="item.id" size="small" effect="plain">{{ item.name }}</el-tag>
+          </div>
+          <span v-else-if="usageReady && !libraries.length" class="usage-empty">还没有商品库，请先从巨量同步</span>
+          <span v-else-if="usageReady" class="usage-empty">请到「商品库」打开要使用的库</span>
+        </div>
       </div>
       <el-table v-if="failures.length" :data="failures" border size="small" class="build-result">
         <el-table-column prop="book" label="输入书名" min-width="140" show-overflow-tooltip />
@@ -70,7 +88,7 @@
         </div>
 
         <div class="page-table-box table-wrap">
-          <el-table :data="tableData" v-loading="tableLoading || syncing || building" border height="100%" :header-cell-style="{ 'text-align': 'center' }">
+          <el-table :data="tableData" v-loading="tableLoading || syncing" border height="100%" :header-cell-style="{ 'text-align': 'center' }">
             <el-table-column prop="name" label="商品名称" min-width="180" show-overflow-tooltip />
             <el-table-column prop="productId" label="商品ID" width="180" align="center" />
             <el-table-column prop="platformName" label="商品库" min-width="140" show-overflow-tooltip />
@@ -98,7 +116,7 @@
       </el-tab-pane>
 
       <el-tab-pane label="商品库" name="libraries">
-        <p class="hint pane-hint">这里打开几个，批量添加时就进几个库。一本书会在每个打开的库里各建一条。小说库用「小说搭建模板」，漫剧库按现有必填项。</p>
+        <p class="hint pane-hint">打开开关的商品库会用于上面的批量添加。小说库用「小说搭建模板」，漫剧库按现有必填项。</p>
         <el-table :data="libraries" v-loading="configLoading" border>
           <el-table-column label="投入使用" width="120" align="center">
             <template #default="{ row }">
@@ -139,6 +157,14 @@
         </el-table>
       </el-tab-pane>
     </el-tabs>
+
+    <el-dialog v-model="previewVisible" :title="`预览 ${previewTotal} 个`" width="640px" append-to-body destroy-on-close>
+      <p v-if="previewCapped" class="preview-cap">单次最多 100 个名字，这里是前 100 个</p>
+      <el-table class="preview-table" :data="previewRows" border size="small" max-height="480" :span-method="previewSpan">
+        <el-table-column prop="libraryName" label="商品库" min-width="160" show-overflow-tooltip />
+        <el-table-column prop="name" label="商品名称" min-width="220" show-overflow-tooltip />
+      </el-table>
+    </el-dialog>
 
     <el-dialog v-model="editVisible" :title="form.id ? '编辑模板' : '新增模板'" width="480px" append-to-body destroy-on-close>
       <el-form label-width="108px">
@@ -189,10 +215,15 @@
 import { useTable } from "@/hooks/useTable"
 import CzPagination from "@/components/cz-pagination/index.vue"
 import request from "@/request"
+import { getStorage, setStorage } from "@/utils/storage"
+
+const NUMBER_SWITCH_KEY = "ocean-products-with-number"
 
 const tab = ref("build")
 const syncing = ref(false)
 const building = ref(false)
+const buildProgress = ref("")
+const buildAbort = ref(false)
 const configLoading = ref(false)
 const saving = ref(false)
 const bookText = ref("")
@@ -200,7 +231,59 @@ const failures = ref([])
 const libraries = ref([])
 const templates = ref([])
 const usageReady = ref(false)
+const savedWithNumber = getStorage(NUMBER_SWITCH_KEY)
+const withNumber = ref(savedWithNumber == null ? true : !!savedWithNumber)
+watch(withNumber, (value) => setStorage(NUMBER_SWITCH_KEY, !!value))
+const startNo = ref(1)
+const generateCount = ref(1)
+const previewVisible = ref(false)
+const bookLines = computed(() =>
+  String(bookText.value || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/[《》]/g, ""))
+    .filter(Boolean)
+    .slice(0, 30),
+)
 const enabledLibraries = computed(() => libraries.value.filter((item) => item.enabled))
+const previewModel = computed(() => {
+  const lines = bookLines.value
+  if (!lines.length) return { groups: [], capped: false }
+  const numbered = withNumber.value
+  const count = Math.min(20, Math.max(1, Number(generateCount.value) || 1))
+  const start = Math.max(1, Number(startNo.value) || 1)
+  const groups = []
+  let total = 0
+  let capped = false
+  for (const line of lines) {
+    const names = []
+    for (let index = 0; index < count; index += 1) {
+      if (total >= 100) {
+        capped = true
+        break
+      }
+      const name = numbered ? `${line}${start + index}` : index === 0 ? line : `${line}${index + 1}`
+      names.push(name.slice(0, 50))
+      total += 1
+    }
+    if (names.length) groups.push({ book: line, names })
+    if (capped) break
+  }
+  return { groups, capped }
+})
+const previewNames = computed(() => previewModel.value.groups.flatMap((group) => group.names))
+const previewCapped = computed(() => previewModel.value.capped)
+const previewRows = computed(() => {
+  const rows = []
+  for (const library of enabledLibraries.value) {
+    for (const group of previewModel.value.groups) {
+      for (const name of group.names) {
+        rows.push({ libraryId: library.id, libraryName: library.name, name })
+      }
+    }
+  }
+  return rows
+})
+const previewTotal = computed(() => previewRows.value.length)
 let usageStamp = 0
 const categories = ref([])
 const editVisible = ref(false)
@@ -239,6 +322,35 @@ const { tableParams, tableData, tableTotal, tableLoading, getTableData, tableSea
   },
 )
 
+function selectInput(event) {
+  const target = event && event.target
+  if (target && typeof target.select === "function") target.select()
+}
+
+function previewSpan({ column, rowIndex }) {
+  if (column.property !== "libraryName") return { rowspan: 1, colspan: 1 }
+  const rows = previewRows.value
+  if (rowIndex > 0 && rows[rowIndex].libraryId === rows[rowIndex - 1].libraryId) return { rowspan: 0, colspan: 0 }
+  let rowspan = 1
+  for (let index = rowIndex + 1; index < rows.length; index += 1) {
+    if (rows[index].libraryId !== rows[rowIndex].libraryId) break
+    rowspan += 1
+  }
+  return { rowspan, colspan: 1 }
+}
+
+function openPreview() {
+  if (!bookLines.value.length) {
+    ElMessage.warning("请填写书名，多本用换行隔开")
+    return
+  }
+  if (!enabledLibraries.value.length) {
+    ElMessage.warning("请先在「商品库」里打开要使用的商品库")
+    return
+  }
+  previewVisible.value = true
+}
+
 function statusTag(status) {
   if (status === "可投放") return "success"
   if (status === "审核未通过") return "danger"
@@ -273,7 +385,9 @@ async function loadConfig() {
     const res = await request({ url: "/admin-api/oceanengine/settings", timeout: 30000 })
     if (res.code !== 0) return
     const data = res.data || {}
-    libraries.value = data.libraries || []
+    const incoming = data.libraries || []
+    if (incoming.length) libraries.value = incoming
+    else if (data.message) ElMessage.warning(data.message)
     templates.value = data.templates || []
     if (Array.isArray(data.categories) && data.categories.length) categories.value = data.categories
     configLoaded.value = true
@@ -281,10 +395,6 @@ async function loadConfig() {
   } finally {
     configLoading.value = false
   }
-}
-
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char])
 }
 
 async function refreshCreated(rows) {
@@ -308,7 +418,7 @@ async function refreshCreated(rows) {
       }
     }),
   )
-  if (responses.some((res) => res && res.code === 0 && res.data && res.data.count)) await getTableData()
+  if (responses.some((res) => res && res.code === 0 && res.data && res.data.count)) await reloadProducts()
 }
 
 async function syncRemote(platformIds) {
@@ -334,53 +444,90 @@ async function syncRemote(platformIds) {
   }
 }
 
+async function reloadProducts() {
+  const params = { pageNo: tableParams.pageNo, pageSize: tableParams.pageSize }
+  if (tableParams.keyword) params.keyword = tableParams.keyword
+  if (tableParams.platformId) params.platformId = tableParams.platformId
+  if (tableParams.status) params.status = tableParams.status
+  const res = await request({ url: "/admin-api/oceanengine/products/page", params })
+  if (!res || res.code !== 0) return
+  const data = res.data || {}
+  tableData.value = data.list || []
+  tableTotal.value = data.total || 0
+  catalogLibraries.value = data.libraries || []
+}
+
 async function buildProducts() {
-  const names = String(bookText.value || "").trim()
-  if (!names) {
-    ElMessage.warning("请填写书名")
+  if (!bookLines.value.length) {
+    ElMessage.warning("请填写书名，多本用换行隔开")
     return
   }
+  const platformIds = enabledLibraries.value.map((item) => item.id)
+  if (!platformIds.length) {
+    ElMessage.warning("请先在「商品库」里打开要使用的商品库")
+    return
+  }
+  const names = previewNames.value.slice()
+  const chunkNames = Math.max(1, Math.floor(12 / platformIds.length))
+  const totalJobs = names.length * platformIds.length
   building.value = true
+  buildAbort.value = false
+  buildProgress.value = `添加中 0/${totalJobs}`
   failures.value = []
+  const results = []
+  let stopped = false
   try {
-    const res = await request({
-      url: "/admin-api/oceanengine/products/batch",
-      method: "POST",
-      timeout: 180000,
-      data: { names },
-    })
-    if (res.code !== 0) {
-      ElMessage.error(res.msg || "添加失败")
-      return
+    for (let offset = 0; offset < names.length; offset += chunkNames) {
+      if (buildAbort.value) {
+        stopped = true
+        break
+      }
+      const slice = names.slice(offset, offset + chunkNames)
+      const res = await request({
+        url: "/admin-api/oceanengine/products/batch",
+        method: "POST",
+        timeout: 180000,
+        data: { names: slice, platformIds },
+      })
+      if (!res || res.code !== 0) {
+        ElMessage.error((res && res.msg) || "添加失败")
+        stopped = true
+        break
+      }
+      results.push(...((res.data && res.data.results) || []))
+      const finished = Math.min(totalJobs, (offset + slice.length) * platformIds.length)
+      buildProgress.value = `添加中 ${finished}/${totalJobs}`
+      tableParams.pageNo = 1
+      await reloadProducts()
     }
-    const results = (res.data && res.data.results) || []
     failures.value = results.filter((item) => item.error)
     const okCount = results.length - failures.value.length
     if (okCount) {
-      const renamed = results.filter((item) => !item.error && item.renamed)
-      const libraries = new Set(renamed.map((item) => item.libraryName).filter(Boolean))
-      const lines = renamed.slice(0, 6).map((item) => {
-        const where = libraries.size > 1 && item.libraryName ? `（${item.libraryName}）` : ""
-        return `「${item.book}」改为「${item.name}」${where}`
-      })
-      if (renamed.length > 6) lines.push(`等 ${renamed.length} 条`)
-      const headline = failures.value.length ? `成功 ${okCount} 条，失败 ${failures.value.length} 条` : `已添加 ${okCount} 条`
-      ElMessage.success({
-        message: [headline, ...lines].map(escapeHtml).join("<br>"),
-        dangerouslyUseHTMLString: true,
-        duration: lines.length ? 8000 : 3000,
-        showClose: true,
-      })
-      if (!failures.value.length) bookText.value = ""
-      tableParams.pageNo = 1
-      await getTableData()
+      const renamedCount = results.filter((item) => !item.error && item.renamed).length
+      let headline = stopped ? `已停止，已添加 ${okCount} 条` : `已添加 ${okCount} 条`
+      if (!stopped && failures.value.length) headline = `成功 ${okCount} 条，失败 ${failures.value.length} 条`
+      if (renamedCount) headline += "，重名的已自动改编号"
+      ElMessage.success({ message: headline, duration: 3000, showClose: true })
+      if (!failures.value.length && !stopped) {
+        bookText.value = ""
+        if (withNumber.value) startNo.value = Math.max(1, Number(startNo.value) || 1) + Math.max(1, Number(generateCount.value) || 1)
+      }
       refreshCreated(results.filter((item) => !item.error && item.productId))
     } else if (failures.value.length) {
       ElMessage.error(`失败 ${failures.value.length} 条`)
+    } else if (stopped) {
+      ElMessage.success("已停止")
     }
   } finally {
     building.value = false
+    buildProgress.value = ""
   }
+}
+
+function stopBuild() {
+  if (!building.value) return
+  buildAbort.value = true
+  buildProgress.value = "停止中"
 }
 
 async function toggleLibrary(row, enabled) {
@@ -492,28 +639,70 @@ async function removeTemplate(row) {
   border-radius: 4px;
 }
 
-.usage-label {
-  color: var(--el-text-color-secondary);
+.build-fields,
+.build-actions,
+.build-libraries {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.build-panel :deep(.el-textarea) {
+  margin-bottom: 12px;
+}
+
+.field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.field-label {
+  color: var(--el-text-color-regular);
   font-size: 13px;
   white-space: nowrap;
 }
 
-.build-note {
-  margin: 0 0 0 auto;
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
-  line-height: 1.5;
+.field-split {
+  width: 1px;
+  height: 16px;
+  background: var(--el-border-color);
+}
+
+.field :deep(.el-input-number) {
+  width: 132px;
 }
 
 .build-actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
   margin-top: 12px;
 }
 
-.build-actions .el-button {
-  flex-shrink: 0;
+.build-libraries {
+  flex: 1;
+  min-width: 0;
+  margin-left: auto;
+  justify-content: flex-end;
+}
+
+.build-libraries .usage-tags {
+  flex: 1;
+  min-width: 0;
+  justify-content: flex-end;
+}
+
+.build-actions :deep(.el-button + .el-button) {
+  margin-left: 0;
+}
+
+.preview-cap {
+  margin: 0 0 12px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+
+.preview-table :deep(.el-table__body td.el-table__cell) {
+  vertical-align: top;
 }
 
 .usage-tags {

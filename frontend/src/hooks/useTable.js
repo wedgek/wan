@@ -18,7 +18,7 @@ export function useTable(fetchUrl, defaultParamsFn, options = {}) {
     const tableTotal = ref(0);
     const tableLoading = ref(false);
 
-    const { pagination = true, transformParams, onSuccess } = options;
+    const { pagination = true, transformParams, onSuccess, timeout } = options;
 
     let needRefresh = false;
 
@@ -48,9 +48,10 @@ export function useTable(fetchUrl, defaultParamsFn, options = {}) {
             if (transformParams) params = transformParams(params);
 
             const res = await request({
-                url: fetchUrl + '?' + urlEncode(params),
-                method: 'GET',
-            });
+            url: fetchUrl + '?' + urlEncode(params),
+            method: 'GET',
+            ...(timeout ? { timeout } : {}),
+        });
 
             if (res.code === 0) {
                 // 三种模式处理响应数据

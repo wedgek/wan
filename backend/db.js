@@ -682,8 +682,9 @@ function ensureNovelMenus(dbi) {
     { name: '商品库', path: 'ocean-products', component: 'novelOceanProducts', icon: 'Goods', sort: 6, perm: 'novel:ocean-product:list', visible: 1 },
     { name: '充值模板', path: 'recharge-templates', component: 'novelRechargeTemplates', icon: 'Coin', sort: 7, perm: 'novel:promo:list', visible: 1 },
     { name: '推广链接', path: 'promo-links', component: 'novelPromoLinks', icon: 'Link', sort: 8, perm: 'novel:promo:list', visible: 1 },
-    { name: '推广模板', path: 'promo-templates', component: 'novelPromoTemplates', icon: 'Ticket', sort: 9, perm: 'novel:promo:list', visible: 0 },
-    { name: '同步记录', path: 'sync', component: 'novelSync', icon: 'Upload', sort: 10, perm: 'novel:sync:list', visible: 0 },
+    { name: '账户管理', path: 'ocean-accounts', component: 'novelOceanAccounts', icon: 'User', sort: 9, perm: 'novel:ocean-account:list', visible: 1 },
+    { name: '推广模板', path: 'promo-templates', component: 'novelPromoTemplates', icon: 'Ticket', sort: 10, perm: 'novel:promo:list', visible: 0 },
+    { name: '同步记录', path: 'sync', component: 'novelSync', icon: 'Upload', sort: 11, perm: 'novel:sync:list', visible: 0 },
   ]
   const ins = dbi.prepare(`
     INSERT INTO menus (id, parent_id, type, name, path, component_name, icon, sort, permission, status, visible, keep_alive)
@@ -739,6 +740,19 @@ function ensureNovelMenus(dbi) {
     const ir = dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (?, ?)')
     for (const m of extra) {
       for (const r of roles) ir.run(r.role_id, m.id)
+    }
+  }
+  const accountMenu = dbi.prepare(`SELECT id FROM menus WHERE component_name = 'novelOceanAccounts' LIMIT 1`).get()
+  if (accountMenu) {
+    const sources = dbi
+      .prepare(
+        `SELECT id FROM menus WHERE component_name IN ('novelPromoLinks', 'novelOceanSettings', 'novelOceanProducts')`,
+      )
+      .all()
+    const irAccount = dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (?, ?)')
+    for (const src of sources) {
+      const roles = dbi.prepare('SELECT role_id FROM role_menus WHERE menu_id = ?').all(src.id)
+      for (const r of roles) irAccount.run(r.role_id, accountMenu.id)
     }
   }
 }
@@ -850,6 +864,20 @@ function ensureOceanEngineSchema(dbi) {
       error_message TEXT NOT NULL DEFAULT '',
       created_at TEXT DEFAULT (datetime('now'))
     );
+    CREATE TABLE IF NOT EXISTS oceanengine_advertisers (
+      advertiser_id TEXT PRIMARY KEY,
+      app_pk INTEGER NOT NULL DEFAULT 0,
+      name TEXT NOT NULL DEFAULT '',
+      company TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT '',
+      avatar_url TEXT NOT NULL DEFAULT '',
+      org_id TEXT NOT NULL DEFAULT '',
+      org_name TEXT NOT NULL DEFAULT '',
+      create_time TEXT NOT NULL DEFAULT '',
+      synced_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_oceanengine_advertisers_company ON oceanengine_advertisers(company);
+    CREATE INDEX IF NOT EXISTS idx_oceanengine_advertisers_app ON oceanengine_advertisers(app_pk);
   `)
 }
 

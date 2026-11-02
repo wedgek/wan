@@ -24,6 +24,7 @@ export const routeComponents = {
   novelProductImages: () => import("@/views/novel/product-images/index.vue"),
   novelMaterials: () => import("@/views/novel/materials/index.vue"),
   novelPromoLinks: () => import("@/views/novel/promo-links/index.vue"),
+  novelOceanAccounts: () => import("@/views/novel/ocean-accounts/index.vue"),
   novelPromoTemplates: () => import("@/views/novel/promo-templates/index.vue"),
   novelRechargeTemplates: () => import("@/views/novel/recharge-templates/index.vue"),
   novelSync: () => import("@/views/novel/sync/index.vue"),
@@ -276,6 +277,17 @@ export const staticRoutes = [
     },
   },
   {
+    path: "/novel/ocean-accounts",
+    name: "menuNovelOceanAccounts",
+    component: () => import("@/views/novel/ocean-accounts/index.vue"),
+    meta: {
+      requiresAuth: true,
+      showNavbar: true,
+      showSidebar: true,
+      title: "账户管理",
+    },
+  },
+  {
     path: "/novel/promo-templates",
     name: "menuNovelPromoTemplates",
     component: () => import("@/views/novel/promo-templates/index.vue"),
@@ -317,6 +329,7 @@ export const staticMenuRoutePaths = new Set([
   "/novel/ocean-settings",
   "/novel/ocean-products",
   "/novel/promo-links",
+  "/novel/ocean-accounts",
   "/novel/promo-templates",
   "/novel/recharge-templates",
   "/novel/sync",

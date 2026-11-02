@@ -74,7 +74,55 @@ function idOf(row, keys) {
   return ''
 }
 
-async function oceanFetch(token, method, path, { query, body } = {}) {
+const CREATE_GAP_MS = 100
+const READ_GAP_MS = 150
+const MAX_INFLIGHT = 8
+let inflight = 0
+const slotWaiters = []
+let nextStartAt = 0
+let createGapMs = CREATE_GAP_MS
+let cooledUntil = 0
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function rateLimited(message) {
+  return /限频|40100|too many|请求频率/i.test(String(message || ''))
+}
+
+function takeOceanSlot() {
+  if (inflight < MAX_INFLIGHT) {
+    inflight += 1
+    return Promise.resolve()
+  }
+  return new Promise((resolve) => slotWaiters.push(resolve))
+}
+
+function freeOceanSlot() {
+  const next = slotWaiters.shift()
+  if (next) next()
+  else inflight -= 1
+}
+
+function reserveOceanStart(gap) {
+  const now = Date.now()
+  const at = Math.max(now, nextStartAt, cooledUntil)
+  nextStartAt = at + gap
+  return at - now
+}
+
+function noteOceanLimit() {
+  createGapMs = Math.min(1500, Math.max(400, createGapMs * 2))
+  cooledUntil = Date.now() + 1200
+}
+
+function noteOceanOk(isWrite) {
+  if (!isWrite || createGapMs <= CREATE_GAP_MS) return
+  createGapMs = Math.max(CREATE_GAP_MS, Math.floor(createGapMs * 0.85))
+}
+
+async function oceanFetchOnce(token, method, path, { query, body } = {}) {
   const url = new URL(API + path)
   if (query) {
     for (const [key, value] of Object.entries(query)) {
@@ -108,6 +156,27 @@ async function oceanFetch(token, method, path, { query, body } = {}) {
     return { error: message, needScope, raw: json }
   }
   return { data: json.data != null ? json.data : {} }
+}
+
+async function oceanFetch(token, method, path, options) {
+  const isWrite = String(method || 'GET').toUpperCase() !== 'GET'
+  await takeOceanSlot()
+  try {
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const wait = reserveOceanStart(isWrite ? createGapMs : Math.max(READ_GAP_MS, createGapMs))
+      if (wait > 0) await sleep(wait)
+      const result = await oceanFetchOnce(token, method, path, options || {})
+      if (result.error && rateLimited(result.error) && attempt < 5) {
+        noteOceanLimit()
+        continue
+      }
+      if (!result.error) noteOceanOk(isWrite)
+      return result
+    }
+    return { error: '巨量接口达到限频，请稍后再试' }
+  } finally {
+    freeOceanSlot()
+  }
 }
 
 function normalizeLibrary(row) {
@@ -742,6 +811,23 @@ function storeTypeFromIndustry(industry) {
   return 0
 }
 
+function mapStoredLibrary(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    industry: row.industry,
+    storeType: storeTypeFromIndustry(row.industry),
+  }
+}
+
+function localStoredLibraries() {
+  return db
+    .getDb()
+    .prepare(`SELECT platform_id AS id, name, industry FROM oceanengine_libraries WHERE name != '' ORDER BY name`)
+    .all()
+    .map(mapStoredLibrary)
+}
+
 function localEnabledBuildLibraries() {
   return db
     .getDb()
@@ -753,12 +839,7 @@ function localEnabledBuildLibraries() {
        ORDER BY l.name`,
     )
     .all()
-    .map((row) => ({
-      id: row.id,
-      name: row.name,
-      industry: row.industry,
-      storeType: storeTypeFromIndustry(row.industry),
-    }))
+    .map(mapStoredLibrary)
 }
 
 function localUsedNames(platformId) {
@@ -877,22 +958,29 @@ function buildPlayletProduct(name, imageUrl) {
 }
 
 async function batchCreate(input) {
-  const books = parseBookNames(input && (input.names != null ? input.names : input.text))
-  if (!books.length) return { error: '请填写书名，多本用换行隔开' }
+  const books = parseBookNames(input && (input.names != null ? input.names : input.text)).slice(0, 100)
+  if (!books.length) return { error: '请填写商品名称' }
   const images = listCoverUrls()
   if (!images.length) return { error: '请先在「产品图」上传图片' }
 
   const tokenResult = await auth.getAccessToken(input && input.appPk)
   if (tokenResult.error) return { error: tokenResult.error, needAuth: !!tokenResult.needAuth }
   const acct = tokenResult.accountId || accountId()
-  let selected = localEnabledBuildLibraries()
-  if (!selected.length || selected.some((item) => !item.storeType)) {
+  const platformIds = [...new Set((Array.isArray(input && input.platformIds) ? input.platformIds : []).map((id) => String(id || '').trim()).filter(Boolean))]
+  let pool = localStoredLibraries()
+  const chosen = platformIds.length ? pool.filter((item) => platformIds.includes(String(item.id))) : pool
+  if (!pool.length || chosen.some((item) => !item.storeType)) {
     const listed = await listLibraries(tokenResult.token, acct)
-    if (listed.error) return { error: listed.error }
-    rememberLibraries(listed.libraries)
-    selected = enabledLibraries(listed.libraries)
+    if (listed.error && !pool.length) return { error: listed.error }
+    if (!listed.error) {
+      rememberLibraries(listed.libraries)
+      pool = listed.libraries
+    }
   }
-  if (!selected.length) return { error: '请先在「商品库」里打开要使用的商品库' }
+  const selected = platformIds.length
+    ? pool.filter((item) => platformIds.includes(String(item.id)))
+    : pool.filter((item) => localEnabledBuildLibraries().some((enabled) => enabled.id === item.id))
+  if (!selected.length) return { error: platformIds.length ? '请选择商品库' : '请先在「商品库」里打开要使用的商品库' }
   const templates = enabledNovelTemplates()
   if (selected.some((item) => item.storeType !== 43) && !templates.length) {
     return { error: '请先在「小说搭建模板」里打开至少一个模板' }
@@ -923,7 +1011,7 @@ async function batchCreate(input) {
     }
   }
 
-  const results = await mapPool(jobs, 4, (job) => createCatalogProduct(tokenResult.token, acct, job))
+  const results = await mapPool(jobs, MAX_INFLIGHT, (job) => createCatalogProduct(tokenResult.token, acct, job))
   return { results }
 }
 
@@ -1141,7 +1229,9 @@ async function settings(appPk, options) {
   if (tokenResult.error) return base
   const acct = tokenResult.accountId || accountId()
   const listed = await listLibraries(tokenResult.token, acct)
-  if (listed.error) return { ...base, authorized: false, message: listed.error }
+  if (listed.error) {
+    return { ...base, libraries: librarySettings(localStoredLibraries()), message: listed.error }
+  }
   rememberLibraries(listed.libraries)
   return { ...base, libraries: librarySettings(listed.libraries) }
 }

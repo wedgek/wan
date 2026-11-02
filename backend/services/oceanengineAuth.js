@@ -412,7 +412,134 @@ async function refreshStoredToken() {
   return refreshing
 }
 
+function refreshEnabled() {
+  const flag = String(process.env.OCEANENGINE_AUTO_REFRESH || '').trim().toLowerCase()
+  if (flag === '1' || flag === 'true' || flag === 'yes') return true
+  if (flag === '0' || flag === 'false' || flag === 'no') return false
+  return process.env.NODE_ENV === 'production'
+}
+
+function allowTokenImport() {
+  return process.env.NODE_ENV !== 'production'
+}
+
+const AUTH_BUNDLE_PREFIX = 'WANX_OCEAN_AUTH:'
+
+function formatAuthBundle(payload) {
+  return AUTH_BUNDLE_PREFIX + Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')
+}
+
+function parseAuthBundle(text) {
+  const raw = String(text || '').trim()
+  if (!raw) return { error: '请粘贴授权内容' }
+  let jsonText = raw
+  if (raw.startsWith(AUTH_BUNDLE_PREFIX)) {
+    try {
+      jsonText = Buffer.from(raw.slice(AUTH_BUNDLE_PREFIX.length).trim(), 'base64url').toString('utf8')
+    } catch {
+      return { error: '复制内容无法识别' }
+    }
+  }
+  let payload
+  try {
+    payload = JSON.parse(jsonText)
+  } catch {
+    return { error: '复制内容无法识别' }
+  }
+  if (!payload || Number(payload.v) !== 1) return { error: '复制内容无法识别' }
+  const accessToken = String(payload.accessToken || '').trim()
+  const refreshToken = String(payload.refreshToken || '').trim()
+  if (!accessToken) return { error: '复制内容里没有 Access Token' }
+  if (accessToken.length > 4096 || refreshToken.length > 4096) return { error: '复制内容无法识别' }
+  const advertiserIds = Array.isArray(payload.advertiserIds)
+    ? payload.advertiserIds.map((id) => String(id == null ? '' : id).trim()).filter(Boolean)
+    : []
+  return {
+    payload: {
+      v: 1,
+      appId: String(payload.appId || '').trim(),
+      accessToken,
+      refreshToken,
+      advertiserIds,
+      accessExpiresAt: String(payload.accessExpiresAt || '').trim(),
+      refreshExpiresAt: String(payload.refreshExpiresAt || '').trim(),
+    },
+  }
+}
+
+function exportAuthText(appPk) {
+  ensureSeed()
+  const app = appPk ? readApp(Number(appPk)) : resolveApp()
+  if (!app) return { error: '还没有巨量应用' }
+  const row = readAuth(app.id)
+  if (!row || !row.access_token) return { error: '还没有可复制的授权' }
+  let advertiserIds = []
+  try {
+    const parsed = JSON.parse(row.advertiser_ids || '[]')
+    if (Array.isArray(parsed)) advertiserIds = parsed.map((id) => String(id))
+  } catch {
+    advertiserIds = []
+  }
+  return {
+    text: formatAuthBundle({
+      v: 1,
+      appId: app.app_id,
+      accessToken: row.access_token,
+      refreshToken: row.refresh_token || '',
+      advertiserIds,
+      accessExpiresAt: row.access_expires_at || '',
+      refreshExpiresAt: row.refresh_expires_at || '',
+    }),
+  }
+}
+
+function saveImportedTokens(appPk, payload) {
+  database()
+    .prepare(
+      `INSERT INTO oceanengine_authorizations (
+         app_pk, access_token, refresh_token, advertiser_ids,
+         access_expires_at, refresh_expires_at, last_error, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, '', datetime('now'))
+       ON CONFLICT(app_pk) DO UPDATE SET
+         access_token = excluded.access_token,
+         refresh_token = excluded.refresh_token,
+         advertiser_ids = excluded.advertiser_ids,
+         access_expires_at = excluded.access_expires_at,
+         refresh_expires_at = excluded.refresh_expires_at,
+         last_error = '',
+         updated_at = datetime('now')`,
+    )
+    .run(
+      appPk,
+      payload.accessToken,
+      payload.refreshToken,
+      JSON.stringify(payload.advertiserIds),
+      payload.accessExpiresAt || null,
+      payload.refreshExpiresAt || null,
+    )
+}
+
+function importAuthText(text) {
+  if (!allowTokenImport()) return { error: '线上环境不能导入授权' }
+  const parsed = parseAuthBundle(text)
+  if (parsed.error) return parsed
+  ensureSeed()
+  const payload = parsed.payload
+  let app = null
+  if (payload.appId) {
+    app = database().prepare('SELECT * FROM oceanengine_apps WHERE app_id = ?').get(payload.appId)
+    if (!app) return { error: '本地没有这个 AppID 的应用' }
+  } else {
+    app = resolveApp()
+    if (!app) return { error: '本地还没有巨量应用' }
+  }
+  saveImportedTokens(app.id, payload)
+  console.log('[oceanengine] auth imported', { appId: app.app_id })
+  return { id: app.id }
+}
+
 async function doRefresh() {
+  if (!refreshEnabled()) return
   ensureSeed()
   const apps = database().prepare('SELECT * FROM oceanengine_apps WHERE enabled = 1').all()
   for (const app of apps) {
@@ -433,11 +560,13 @@ async function getAccessToken(appPk) {
   if (!app.secret) return { error: `应用「${app.name}」还没有 Secret`, needAuth: true, appPk: app.id }
   const row = readAuth(app.id)
   if (!row || !row.access_token) {
-    return { error: `应用「${app.name}」还没授权，点一次「去授权」即可`, needAuth: true, appPk: app.id, accountId: app.account_id, platformId: app.platform_id }
+    const hint = allowTokenImport() ? '把线上复制的授权导入即可' : '点一次「去授权」即可'
+    return { error: `应用「${app.name}」还没授权，${hint}`, needAuth: true, appPk: app.id, accountId: app.account_id, platformId: app.platform_id }
   }
   const left = row.access_expires_at ? Date.parse(row.access_expires_at) - Date.now() : 1
   if (row.access_expires_at && left <= 60 * 1000) {
-    return { error: row.last_error || '授权已过期，请再点一次「去授权」', needAuth: true, appPk: app.id, accountId: app.account_id, platformId: app.platform_id }
+    const hint = allowTokenImport() ? '授权已过期，请从线上再复制一次' : '授权已过期，请再点一次「去授权」'
+    return { error: row.last_error || hint, needAuth: true, appPk: app.id, accountId: app.account_id, platformId: app.platform_id }
   }
   return {
     token: row.access_token,
@@ -450,6 +579,10 @@ async function getAccessToken(appPk) {
 
 function startTokenRefresh() {
   if (refreshTimer) return
+  if (!refreshEnabled()) {
+    console.log('[oceanengine] 开发环境不自动刷新，请从线上复制授权后导入')
+    return
+  }
   const tick = () => {
     refreshStoredToken().catch((e) => console.error('[oceanengine] refresh', e.message))
   }
@@ -467,4 +600,9 @@ module.exports = {
   saveApp,
   createAuthorizeUrl,
   config,
+  allowTokenImport,
+  exportAuthText,
+  importAuthText,
+  formatAuthBundle,
+  parseAuthBundle,
 }

@@ -10,7 +10,7 @@
       <div class="build-fields">
         <div class="field">
           <span class="field-label">生成数量</span>
-          <el-input-number v-model="generateCount" :min="1" :max="20" :step="1" @focus="selectInput" />
+          <el-input-number v-model="generateCount" :min="1" :max="1000" :step="1" @focus="selectInput" />
         </div>
         <span class="field-split" />
         <div class="field">
@@ -29,7 +29,14 @@
         <el-button :disabled="building" @click="openPreview">预览</el-button>
         <div class="build-libraries">
           <div v-if="enabledLibraries.length" class="usage-tags">
-            <el-tag v-for="item in enabledLibraries" :key="item.id" size="small" effect="plain">{{ item.name }}</el-tag>
+            <el-checkbox
+              v-for="item in enabledLibraries"
+              :key="item.id"
+              :model-value="libraryChecked(item.id)"
+              @change="(checked) => setLibraryChecked(item.id, checked)"
+            >
+              {{ item.name }}
+            </el-checkbox>
           </div>
           <span v-else-if="usageReady && !libraries.length" class="usage-empty">还没有商品库，请先从巨量同步</span>
           <span v-else-if="usageReady" class="usage-empty">请到「商品库」打开要使用的库</span>
@@ -116,7 +123,7 @@
       </el-tab-pane>
 
       <el-tab-pane label="商品库" name="libraries">
-        <p class="hint pane-hint">打开开关的商品库会用于上面的批量添加。小说库用「小说搭建模板」，漫剧库按现有必填项。</p>
+        <p class="hint pane-hint">打开开关的商品库会出现在上面，勾选后才会用于批量添加。小说库用「小说搭建模板」，漫剧库按现有必填项。</p>
         <el-table :data="libraries" v-loading="configLoading" border>
           <el-table-column label="投入使用" width="120" align="center">
             <template #default="{ row }">
@@ -159,7 +166,7 @@
     </el-tabs>
 
     <el-dialog v-model="previewVisible" :title="`预览 ${previewTotal} 个`" width="640px" append-to-body destroy-on-close>
-      <p v-if="previewCapped" class="preview-cap">单次最多 100 个名字，这里是前 100 个</p>
+      <p v-if="previewCapped" class="preview-cap">单次最多 1000 个名字，这里是前 1000 个</p>
       <el-table class="preview-table" :data="previewRows" border size="small" max-height="480" :span-method="previewSpan">
         <el-table-column prop="libraryName" label="商品库" min-width="160" show-overflow-tooltip />
         <el-table-column prop="name" label="商品名称" min-width="220" show-overflow-tooltip />
@@ -218,6 +225,7 @@ import request from "@/request"
 import { getStorage, setStorage } from "@/utils/storage"
 
 const NUMBER_SWITCH_KEY = "ocean-products-with-number"
+const LIBRARY_OFF_KEY = "ocean-products-library-off"
 
 const tab = ref("build")
 const syncing = ref(false)
@@ -245,11 +253,15 @@ const bookLines = computed(() =>
     .slice(0, 30),
 )
 const enabledLibraries = computed(() => libraries.value.filter((item) => item.enabled))
+const libraryOffIds = ref(readLibraryOffIds())
+const selectedLibraries = computed(() =>
+  enabledLibraries.value.filter((item) => !libraryOffIds.value.has(String(item.id))),
+)
 const previewModel = computed(() => {
   const lines = bookLines.value
   if (!lines.length) return { groups: [], capped: false }
   const numbered = withNumber.value
-  const count = Math.min(20, Math.max(1, Number(generateCount.value) || 1))
+  const count = Math.min(1000, Math.max(1, Number(generateCount.value) || 1))
   const start = Math.max(1, Number(startNo.value) || 1)
   const groups = []
   let total = 0
@@ -257,7 +269,7 @@ const previewModel = computed(() => {
   for (const line of lines) {
     const names = []
     for (let index = 0; index < count; index += 1) {
-      if (total >= 100) {
+      if (total >= 1000) {
         capped = true
         break
       }
@@ -274,7 +286,7 @@ const previewNames = computed(() => previewModel.value.groups.flatMap((group) =>
 const previewCapped = computed(() => previewModel.value.capped)
 const previewRows = computed(() => {
   const rows = []
-  for (const library of enabledLibraries.value) {
+  for (const library of selectedLibraries.value) {
     for (const group of previewModel.value.groups) {
       for (const name of group.names) {
         rows.push({ libraryId: library.id, libraryName: library.name, name })
@@ -322,6 +334,25 @@ const { tableParams, tableData, tableTotal, tableLoading, getTableData, tableSea
   },
 )
 
+function readLibraryOffIds() {
+  const saved = getStorage(LIBRARY_OFF_KEY)
+  if (!Array.isArray(saved)) return new Set()
+  return new Set(saved.map((id) => String(id)))
+}
+
+function libraryChecked(id) {
+  return !libraryOffIds.value.has(String(id))
+}
+
+function setLibraryChecked(id, checked) {
+  const next = new Set(libraryOffIds.value)
+  const key = String(id)
+  if (checked) next.delete(key)
+  else next.add(key)
+  libraryOffIds.value = next
+  setStorage(LIBRARY_OFF_KEY, [...next])
+}
+
 function selectInput(event) {
   const target = event && event.target
   if (target && typeof target.select === "function") target.select()
@@ -346,6 +377,10 @@ function openPreview() {
   }
   if (!enabledLibraries.value.length) {
     ElMessage.warning("请先在「商品库」里打开要使用的商品库")
+    return
+  }
+  if (!selectedLibraries.value.length) {
+    ElMessage.warning("请勾选要使用的商品库")
     return
   }
   previewVisible.value = true
@@ -462,9 +497,13 @@ async function buildProducts() {
     ElMessage.warning("请填写书名，多本用换行隔开")
     return
   }
-  const platformIds = enabledLibraries.value.map((item) => item.id)
-  if (!platformIds.length) {
+  if (!enabledLibraries.value.length) {
     ElMessage.warning("请先在「商品库」里打开要使用的商品库")
+    return
+  }
+  const platformIds = selectedLibraries.value.map((item) => item.id)
+  if (!platformIds.length) {
+    ElMessage.warning("请勾选要使用的商品库")
     return
   }
   const names = previewNames.value.slice()
@@ -709,8 +748,19 @@ async function removeTemplate(row) {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  justify-content: flex-end;
+  gap: 8px 14px;
   min-width: 0;
+}
+
+.usage-tags :deep(.el-checkbox) {
+  height: 24px;
+  margin-right: 0;
+}
+
+.usage-tags :deep(.el-checkbox__label) {
+  padding-left: 6px;
+  font-size: 13px;
 }
 
 .usage-empty {

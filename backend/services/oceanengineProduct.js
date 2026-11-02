@@ -958,7 +958,7 @@ function buildPlayletProduct(name, imageUrl) {
 }
 
 async function batchCreate(input) {
-  const books = parseBookNames(input && (input.names != null ? input.names : input.text)).slice(0, 100)
+  const books = parseBookNames(input && (input.names != null ? input.names : input.text)).slice(0, 1000)
   if (!books.length) return { error: '请填写商品名称' }
   const images = listCoverUrls()
   if (!images.length) return { error: '请先在「产品图」上传图片' }

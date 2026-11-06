@@ -1,5 +1,5 @@
 <template>
-  <div class="page-container novel-page">
+  <div class="page-container novel-page ocean-settings">
     <div class="section">
       <div class="section-head">
         <span>授权</span>
@@ -78,21 +78,25 @@ onMounted(async () => {
 })
 
 async function load() {
-  const res = await request({
-    url: "/admin-api/oceanengine/settings",
-    timeout: 30000,
-    params: { scope: "auth" },
-  })
-  if (res.code !== 0) {
-    message.value = res.msg || "读取授权状态失败"
-    return
+  try {
+    const res = await request({
+      url: "/admin-api/oceanengine/settings",
+      timeout: 30000,
+      params: { scope: "auth" },
+    })
+    if (res.code !== 0) {
+      message.value = res.msg || "读取授权状态失败"
+      return
+    }
+    const data = res.data || {}
+    authorized.value = !!data.authorized
+    allowImport.value = !!data.allowImport
+    message.value = data.authorized ? "" : data.message || ""
+    appPk.value = data.appPk || null
+    app.value = (data.apps || []).find((item) => item.id === data.appPk) || (data.apps || [])[0] || null
+  } catch {
+    message.value = "读取授权状态失败"
   }
-  const data = res.data || {}
-  authorized.value = !!data.authorized
-  allowImport.value = !!data.allowImport
-  message.value = data.authorized ? "" : data.message || ""
-  appPk.value = data.appPk || null
-  app.value = (data.apps || []).find((item) => item.id === data.appPk) || (data.apps || [])[0] || null
 }
 
 async function writeClipboard(text) {
@@ -202,6 +206,10 @@ async function goAuth() {
 
 <style scoped lang="scss">
 @use "../novel-page.scss";
+
+.ocean-settings {
+  min-height: 0;
+}
 
 .section {
   padding: 16px;

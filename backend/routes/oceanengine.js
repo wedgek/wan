@@ -3,12 +3,20 @@
  * 与点众 /admin-api/novel/dianzhong/callback 分开。
  */
 const express = require('express')
+const multer = require('multer')
 const db = require('../db')
 const { requireAuth } = require('./auth')
 const { ok, fail } = require('../utils/response')
 const oceanengine = require('../services/oceanengineAuth')
 const products = require('../services/oceanengineProduct')
 const accounts = require('../services/oceanengineAccount')
+const events = require('../services/oceanengineEvent')
+const sites = require('../services/oceanengineSite')
+
+const siteUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024, files: 1 },
+}).single('file')
 
 const router = express.Router()
 
@@ -289,15 +297,66 @@ router.get('/accounts/page', requireAuth, requireOceanAccounts, async (req, res)
   }
 })
 
-router.post('/accounts/sync', requireAuth, requireOceanAccounts, async (req, res) => {
+router.get('/accounts/ocean-search', requireAuth, requireOceanAccounts, async (req, res) => {
   try {
-    const body = req.body || {}
-    const result = await accounts.syncFromOcean(body.appPk)
+    const result = await accounts.searchOceanAccounts(req.query)
     if (result.error) return res.json(fail(400, result.error))
     res.json(ok(result))
   } catch (e) {
-    console.error('[oceanengine] accounts sync', e.message)
+    console.error('[oceanengine] ocean search', e.message)
+    res.json(fail(500, '从巨量搜索账户失败'))
+  }
+})
+
+router.post('/accounts/ocean-import', requireAuth, requireOceanAccounts, async (req, res) => {
+  try {
+    const body = req.body || {}
+    const result = body.keyword
+      ? await accounts.importOceanSearch(body.keyword)
+      : await accounts.importSelectedAccounts(body.accounts)
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] ocean import', e)
+    res.json(fail(500, '导入账户失败'))
+  }
+})
+
+router.post('/accounts/using', requireAuth, requireOceanAccounts, (req, res) => {
+  try {
+    const body = req.body || {}
+    const result = body.keyword
+      ? accounts.importByKeyword(body.keyword)
+      : accounts.setUsing(body.advertiserIds, body.using !== false && body.using !== 0)
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] accounts using', e.message)
+    res.json(fail(500, '更新使用中的账户失败'))
+  }
+})
+
+router.post('/accounts/sync', requireAuth, requireOceanAccounts, async (req, res) => {
+  try {
+    const body = req.body || {}
+    const result = await accounts.syncOnline(body.advertiserIds)
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] accounts sync', e)
     res.json(fail(500, '同步账户失败'))
+  }
+})
+
+router.post('/accounts/copyright', requireAuth, requireOceanAccounts, (req, res) => {
+  try {
+    const body = req.body || {}
+    const result = accounts.setCopyright(body.advertiserIds, body.copyrightOwner)
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] accounts copyright', e)
+    res.json(fail(500, '设置版权方失败'))
   }
 })
 
@@ -320,6 +379,202 @@ router.post('/accounts/avatar', requireAuth, requireOceanAccounts, async (req, r
   } catch (e) {
     console.error('[oceanengine] accounts avatar', e.message)
     res.json(fail(500, '批量换头像失败'))
+  }
+})
+
+router.get('/events/accounts', requireAuth, requireOceanProducts, (req, res) => {
+  try {
+    res.json(ok(events.listAccountOptions(req.query.keyword)))
+  } catch (e) {
+    console.error('[oceanengine] event accounts', e.message)
+    res.json(fail(500, '读取投放账户失败'))
+  }
+})
+
+router.get('/events/assets', requireAuth, requireOceanProducts, async (req, res) => {
+  try {
+    const result = await events.listMiniProgramAssets(req.query.advertiserId)
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] event assets', e.message)
+    res.json(fail(500, '读取事件资产失败'))
+  }
+})
+
+router.get('/events/configs', requireAuth, requireOceanProducts, async (req, res) => {
+  try {
+    const result = await events.listCreatedEvents(req.query.advertiserId, req.query.assetId)
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] event configs', e.message)
+    res.json(fail(500, '读取已创建事件失败'))
+  }
+})
+
+router.get('/events/available', requireAuth, requireOceanProducts, async (req, res) => {
+  try {
+    const result = await events.listAvailableEvents(req.query.advertiserId, req.query.assetId)
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] available events', e.message)
+    res.json(fail(500, '读取可添加事件失败'))
+  }
+})
+
+router.post('/events/status', requireAuth, requireOceanProducts, async (req, res) => {
+  try {
+    const result = await events.summarizeAccountEvents((req.body || {}).advertiserIds)
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] event status', e.message)
+    res.json(fail(500, '读取事件状态失败'))
+  }
+})
+
+router.post('/events/batch', requireAuth, requireOceanProducts, async (req, res) => {
+  try {
+    const body = req.body || {}
+    const result = await events.batchAddEvents({
+      text: body.text,
+      eventNames: body.eventNames,
+      advertiserIds: body.advertiserIds,
+    })
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] batch events', e.message)
+    res.json(fail(500, '批量添加事件失败'))
+  }
+})
+
+router.get('/sites/poster', requireAuth, requireOceanProducts, (req, res) => {
+  try {
+    res.json(ok(sites.posterInfo()))
+  } catch (e) {
+    console.error('[oceanengine] landing poster', e.message)
+    res.json(fail(500, '读取落地页图片失败'))
+  }
+})
+
+router.post('/sites/poster/active', requireAuth, requireOceanProducts, (req, res) => {
+  try {
+    const result = sites.setActivePoster((req.body || {}).id)
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] active landing poster', e.message)
+    res.json(fail(500, '切换落地页图片失败'))
+  }
+})
+
+router.get('/sites/poster/file', requireAuth, requireOceanProducts, (req, res) => {
+  const file = sites.readPoster(req.query.id)
+  if (!file) return res.status(404).end()
+  res.setHeader('Content-Type', file.mime || 'image/jpeg')
+  res.setHeader('Cache-Control', 'private, max-age=60')
+  res.send(file.buffer)
+})
+
+router.post('/sites/poster', requireAuth, requireOceanProducts, (req, res) => {
+  siteUpload(req, res, (err) => {
+    if (err) {
+      const message = err.code === 'LIMIT_FILE_SIZE' ? '图片不能超过 2MB' : '图片上传失败'
+      return res.json(fail(400, message))
+    }
+    try {
+      const result = sites.savePoster(req.file)
+      if (result.error) return res.json(fail(400, result.error))
+      res.json(ok(result))
+    } catch (e) {
+      console.error('[oceanengine] save landing poster', e.message)
+      res.json(fail(500, '保存落地页图片失败'))
+    }
+  })
+})
+
+router.post('/sites/generate', requireAuth, requireOceanProducts, async (req, res) => {
+  try {
+    const result = await sites.generateSites((req.body || {}).advertiserIds)
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] generate sites', e.message)
+    res.json(fail(500, '生成落地页失败'))
+  }
+})
+
+router.post('/sites/summary', requireAuth, requireOceanProducts, async (req, res) => {
+  try {
+    const result = await sites.summarizeAccountSites((req.body || {}).advertiserIds)
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] orange site summary', e.message)
+    res.json(fail(500, '读取落地页失败'))
+  }
+})
+
+router.get('/sites', requireAuth, requireOceanProducts, async (req, res) => {
+  try {
+    const result = await sites.listAccountSites(req.query.advertiserId, {
+      page: req.query.page,
+      pageSize: req.query.pageSize,
+      search: req.query.search,
+    })
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] orange site list', e.message)
+    res.json(fail(500, '读取落地页失败'))
+  }
+})
+
+router.post('/sites/batch', requireAuth, requireOceanProducts, (req, res) => {
+  siteUpload(req, res, async (err) => {
+    if (err) {
+      const message = err.code === 'LIMIT_FILE_SIZE' ? '图片不能超过 2MB' : '图片上传失败'
+      return res.json(fail(400, message))
+    }
+    try {
+      let advertiserIds = []
+      try {
+        advertiserIds = JSON.parse((req.body && req.body.advertiserIds) || '[]')
+      } catch {
+        advertiserIds = []
+      }
+      let names = []
+      try {
+        names = JSON.parse((req.body && req.body.names) || '[]')
+      } catch {
+        names = []
+      }
+      const result = await sites.createImageSites({
+        advertiserIds,
+        names,
+        name: req.body && req.body.name,
+        file: req.file,
+      })
+      if (result.error) return res.json(fail(400, result.error))
+      res.json(ok(result))
+    } catch (e) {
+      console.error('[oceanengine] orange sites', e.message)
+      res.json(fail(500, '创建落地页失败'))
+    }
+  })
+})
+
+router.post('/events', requireAuth, requireOceanProducts, async (req, res) => {
+  try {
+    const result = await events.createEvent(req.body || {})
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] create event', e.message)
+    res.json(fail(500, '添加事件失败'))
   }
 })
 

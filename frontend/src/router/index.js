@@ -62,6 +62,11 @@ export const addDynamicRoutes = (menus, { force = false } = {}) => {
     const hasPermission = Number(menu.status) === 0
     const load = menu.componentName ? routeComponents[menu.componentName] : null
 
+    if (!load && menu.children?.length) {
+      menu.children.forEach((child) => processMenu(child, fullPath))
+      return
+    }
+
     if (staticMenuRoutePaths.has(fullPath)) {
       if (menu.componentName && !load) {
         console.warn(`[router] 菜单「${menu.name}」componentName 未映射:`, menu.componentName, fullPath)

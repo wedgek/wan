@@ -293,8 +293,15 @@ const handleMenuSelect = (index) => {
 
           .el-menu-item,
           .el-sub-menu__title {
-            padding-left: 40px !important;
-            margin: 4px 12px;
+            padding-left: 28px !important;
+            margin: 4px 8px;
+          }
+
+          .el-sub-menu .el-menu {
+            .el-menu-item,
+            .el-sub-menu__title {
+              padding-left: 44px !important;
+            }
           }
 
           .menu-icon--nested {

@@ -215,13 +215,13 @@ function upsertAccounts(appPk, orgId, orgName, rows) {
       ids.push(row.advertiserId)
       stmt.run(
         row.advertiserId,
-        appPk,
-        row.name,
-        row.company,
-        row.status,
-        row.orgId || orgId,
-        row.orgName || orgName,
-        row.createTime,
+        appPk || 0,
+        row.name || '',
+        row.company || '',
+        row.status || '',
+        row.orgId || orgId || '',
+        row.orgName || orgName || '',
+        row.createTime || '',
         now,
       )
     }
@@ -230,14 +230,15 @@ function upsertAccounts(appPk, orgId, orgName, rows) {
   return ids
 }
 
-function removeMissing(appPk, keepIds) {
+function removeMissing(appPk, keepIds, keepInUse) {
   const d = database()
+  const protect = keepInUse ? ' AND in_use = 0' : ''
   if (!keepIds.length) {
-    d.prepare('DELETE FROM oceanengine_advertisers WHERE app_pk = ?').run(appPk)
+    d.prepare(`DELETE FROM oceanengine_advertisers WHERE app_pk = ?${protect}`).run(appPk)
     return
   }
   const ph = keepIds.map(() => '?').join(',')
-  d.prepare(`DELETE FROM oceanengine_advertisers WHERE app_pk = ? AND advertiser_id NOT IN (${ph})`).run(appPk, ...keepIds)
+  d.prepare(`DELETE FROM oceanengine_advertisers WHERE app_pk = ?${protect} AND advertiser_id NOT IN (${ph})`).run(appPk, ...keepIds)
 }
 
 function updateLocalName(advertiserId, name) {
@@ -377,107 +378,287 @@ async function fetchAdvertiserInfo(token, ids) {
 function avatarUrlOf(data) {
   if (!data) return ''
   const nested = data.avatar_info || data.avatar || data
-  return idOf(nested, ['web_url', 'web_uri', 'avatar_url', 'image_url', 'url', 'audit_web_url'])
+  for (const key of ['web_url', 'audit_web_url', 'avatar_url', 'image_url', 'url']) {
+    const value = nested && nested[key]
+    if (value && /^https?:\/\//i.test(String(value))) return String(value).trim()
+  }
+  return ''
 }
 
 async function enrichAvatars(token, ids) {
   if (avatarScopeDenied || !ids.length) return
-  const pending = ids.filter((id) => id)
-  const concurrency = 4
+  const queue = ids.filter((id) => id)
+  const concurrency = 3
   let cursor = 0
-  async function worker() {
-    while (cursor < pending.length && !avatarScopeDenied) {
-      const index = cursor
-      cursor += 1
-      const advertiserId = pending[index]
-      const result = await oceanFetch(token, 'GET', AVATAR_GET, {
+  async function pull() {
+    const index = cursor
+    cursor += 1
+    return index < queue.length ? queue[index] : ''
+  }
+  async function fetchAvatar(advertiserId) {
+    let result = await oceanFetch(token, 'GET', AVATAR_GET, {
+      query: { advertiser_id: advertiserId },
+    })
+    if (result.error && /频繁|请求过多|too many|rate|限流|系统繁忙/i.test(result.error)) {
+      await sleep(600)
+      result = await oceanFetch(token, 'GET', AVATAR_GET, {
         query: { advertiser_id: advertiserId },
       })
+    }
+    return result
+  }
+  async function worker() {
+    while (!avatarScopeDenied) {
+      const advertiserId = await pull()
+      if (!advertiserId) return
+      const result = await fetchAvatar(advertiserId)
       if (result.needScope) {
         avatarScopeDenied = true
         return
       }
-      if (result.error) {
-        markAvatarChecked(advertiserId)
-        continue
-      }
+      if (result.error) continue
       const url = avatarUrlOf(result.data)
-      if (url) updateLocalAvatar(advertiserId, url)
+      if (url && /^https?:\/\//i.test(url)) updateLocalAvatar(advertiserId, url)
       else markAvatarChecked(advertiserId)
+      await sleep(80)
     }
   }
-  await Promise.all(Array.from({ length: Math.min(concurrency, pending.length) }, () => worker()))
+  await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, () => worker()))
+}
+
+const TEMPLATE_BID = {
+  '1.9': '2.1',
+  '2.9': '3.1',
+  '3.9': '4.1',
+  '9.9': '13',
+  '29.9': '31',
+  '39.9': '41',
+}
+
+function parseUsage(name) {
+  const text = String(name || '').trim()
+  const novel = text.match(/^(.+?)-?点众小说(\d+(?:\.\d+)?)/)
+  if (novel) {
+    const template = novel[2]
+    return { subject: novel[1], template, bid: TEMPLATE_BID[template] || '' }
+  }
+  const parts = text.split('-').map((item) => item.trim()).filter(Boolean)
+  if (parts[0] === '侠客行' && parts[1]) return { subject: parts[1], template: '', bid: '' }
+  return { subject: '', template: '', bid: '' }
+}
+
+function usableAvatar(url) {
+  const value = String(url || '').trim()
+  if (!value || value === '-') return ''
+  if (!/byteimg\.com/i.test(value)) return value
+  const match = value.match(/[?&]x-expires=(\d+)/)
+  if (!match || Number(match[1]) * 1000 < Date.now() + 10 * 60 * 1000) return ''
+  return value
 }
 
 function toPublic(row) {
-  const avatar = row.avatar_url === '-' ? '' : row.avatar_url || ''
+  const usage = parseUsage(row.name)
   return {
     advertiserId: row.advertiser_id,
     name: row.name || '',
     company: row.company || '',
     status: row.status || '',
     statusLabel: statusLabel(row.status),
-    avatarUrl: avatar,
+    avatarUrl: usableAvatar(row.avatar_url),
     orgId: row.org_id || '',
     orgName: row.org_name || '',
     createTime: row.create_time || '',
     syncedAt: row.synced_at || '',
+    inUse: Number(row.in_use) === 1,
+    subject: usage.subject,
+    template: usage.template,
+    bid: usage.bid,
+    copyrightOwner: row.copyright_owner || '',
   }
 }
 
 function listLocal(query) {
+  const pool = String((query && query.scope) || '') === 'pool'
   const pageNo = Math.max(1, parseInt(query && query.pageNo, 10) || 1)
   const pageSize = Math.min(100, Math.max(1, parseInt(query && query.pageSize, 10) || 20))
   const keyword = String((query && query.keyword) || '').trim()
-  const company = String((query && query.company) || '').trim()
-  const where = []
+  const subject = String((query && query.subject) || '').trim()
+  const template = String((query && query.template) || '').trim()
+  const copyright = String((query && query.copyright) || '').trim()
+  const d = database()
+  if (pool && keyword.length < 2) {
+    return { list: [], total: 0, subjects: [], templates: [], copyrights: [], copyrightCounts: {}, usingTotal: usingCount(d) }
+  }
+  const where = [pool ? 'in_use = 0' : 'in_use = 1']
   const args = []
   if (keyword) {
     where.push('(name LIKE ? OR advertiser_id LIKE ?)')
     args.push(`%${keyword}%`, `%${keyword}%`)
   }
-  if (company) {
-    where.push('company = ?')
-    args.push(company)
-  }
-  const clause = where.length ? `WHERE ${where.join(' AND ')}` : ''
-  const d = database()
-  const total = d.prepare(`SELECT COUNT(*) AS n FROM oceanengine_advertisers ${clause}`).get(...args).n
   const rows = d
     .prepare(
-      `SELECT advertiser_id, name, company, status, avatar_url, org_id, org_name, create_time, synced_at
-       FROM oceanengine_advertisers ${clause}
-       ORDER BY create_time DESC, advertiser_id DESC
-       LIMIT ? OFFSET ?`,
-    )
-    .all(...args, pageSize, (pageNo - 1) * pageSize)
-  const companies = d
-    .prepare(
-      `SELECT company AS value, COUNT(*) AS n
+      `SELECT advertiser_id, name, company, status, avatar_url, org_id, org_name, create_time, synced_at, in_use, copyright_owner
        FROM oceanengine_advertisers
-       WHERE company != ''
-       GROUP BY company
-       ORDER BY n DESC, company`,
+       WHERE ${where.join(' AND ')}`,
     )
-    .all()
-    .map((row) => row.value)
-  return {
-    list: rows.map(toPublic),
-    total,
-    companies,
+    .all(...args)
+    .map(toPublic)
+  const copyrights = [...new Set(rows.map((row) => row.copyrightOwner).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh'))
+  const copyrightCounts = {}
+  for (const row of rows) {
+    const key = row.copyrightOwner || ''
+    copyrightCounts[key] = (copyrightCounts[key] || 0) + 1
   }
+  let list = rows
+  if (copyright === '__unset__') list = list.filter((row) => !row.copyrightOwner)
+  else if (copyright) list = list.filter((row) => row.copyrightOwner === copyright)
+  const subjects = [...new Set(list.map((row) => row.subject).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh'))
+  const templates = [...new Set(list.map((row) => row.template).filter(Boolean))].sort((a, b) => Number(a) - Number(b))
+  if (subject) list = list.filter((row) => row.subject === subject)
+  if (template) list = list.filter((row) => row.template === template)
+  list.sort((a, b) => {
+    const byCopyright = a.copyrightOwner.localeCompare(b.copyrightOwner, 'zh')
+    if (byCopyright) return byCopyright
+    const bySubject = a.subject.localeCompare(b.subject, 'zh')
+    if (bySubject) return bySubject
+    const byTemplate = (Number(a.template) || 0) - (Number(b.template) || 0)
+    if (byTemplate) return byTemplate
+    return a.name.localeCompare(b.name, 'zh')
+  })
+  const start = (pageNo - 1) * pageSize
+  return {
+    list: list.slice(start, start + pageSize),
+    total: list.length,
+    subjects,
+    templates,
+    copyrights,
+    copyrightCounts,
+    usingTotal: usingCount(d),
+  }
+}
+
+function usingCount(d) {
+  return d.prepare('SELECT COUNT(*) AS n FROM oceanengine_advertisers WHERE in_use = 1').get().n
+}
+
+function setUsing(ids, using) {
+  const clean = [...new Set((Array.isArray(ids) ? ids : []).map((id) => String(id || '').trim()).filter((id) => /^\d+$/.test(id)))]
+  if (!clean.length) return { error: '请选择账户' }
+  const ph = clean.map(() => '?').join(',')
+  const info = database()
+    .prepare(`UPDATE oceanengine_advertisers SET in_use = ? WHERE advertiser_id IN (${ph})`)
+    .run(using ? 1 : 0, ...clean)
+  return { count: info.changes }
+}
+
+async function searchOceanAccounts({ keyword, pageNo, pageSize } = {}) {
+  const text = String(keyword || '').trim()
+  if (text.length < 2) return { error: '请输入至少两个字，例如点众小说' }
+  const tokenResult = await auth.getAccessToken()
+  if (tokenResult.error) return tokenResult
+  const orgId = String(tokenResult.accountId || '').trim()
+  if (!orgId) return { error: '还没有工作台组织 ID' }
+  const page = Math.max(1, parseInt(pageNo, 10) || 1)
+  const size = Math.min(100, Math.max(1, parseInt(pageSize, 10) || 20))
+  const result = await oceanFetch(tokenResult.token, 'GET', EBP_LIST, {
+    query: {
+      enterprise_organization_id: orgId,
+      account_source: 'AD',
+      filtering: { account_name: text, query_type: 'TRAVERSE' },
+      page,
+      page_size: size,
+    },
+  })
+  if (result.error) return result
+  const rows = asList(result.data, ['account_list', 'list', 'advertiser_list']).map((row) => normalizeAccount(row))
+  const info = pageInfo(result.data)
+  const ids = rows.map((row) => row.advertiserId).filter(Boolean)
+  const used = new Set()
+  if (ids.length) {
+    const ph = ids.map(() => '?').join(',')
+    const existing = database()
+      .prepare(`SELECT advertiser_id FROM oceanengine_advertisers WHERE in_use = 1 AND advertiser_id IN (${ph})`)
+      .all(...ids)
+    for (const item of existing) used.add(item.advertiser_id)
+  }
+  return {
+    list: rows.filter((row) => row.advertiserId).map((row) => ({
+      advertiserId: row.advertiserId,
+      name: row.name,
+      inUse: used.has(row.advertiserId),
+      ...parseUsage(row.name),
+    })),
+    total: info.totalNumber || rows.length,
+    page,
+    pageSize: size,
+  }
+}
+
+function rememberImported(appPk, orgId, rows) {
+  const clean = (Array.isArray(rows) ? rows : [])
+    .map((row) => ({
+      advertiserId: String((row && row.advertiserId) || '').trim(),
+      name: String((row && row.name) || '').trim(),
+    }))
+    .filter((row) => /^\d+$/.test(row.advertiserId))
+  if (!clean.length) return { error: '请选择账户' }
+  upsertAccounts(appPk || 0, orgId || '', '', clean)
+  fillKnownCopyright()
+  return setUsing(clean.map((row) => row.advertiserId), true)
+}
+
+async function importSelectedAccounts(rows) {
+  const tokenResult = await auth.getAccessToken()
+  if (tokenResult.error) return tokenResult
+  return rememberImported(tokenResult.appPk, tokenResult.accountId, rows)
+}
+
+async function importOceanSearch(keyword) {
+  const text = String(keyword || '').trim()
+  const tokenResult = await auth.getAccessToken()
+  if (tokenResult.error) return tokenResult
+  const orgId = String(tokenResult.accountId || '').trim()
+  const collected = []
+  const seen = new Set()
+  let page = 1
+  let total = 0
+  let failed = ''
+  const size = 20
+  while (page <= 50) {
+    const found = await searchOceanAccounts({ keyword: text, pageNo: page, pageSize: size })
+    if (found.error) {
+      failed = found.error
+      break
+    }
+    total = found.total || total
+    for (const row of found.list) {
+      if (!row.advertiserId || row.inUse || seen.has(row.advertiserId)) continue
+      seen.add(row.advertiserId)
+      collected.push(row)
+    }
+    const fetched = (page - 1) * size + found.list.length
+    if (!found.list.length || fetched >= total) break
+    page += 1
+    await sleep(120)
+  }
+  if (!collected.length) {
+    return { error: failed || (total ? '这些账户已经在使用中' : '巨量没有匹配的账户') }
+  }
+  const saved = rememberImported(tokenResult.appPk, orgId, collected)
+  if (saved.error) return saved
+  console.log('[oceanengine] ocean import', { keyword: text, count: saved.count, total, failed })
+  return failed ? { count: saved.count, total, warning: failed } : { count: saved.count, total }
 }
 
 async function listPage(query) {
   const page = listLocal(query)
+  if (String((query && query.scope) || '') === 'pool') return page
   const missing = page.list.filter((row) => !row.avatarUrl).map((row) => row.advertiserId)
   if (!missing.length || avatarScopeDenied) return page
   const tokenResult = await auth.getAccessToken()
   if (tokenResult.error) return page
   await enrichAvatars(tokenResult.token, missing)
-  const refreshed = listLocal(query)
-  refreshed.companies = page.companies
-  return refreshed
+  return listLocal(query)
 }
 
 async function syncFromOcean(appPk) {
@@ -512,9 +693,110 @@ async function syncFromOcean(appPk) {
     }
   })
   const ids = upsertAccounts(tokenResult.appPk, orgId, orgName, merged)
-  removeMissing(tokenResult.appPk, ids)
-  console.log('[oceanengine] advertisers synced', { count: ids.length, orgId })
-  return { count: ids.length, needScope: info.needScope || false }
+  const truncated = basics.length >= 10000 || (listed.total || 0) >= 10000
+  removeMissing(tokenResult.appPk, ids, truncated)
+  const using = await refreshUsingDetails(tokenResult.token, tokenResult.appPk, orgId, orgName)
+  console.log('[oceanengine] advertisers synced', { count: ids.length, orgId, truncated, using: using.count })
+  return { count: ids.length, needScope: info.needScope || using.needScope || false }
+}
+
+async function refreshUsingDetails(token, appPk, orgId, orgName) {
+  const rows = database()
+    .prepare(
+      `SELECT advertiser_id, name, company, status, org_id, org_name, create_time
+       FROM oceanengine_advertisers WHERE in_use = 1`,
+    )
+    .all()
+  if (!rows.length) return { count: 0 }
+  const info = await fetchAdvertiserInfo(
+    token,
+    rows.map((row) => row.advertiser_id),
+  )
+  const merged = rows.map((row) => {
+    const extra = info.details.get(row.advertiser_id)
+    return {
+      advertiserId: row.advertiser_id,
+      name: (extra && extra.name) || row.name || '',
+      company: (extra && extra.company) || row.company || '',
+      status: (extra && extra.status) || row.status || '',
+      orgId: (extra && extra.orgId) || row.org_id || orgId || '',
+      orgName: (extra && extra.orgName) || row.org_name || orgName || '',
+      createTime: (extra && extra.createTime) || row.create_time || '',
+    }
+  })
+  upsertAccounts(appPk, orgId, orgName, merged)
+  return { count: merged.length, needScope: info.needScope || false }
+}
+
+function cleanIds(ids) {
+  return [...new Set((Array.isArray(ids) ? ids : []).map((id) => String(id || '').trim()).filter((id) => /^\d+$/.test(id)))]
+}
+
+function fillKnownCopyright() {
+  database()
+    .prepare(
+      `UPDATE oceanengine_advertisers SET copyright_owner = '点众'
+       WHERE copyright_owner = '' AND name LIKE '%点众小说%'`,
+    )
+    .run()
+}
+
+async function syncOnline(advertiserIds) {
+  avatarScopeDenied = false
+  const tokenResult = await auth.getAccessToken()
+  if (tokenResult.error) return tokenResult
+  const orgId = String(tokenResult.accountId || '').trim()
+  let ids = cleanIds(advertiserIds)
+  if (!ids.length) {
+    ids = database()
+      .prepare('SELECT advertiser_id FROM oceanengine_advertisers WHERE in_use = 1')
+      .all()
+      .map((row) => row.advertiser_id)
+  }
+  if (!ids.length) return { error: '没有要同步的账户' }
+  const ph = ids.map(() => '?').join(',')
+  const current = database()
+    .prepare(
+      `SELECT advertiser_id, name, company, status, org_id, org_name, create_time, avatar_url
+       FROM oceanengine_advertisers WHERE advertiser_id IN (${ph})`,
+    )
+    .all(...ids)
+  const byId = new Map(current.map((row) => [row.advertiser_id, row]))
+  const known = ids.filter((id) => byId.has(id))
+  if (!known.length) return { error: '这些账户还没导入' }
+  const info = await fetchAdvertiserInfo(tokenResult.token, known)
+  const merged = known.map((id) => {
+    const row = byId.get(id)
+    const extra = info.details.get(id)
+    return {
+      advertiserId: id,
+      name: (extra && extra.name) || row.name || '',
+      company: (extra && extra.company) || row.company || '',
+      status: (extra && extra.status) || row.status || '',
+      orgId: (extra && extra.orgId) || row.org_id || orgId || '',
+      orgName: (extra && extra.orgName) || row.org_name || '',
+      createTime: (extra && extra.createTime) || row.create_time || '',
+    }
+  })
+  upsertAccounts(tokenResult.appPk, orgId, '', merged)
+  fillKnownCopyright()
+  const avatarIds = known.filter((id) => !usableAvatar(byId.get(id).avatar_url))
+  await enrichAvatars(tokenResult.token, avatarIds)
+  console.log('[oceanengine] online synced', { count: known.length, avatarDenied: avatarScopeDenied })
+  return { count: known.length, needScope: info.needScope || avatarScopeDenied || false }
+}
+
+function setCopyright(ids, copyrightOwner) {
+  const clean = cleanIds(ids)
+  const name = String(copyrightOwner || '').trim()
+  if (!clean.length) return { error: '请选择账户' }
+  if (!name) return { error: '请填写版权方' }
+  if (name.length > 20) return { error: '版权方名称过长' }
+  const ph = clean.map(() => '?').join(',')
+  const info = database()
+    .prepare(`UPDATE oceanengine_advertisers SET copyright_owner = ? WHERE advertiser_id IN (${ph})`)
+    .run(name, ...clean)
+  return { count: info.changes, copyrightOwner: name }
 }
 
 function normalizeItems(items) {
@@ -641,7 +923,14 @@ async function updateAvatars(body) {
 module.exports = {
   listLocal,
   listPage,
+  setUsing,
+  searchOceanAccounts,
+  importSelectedAccounts,
+  importOceanSearch,
   syncFromOcean,
+  refreshUsingDetails,
+  syncOnline,
+  setCopyright,
   renameAccounts,
   updateAvatars,
   nameWeight,

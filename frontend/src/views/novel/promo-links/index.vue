@@ -59,8 +59,11 @@
         <el-table-column label="书 ID" width="140" align="center">
           <template #default="{ row }">{{ row.externalBookId || "—" }}</template>
         </el-table-column>
-        <el-table-column label="充值模板" width="96" align="center">
-          <template #default="{ row }">{{ row.rechargeName || "—" }}</template>
+        <el-table-column label="充值模板" width="110" align="center">
+          <template #default="{ row }">
+            <span v-if="row.rechargeName" class="tier" :class="tierClass(row.rechargeName)">{{ row.rechargeName }}</span>
+            <span v-else>—</span>
+          </template>
         </el-table-column>
         <el-table-column label="启动页面" min-width="200">
           <template #default="{ row }">
@@ -179,6 +182,20 @@ function resetAll() {
   resetTable()
 }
 
+const TIER_CLASS = {
+  "1.9": "t19",
+  "2.9": "t29",
+  "3.9": "t39",
+  "9.9": "t99",
+  "29.9": "t299",
+  "39.9": "t399",
+}
+
+function tierClass(name) {
+  const matched = String(name || "").match(/(\d+(?:\.\d+)?)/)
+  return (matched && TIER_CLASS[matched[1]]) || "tother"
+}
+
 function onSortChange({ prop, order }) {
   if (prop && prop !== "createTime") return
   const next = order === "ascending" ? "asc" : "desc"
@@ -240,5 +257,49 @@ async function refreshRemote() {
 
 .novel-promo :deep(.filter-input-keyword.el-input) {
   width: 280px;
+}
+
+.tier {
+  display: inline-block;
+  min-width: 52px;
+  padding: 0 8px;
+  border-radius: 4px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+.t19 {
+  color: #1d4ed8;
+  background: #dbeafe;
+}
+
+.t29 {
+  color: #0f766e;
+  background: #ccfbf1;
+}
+
+.t39 {
+  color: #15803d;
+  background: #dcfce7;
+}
+
+.t99 {
+  color: #c2410c;
+  background: #ffedd5;
+}
+
+.t299 {
+  color: #7e22ce;
+  background: #f3e8ff;
+}
+
+.t399 {
+  color: #be123c;
+  background: #ffe4e6;
+}
+
+.tother {
+  color: #475569;
+  background: #f1f5f9;
 }
 </style>

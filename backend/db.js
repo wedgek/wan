@@ -147,6 +147,12 @@ function applySchemaPatches(dbi) {
     ensureNovelSchema(dbi)
     ensureNovelMenus(dbi)
     ensureOceanEngineSchema(dbi)
+    ensureColumn(dbi, 'oceanengine_advertisers', 'in_use', 'INTEGER NOT NULL DEFAULT 0')
+    ensureColumn(dbi, 'oceanengine_advertisers', 'copyright_owner', "TEXT NOT NULL DEFAULT ''")
+    dbi.prepare(
+      `UPDATE oceanengine_advertisers SET copyright_owner = '点众'
+       WHERE copyright_owner = '' AND name LIKE '%点众小说%'`,
+    ).run()
     ensureColumn(dbi, 'oceanengine_catalog_items', 'first_category', "TEXT NOT NULL DEFAULT ''")
     ensureColumn(dbi, 'oceanengine_catalog_items', 'sub_category', "TEXT NOT NULL DEFAULT ''")
     ensureColumn(dbi, 'oceanengine_catalog_items', 'third_category', "TEXT NOT NULL DEFAULT ''")
@@ -673,53 +679,101 @@ function ensureNovelMenu(dbi) {
 function ensureNovelMenus(dbi) {
   const parentId = ensureNovelMenu(dbi)
   if (!parentId) return
-  const children = [
-    { name: '抖音素材提取', path: 'douyin-parse', component: 'novelDouyinParse', icon: 'Film', sort: 1, perm: 'novel:douyin-parse:list', visible: 1 },
-    { name: '素材', path: 'materials', component: 'novelMaterials', icon: 'VideoCamera', sort: 2, perm: 'novel:materials:list', visible: 1 },
-    { name: '书籍', path: 'books', component: 'novelBooks', icon: 'Notebook', sort: 3, perm: 'novel:books:list', visible: 1 },
-    { name: '巨量配置', path: 'ocean-settings', component: 'novelOceanSettings', icon: 'Setting', sort: 4, perm: 'novel:ocean-product:list', visible: 1 },
-    { name: '产品图', path: 'product-images', component: 'novelProductImages', icon: 'Picture', sort: 5, perm: 'novel:ocean-product:list', visible: 1 },
-    { name: '商品库', path: 'ocean-products', component: 'novelOceanProducts', icon: 'Goods', sort: 6, perm: 'novel:ocean-product:list', visible: 1 },
-    { name: '充值模板', path: 'recharge-templates', component: 'novelRechargeTemplates', icon: 'Coin', sort: 7, perm: 'novel:promo:list', visible: 1 },
-    { name: '推广链接', path: 'promo-links', component: 'novelPromoLinks', icon: 'Link', sort: 8, perm: 'novel:promo:list', visible: 1 },
-    { name: '账户管理', path: 'ocean-accounts', component: 'novelOceanAccounts', icon: 'User', sort: 9, perm: 'novel:ocean-account:list', visible: 1 },
-    { name: '推广模板', path: 'promo-templates', component: 'novelPromoTemplates', icon: 'Ticket', sort: 10, perm: 'novel:promo:list', visible: 0 },
-    { name: '同步记录', path: 'sync', component: 'novelSync', icon: 'Upload', sort: 11, perm: 'novel:sync:list', visible: 0 },
-  ]
   const ins = dbi.prepare(`
     INSERT INTO menus (id, parent_id, type, name, path, component_name, icon, sort, permission, status, visible, keep_alive)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
-  for (const c of children) {
-    const row = dbi
-      .prepare(`SELECT id, parent_id, permission FROM menus WHERE component_name = ? LIMIT 1`)
-      .get(c.component)
+  const upsert = (spec) => {
+    const row = spec.component
+      ? dbi.prepare(`SELECT id FROM menus WHERE component_name = ? LIMIT 1`).get(spec.component)
+      : null
     if (row) {
       dbi
         .prepare(
-          `UPDATE menus SET parent_id = ?, type = 2, name = ?, component_name = ?, path = ?, permission = ?,
+          `UPDATE menus SET parent_id = ?, type = ?, name = ?, component_name = ?, path = ?, icon = ?, permission = ?,
              status = 0, visible = ?, sort = ? WHERE id = ?`,
         )
-        .run(parentId, c.name, c.component, c.path, c.perm, c.visible, c.sort, row.id)
+        .run(
+          spec.parentId,
+          spec.type,
+          spec.name,
+          spec.component,
+          spec.path,
+          spec.icon,
+          spec.perm || '',
+          spec.visible,
+          spec.sort,
+          row.id,
+        )
       dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (1, ?)').run(row.id)
-      continue
+      return row.id
     }
-    const maxRow = dbi.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM menus').get()
-    const id = maxRow.m + 1
-    ins.run(id, parentId, 2, c.name, c.path, c.component, c.icon, c.sort, c.perm, 0, c.visible, 0)
-    dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (?, ?)').run(1, id)
+    const id = dbi.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM menus').get().m + 1
+    ins.run(
+      id,
+      spec.parentId,
+      spec.type,
+      spec.name,
+      spec.path,
+      spec.component,
+      spec.icon,
+      spec.sort,
+      spec.perm || '',
+      0,
+      spec.visible,
+      0,
+    )
+    dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (1, ?)').run(id)
     try {
       dbi.prepare('INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES (?, ?)').run('menus', id)
     } catch (_) {
       /* ignore */
     }
+    return id
   }
+  const materialId = upsert({
+    parentId, type: 1, name: '素材', path: 'material', component: 'novelGroupMaterial', icon: 'Film', sort: 1, perm: '', visible: 1,
+  })
+  const configId = upsert({
+    parentId, type: 1, name: '配置', path: 'ocean', component: 'novelGroupOcean', icon: 'Setting', sort: 2, perm: '', visible: 1,
+  })
+  const launchId = upsert({
+    parentId, type: 1, name: '投放', path: 'book', component: 'novelGroupBook', icon: 'Aim', sort: 3, perm: '', visible: 1,
+  })
+  const pages = [
+    { parentId: materialId, name: '抖音提取', path: '/novel/douyin-parse', component: 'novelDouyinParse', icon: 'Film', sort: 1, perm: 'novel:douyin-parse:list', visible: 1 },
+    { parentId: materialId, name: '素材库', path: '/novel/materials', component: 'novelMaterials', icon: 'VideoCamera', sort: 2, perm: 'novel:materials:list', visible: 1 },
+    { parentId: materialId, name: '产品图', path: '/novel/product-images', component: 'novelProductImages', icon: 'Picture', sort: 3, perm: 'novel:ocean-product:list', visible: 1 },
+    { parentId: configId, name: '授权', path: '/novel/ocean-settings', component: 'novelOceanSettings', icon: 'Key', sort: 1, perm: 'novel:ocean-product:list', visible: 1 },
+    { parentId: configId, name: '充值模板', path: '/novel/recharge-templates', component: 'novelRechargeTemplates', icon: 'Coin', sort: 2, perm: 'novel:promo:list', visible: 1 },
+    { parentId: configId, name: '投放账户', path: '/novel/ocean-accounts', component: 'novelOceanAccounts', icon: 'User', sort: 3, perm: 'novel:ocean-account:list', visible: 1 },
+    { parentId: configId, name: '事件管理', path: '/novel/ocean-events', component: 'novelOceanEvents', icon: 'Bell', sort: 4, perm: 'novel:ocean-product:list', visible: 1 },
+    { parentId: configId, name: '落地页', path: '/novel/ocean-sites', component: 'novelOceanSites', icon: 'Document', sort: 5, perm: 'novel:ocean-product:list', visible: 1 },
+    { parentId: launchId, name: '推广链接', path: '/novel/promo-links', component: 'novelPromoLinks', icon: 'Link', sort: 1, perm: 'novel:promo:list', visible: 1 },
+    { parentId: launchId, name: '商品库', path: '/novel/ocean-products', component: 'novelOceanProducts', icon: 'Goods', sort: 2, perm: 'novel:ocean-product:list', visible: 1 },
+    { parentId: launchId, name: '书籍', path: '/novel/books', component: 'novelBooks', icon: 'Notebook', sort: 4, perm: 'novel:books:list', visible: 0 },
+    { parentId: launchId, name: '推广模板', path: '/novel/promo-templates', component: 'novelPromoTemplates', icon: 'Ticket', sort: 5, perm: 'novel:promo:list', visible: 0 },
+    { parentId: launchId, name: '同步记录', path: '/novel/sync', component: 'novelSync', icon: 'Upload', sort: 6, perm: 'novel:sync:list', visible: 0 },
+  ]
+  for (const page of pages) upsert({ ...page, type: 2 })
+  const grantGroup = (groupId, components) => {
+    const ph = components.map(() => '?').join(',')
+    const children = dbi.prepare(`SELECT id FROM menus WHERE component_name IN (${ph})`).all(...components)
+    const ir = dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (?, ?)')
+    for (const child of children) {
+      const roles = dbi.prepare('SELECT role_id FROM role_menus WHERE menu_id = ?').all(child.id)
+      for (const role of roles) ir.run(role.role_id, groupId)
+    }
+  }
+  grantGroup(materialId, ['novelDouyinParse', 'novelMaterials', 'novelProductImages'])
+  grantGroup(configId, ['novelOceanSettings', 'novelOceanAccounts', 'novelRechargeTemplates', 'novelOceanEvents', 'novelOceanSites'])
+  grantGroup(launchId, ['novelPromoLinks', 'novelOceanProducts', 'novelBooks', 'novelPromoTemplates', 'novelSync'])
   const oceanMenus = dbi
-    .prepare(`SELECT id FROM menus WHERE component_name IN ('novelOceanProducts', 'novelProductImages', 'novelOceanSettings')`)
+    .prepare(`SELECT id FROM menus WHERE component_name IN ('novelOceanProducts', 'novelProductImages', 'novelOceanSettings', 'novelOceanEvents', 'novelOceanSites')`)
     .all()
   if (oceanMenus.length) {
     const sources = dbi
-      .prepare(`SELECT id FROM menus WHERE component_name IN ('novelBooks', 'novelRechargeTemplates', 'novelPromoLinks')`)
+      .prepare(`SELECT id FROM menus WHERE component_name IN ('novelBooks', 'novelRechargeTemplates', 'novelPromoLinks', 'novelOceanSettings')`)
       .all()
     const irOcean = dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (?, ?)')
     for (const src of sources) {
@@ -732,9 +786,7 @@ function ensureNovelMenus(dbi) {
   const promo = dbi.prepare(`SELECT id FROM menus WHERE component_name = 'novelPromoLinks' LIMIT 1`).get()
   if (promo) {
     const extra = dbi
-      .prepare(
-        `SELECT id FROM menus WHERE component_name IN ('novelPromoTemplates', 'novelRechargeTemplates')`,
-      )
+      .prepare(`SELECT id FROM menus WHERE component_name IN ('novelPromoTemplates', 'novelRechargeTemplates')`)
       .all()
     const roles = dbi.prepare('SELECT role_id FROM role_menus WHERE menu_id = ?').all(promo.id)
     const ir = dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (?, ?)')
@@ -745,9 +797,7 @@ function ensureNovelMenus(dbi) {
   const accountMenu = dbi.prepare(`SELECT id FROM menus WHERE component_name = 'novelOceanAccounts' LIMIT 1`).get()
   if (accountMenu) {
     const sources = dbi
-      .prepare(
-        `SELECT id FROM menus WHERE component_name IN ('novelPromoLinks', 'novelOceanSettings', 'novelOceanProducts')`,
-      )
+      .prepare(`SELECT id FROM menus WHERE component_name IN ('novelPromoLinks', 'novelOceanSettings', 'novelOceanProducts')`)
       .all()
     const irAccount = dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (?, ?)')
     for (const src of sources) {
@@ -874,7 +924,9 @@ function ensureOceanEngineSchema(dbi) {
       org_id TEXT NOT NULL DEFAULT '',
       org_name TEXT NOT NULL DEFAULT '',
       create_time TEXT NOT NULL DEFAULT '',
-      synced_at TEXT
+      synced_at TEXT,
+      in_use INTEGER NOT NULL DEFAULT 0,
+      copyright_owner TEXT NOT NULL DEFAULT ''
     );
     CREATE INDEX IF NOT EXISTS idx_oceanengine_advertisers_company ON oceanengine_advertisers(company);
     CREATE INDEX IF NOT EXISTS idx_oceanengine_advertisers_app ON oceanengine_advertisers(app_pk);

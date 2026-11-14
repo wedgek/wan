@@ -114,11 +114,18 @@ export function mediaSourceLabel(value) {
   return hit ? hit.label : value || "—"
 }
 
-export const PROMO_NAME_PREFIX = "点众-倾心书馆-公共配置"
+export const COPYRIGHT_OPTIONS = [
+  { value: "dianzhong", label: "点众" },
+  { value: "changdu", label: "番茄" },
+]
 
-export function publicConfigPromoName(templateName) {
+export const PROMO_NAME_PREFIX = "点众-倾心书馆-公共配置"
+export const CHANGDU_PROMO_NAME_PREFIX = "番茄-迷机小说-公共配置"
+
+export function publicConfigPromoName(templateName, source = "dianzhong") {
+  const prefix = source === "changdu" ? CHANGDU_PROMO_NAME_PREFIX : PROMO_NAME_PREFIX
   const n = String(templateName || "").trim()
-  return (n ? `${PROMO_NAME_PREFIX}-${n}` : PROMO_NAME_PREFIX).slice(0, 60)
+  return (n ? `${prefix}-${n}` : prefix).slice(0, 60)
 }
 
 export function defaultPromoName({ bookName, channelLabel, mediaSource, rechargeName }) {
@@ -129,6 +136,7 @@ export function defaultPromoName({ bookName, channelLabel, mediaSource, recharge
 }
 
 export function sourceLabel(source) {
+  if (source === "changdu") return "番茄"
   if (source === "dianzhong") return "点众"
   if (source === "yunfan") return "云帆"
   return "手工"

@@ -1,5 +1,10 @@
 <template>
-  <div class="page-container novel-page has-toolbar novel-promo">
+  <div class="page-container novel-page has-toolbar has-copyright-tabs novel-promo">
+    <el-tabs v-model="tableParams.source" class="copyright-tabs" @tab-change="onSourceChange">
+      <el-tab-pane v-for="item in COPYRIGHT_OPTIONS" :key="item.value" :name="item.value">
+        <template #label>{{ item.label }}</template>
+      </el-tab-pane>
+    </el-tabs>
     <div class="page-filter-box filter-bar">
       <div class="page-filter-left filters-wrap">
         <el-input
@@ -12,7 +17,7 @@
         />
         <el-select
           v-model="tableParams.channel"
-          placeholder="投放账号"
+          :placeholder="isChangdu ? '应用' : '投放账号'"
           class="filter-select-sm"
           clearable
           clear-icon="Close"
@@ -37,7 +42,9 @@
 
     <div class="page-table-header">
       <el-button type="primary" @click="batchVisible = true">批量打链接</el-button>
-      <el-button :icon="$icons.Refresh" :loading="refreshing" @click="refreshRemote">从点众刷新</el-button>
+      <el-button :icon="$icons.Refresh" :loading="refreshing" @click="refreshRemote">
+        {{ isChangdu ? "从常读刷新" : "从点众刷新" }}
+      </el-button>
     </div>
 
     <div class="page-table-box table-wrap">
@@ -89,7 +96,7 @@
         <el-table-column label="推广链接" min-width="200" show-overflow-tooltip>
           <template #default="{ row }">{{ row.path || "—" }}</template>
         </el-table-column>
-        <el-table-column label="投放账号" width="110" align="center">
+        <el-table-column :label="isChangdu ? '应用' : '投放账号'" width="110" align="center">
           <template #default="{ row }">{{ channelLabel(row.channel, channels) }}</template>
         </el-table-column>
         <el-table-column label="媒体" width="80" align="center">
@@ -126,7 +133,7 @@
       />
     </div>
 
-    <PromoBatchCreateDialog v-model="batchVisible" @created="getTableData" />
+    <PromoBatchCreateDialog v-model="batchVisible" :source="tableParams.source" @created="getTableData" />
   </div>
 </template>
 
@@ -135,7 +142,7 @@ import { useTable } from "@/hooks/useTable"
 import CzPagination from "@/components/cz-pagination/index.vue"
 import request from "@/request"
 import PromoBatchCreateDialog from "../components/promo-batch-create-dialog.vue"
-import { channelLabel, copyText, fmtNum, fmtPct, mediaSourceLabel } from "../shared"
+import { COPYRIGHT_OPTIONS, channelLabel, copyText, fmtNum, fmtPct, mediaSourceLabel } from "../shared"
 
 const createRange = ref([])
 const batchVisible = ref(false)
@@ -144,6 +151,7 @@ const channels = ref([])
 
 const defaultTableParams = () => ({
   keyword: "",
+  source: "dianzhong",
   channel: "",
   startTime: "",
   endTime: "",
@@ -152,7 +160,15 @@ const defaultTableParams = () => ({
   pageSize: 20,
 })
 
-const { tableParams, tableData, tableTotal, tableLoading, getTableData, tableSearch, resetTable } = useTable(
+const isChangdu = computed(() => tableParams.source === "changdu")
+const channelsUrl = computed(() =>
+  isChangdu.value ? "/admin-api/novel/promo-links/changdu/channels" : "/admin-api/novel/promo-links/dianzhong/channels",
+)
+const refreshUrl = computed(() =>
+  isChangdu.value ? "/admin-api/novel/promo-links/changdu/refresh" : "/admin-api/novel/promo-links/dianzhong/refresh",
+)
+
+const { tableParams, tableData, tableTotal, tableLoading, getTableData, tableSearch } = useTable(
   "/admin-api/novel/promo-links/page",
   defaultTableParams,
   {
@@ -171,15 +187,27 @@ onMounted(() => {
 })
 
 async function loadChannels() {
-  const res = await request({ url: "/admin-api/novel/promo-links/dianzhong/channels" })
+  const res = await request({ url: channelsUrl.value })
   if (res.code === 0 && Array.isArray(res.data)) {
     channels.value = res.data
+  } else {
+    channels.value = []
   }
 }
 
+function onSourceChange() {
+  tableParams.channel = ""
+  loadChannels()
+  tableParams.pageNo = 1
+  getTableData()
+}
+
 function resetAll() {
+  tableParams.keyword = ""
+  tableParams.channel = ""
+  tableParams.pageNo = 1
   createRange.value = []
-  resetTable()
+  getTableData()
 }
 
 const TIER_CLASS = {
@@ -215,7 +243,7 @@ async function refreshRemote() {
   try {
     const range = createRange.value || []
     const res = await request({
-      url: "/admin-api/novel/promo-links/dianzhong/refresh",
+      url: refreshUrl.value,
       method: "POST",
       data: {
         externalBookId: keywordBookId() || undefined,

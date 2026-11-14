@@ -334,7 +334,7 @@ async function createEvent({ advertiserId, assetId, eventId, trackType }) {
 const BATCH_EVENT_NAMES = ['付费', '付费ROI']
 const BATCH_TRACK = 'MINI_PROGRAME_API'
 const BATCH_LIMIT = 100
-const TARGET_APP_ID = 'ttc326b59b5c10bae401'
+const TARGET_APP_ID = 'ttc525b3985a10dae401'
 const TARGET_APP_NAME = '倾心书馆'
 const EVENT_TYPES = {
   付费: ['active_pay'],
@@ -777,6 +777,7 @@ async function batchAddEvents({ text, eventNames, advertiserIds } = {}) {
 module.exports = {
   listAccountOptions,
   listMiniProgramAssets,
+  listByteMiniApps,
   listCreatedEvents,
   listAvailableEvents,
   createEvent,

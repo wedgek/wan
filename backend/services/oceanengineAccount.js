@@ -431,8 +431,8 @@ const TEMPLATE_BID = {
   '2.9': '3.1',
   '3.9': '4.1',
   '9.9': '13',
-  '29.9': '31',
-  '39.9': '41',
+  '29.9': '32',
+  '39.9': '43',
 }
 
 function parseUsage(name) {
@@ -921,6 +921,8 @@ async function updateAvatars(body) {
 }
 
 module.exports = {
+  TEMPLATE_BID,
+  parseUsage,
   listLocal,
   listPage,
   setUsing,

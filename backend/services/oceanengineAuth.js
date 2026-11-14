@@ -137,16 +137,39 @@ function ensureSeed() {
   } else {
     const accountId = String(process.env.OCEANENGINE_EBP_ACCOUNT_ID || '1863711955555339').trim()
     const platformId = String(process.env.OCEANENGINE_PLATFORM_ID || '2068752917202714').trim()
-    const existing = d.prepare('SELECT id, secret FROM oceanengine_apps WHERE app_id = ?').get(env.appId)
+    const existing = d.prepare('SELECT id, secret, redirect_uri, name, enabled FROM oceanengine_apps WHERE app_id = ?').get(env.appId)
+    const redirect = redirectUri()
+    const localApp = redirect !== DEFAULT_REDIRECT_URI
+    const seedName = localApp ? '创量基建（本地）' : '创漫基建工具'
     if (!existing) {
       d.prepare(
         `INSERT INTO oceanengine_apps (name, app_id, secret, redirect_uri, account_id, platform_id, enabled)
-         VALUES ('创漫基建工具', ?, ?, ?, ?, ?, 1)`,
-      ).run(env.appId, env.secret, redirectUri(), accountId, platformId)
+         VALUES (?, ?, ?, ?, ?, ?, 1)`,
+      ).run(seedName, env.appId, env.secret, redirect, accountId, platformId)
       console.log('[oceanengine] 已写入应用', env.appId)
-    } else if (env.secret && existing.secret !== env.secret) {
-      d.prepare(`UPDATE oceanengine_apps SET secret = ?, updated_at = datetime('now') WHERE id = ?`).run(env.secret, existing.id)
-      console.log('[oceanengine] 已更新应用 Secret', env.appId)
+    } else {
+      const nextSecret = env.secret || existing.secret
+      const nextName = localApp && existing.name === '创漫基建工具' ? seedName : existing.name
+      const nextRedirect = redirect || existing.redirect_uri
+      if (
+        nextSecret !== existing.secret ||
+        nextName !== existing.name ||
+        nextRedirect !== existing.redirect_uri ||
+        existing.enabled === 0
+      ) {
+        d.prepare(
+          `UPDATE oceanengine_apps
+           SET name = ?, secret = ?, redirect_uri = ?, enabled = 1, updated_at = datetime('now')
+           WHERE id = ?`,
+        ).run(nextName, nextSecret, nextRedirect, existing.id)
+        console.log('[oceanengine] 已更新应用', env.appId)
+      }
+    }
+    if (localApp) {
+      const turnedOff = d
+        .prepare(`UPDATE oceanengine_apps SET enabled = 0, updated_at = datetime('now') WHERE app_id != ? AND enabled != 0`)
+        .run(env.appId)
+      if (turnedOff.changes) console.log('[oceanengine] 已停用其他应用，避免和线上抢同一条授权')
     }
   }
   const legacy = d.prepare(`SELECT * FROM oceanengine_tokens WHERE access_token != ''`).all()
@@ -173,6 +196,10 @@ function ensureSeed() {
 
 function redirectUri() {
   return String(process.env.OCEANENGINE_REDIRECT_URI || DEFAULT_REDIRECT_URI).trim()
+}
+
+function directAuth() {
+  return redirectUri() !== DEFAULT_REDIRECT_URI
 }
 
 function readApp(id) {
@@ -420,7 +447,7 @@ function refreshEnabled() {
 }
 
 function allowTokenImport() {
-  return process.env.NODE_ENV !== 'production'
+  return process.env.NODE_ENV !== 'production' && !directAuth()
 }
 
 const AUTH_BUNDLE_PREFIX = 'WANX_OCEAN_AUTH:'
@@ -580,7 +607,10 @@ async function getAccessToken(appPk) {
 function startTokenRefresh() {
   if (refreshTimer) return
   if (!refreshEnabled()) {
-    console.log('[oceanengine] 开发环境不自动刷新，请从线上复制授权后导入')
+    const hint = directAuth()
+      ? '本地应用不会自动续期。授权完成后可在 .env 设置 OCEANENGINE_AUTO_REFRESH=1'
+      : '开发环境不自动刷新，请从线上复制授权后导入'
+    console.log(`[oceanengine] ${hint}`)
     return
   }
   const tick = () => {
@@ -601,6 +631,7 @@ module.exports = {
   createAuthorizeUrl,
   config,
   allowTokenImport,
+  directAuth,
   exportAuthText,
   importAuthText,
   formatAuthBundle,

@@ -8,8 +8,8 @@
     @update:model-value="$emit('update:modelValue', $event)"
   >
     <el-form ref="formRef" :model="form" :rules="rules" label-width="96px">
-      <el-form-item label="投放账号" prop="channelId">
-        <el-select v-model="form.channelId" placeholder="请选择投放账号" style="width: 100%" @change="loadTemplates">
+      <el-form-item :label="isChangdu ? '应用' : '投放账号'" prop="channelId">
+        <el-select v-model="form.channelId" :placeholder="isChangdu ? '请选择应用' : '请选择投放账号'" style="width: 100%" @change="loadTemplates">
           <el-option v-for="c in channels" :key="c.id" :label="c.label" :value="c.id" />
         </el-select>
       </el-form-item>
@@ -22,7 +22,7 @@
         />
       </el-form-item>
     </el-form>
-    <p class="hint">起始章节默认第 1 集，回传走公共配置。链接名称：点众-倾心书馆-公共配置-档位名。</p>
+    <p class="hint">{{ hintText }}</p>
     <p class="preview">{{ previewText }}</p>
     <template #footer>
       <el-button @click="$emit('update:modelValue', false)">取消</el-button>
@@ -36,6 +36,7 @@ import request from "@/request"
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
+  source: { type: String, default: "dianzhong" },
 })
 
 const emit = defineEmits(["update:modelValue", "created"])
@@ -49,8 +50,37 @@ const form = reactive({
   bookIds: "",
 })
 
+const isChangdu = computed(() => props.source === "changdu")
+const channelsUrl = computed(() =>
+  isChangdu.value ? "/admin-api/novel/promo-links/changdu/channels" : "/admin-api/novel/promo-links/dianzhong/channels",
+)
+const createUrl = computed(() =>
+  isChangdu.value
+    ? "/admin-api/novel/promo-links/changdu/batch-create"
+    : "/admin-api/novel/promo-links/dianzhong/batch-create",
+)
+const hintText = computed(() =>
+  isChangdu.value
+    ? "起始章节默认第 1 章，回传走公共配置。链接名称：番茄-迷机小说-公共配置-档位名。"
+    : "起始章节默认第 1 集，回传走公共配置。链接名称：点众-倾心书馆-公共配置-档位名。",
+)
+const missingTplText = computed(() =>
+  isChangdu.value
+    ? "该应用没有投入使用的付费面板，请先到充值模板页从常读拉取并打开开关"
+    : "该账号没有投入使用的充值模板，请先到充值模板页拉取并打开开关",
+)
+
 const rules = {
-  channelId: [{ required: true, message: "请选择投放账号", trigger: "change" }],
+  channelId: [
+    {
+      required: true,
+      trigger: "change",
+      validator: (_rule, value, cb) => {
+        if (value) return cb()
+        cb(new Error(isChangdu.value ? "请选择应用" : "请选择投放账号"))
+      },
+    },
+  ],
   bookIds: [{ required: true, message: "请填写书籍ID", trigger: "blur" }],
 }
 
@@ -69,21 +99,21 @@ const bookIdList = computed(() => {
 const previewText = computed(() => {
   const books = bookIdList.value.length
   const tpls = templates.value.length
-  if (!books && !tpls) return "请选择投放账号并填写书籍 ID"
-  if (!tpls) return "该账号没有投入使用的充值模板，请先到充值模板页拉取并打开开关"
+  if (!books && !tpls) return isChangdu.value ? "请选择应用并填写书籍 ID" : "请选择投放账号并填写书籍 ID"
+  if (!tpls) return missingTplText.value
   return `${books} 本书 × ${tpls} 个档位 = ${books * tpls} 条`
 })
 
 const canSubmit = computed(() => bookIdList.value.length > 0 && templates.value.length > 0)
 
 async function loadChannels() {
-  const res = await request({ url: "/admin-api/novel/promo-links/dianzhong/channels" })
+  const res = await request({ url: channelsUrl.value })
   if (res.code === 0 && Array.isArray(res.data)) {
     channels.value = res.data
     if (!form.channelId && res.data[0]) form.channelId = res.data[0].id
   } else {
     channels.value = []
-    ElMessage.error(res.msg || "未配置投放账号")
+    ElMessage.error(res.msg || (isChangdu.value ? "未配置常读应用" : "未配置投放账号"))
   }
   await loadTemplates()
 }
@@ -95,7 +125,7 @@ async function loadTemplates() {
   }
   const res = await request({
     url: "/admin-api/novel/recharge-templates",
-    params: { enabled: 1 },
+    params: { enabled: 1, source: props.source },
   })
   const list = res.code === 0 && Array.isArray(res.data) ? res.data : []
   const channelId = String(form.channelId)
@@ -118,7 +148,7 @@ async function submit() {
   saving.value = true
   try {
     const res = await request({
-      url: "/admin-api/novel/promo-links/dianzhong/batch-create",
+      url: createUrl.value,
       method: "POST",
       timeout: 180000,
       data: {

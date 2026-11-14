@@ -1,5 +1,10 @@
 <template>
-  <div class="page-container novel-page has-toolbar novel-recharge-tpl">
+  <div class="page-container novel-page has-toolbar has-copyright-tabs novel-recharge-tpl">
+    <el-tabs v-model="tableParams.source" class="copyright-tabs" @tab-change="onSourceChange">
+      <el-tab-pane v-for="item in COPYRIGHT_OPTIONS" :key="item.value" :name="item.value">
+        <template #label>{{ item.label }}</template>
+      </el-tab-pane>
+    </el-tabs>
     <div class="page-filter-box filter-bar">
       <div class="page-filter-left filters-wrap">
         <el-input
@@ -12,7 +17,7 @@
         />
         <el-select
           v-model="tableParams.channel"
-          placeholder="投放账号"
+          :placeholder="isChangdu ? '应用' : '投放账号'"
           class="filter-select-sm"
           clearable
           clear-icon="Close"
@@ -32,13 +37,15 @@
           <el-option label="未投入使用" value="0" />
         </el-select>
         <el-button type="primary" @click="tableSearch">查询</el-button>
-        <el-button @click="resetTable">重置</el-button>
+        <el-button @click="resetAll">重置</el-button>
       </div>
     </div>
 
     <div class="page-table-header">
       <el-button type="primary" :icon="$icons.Plus" @click="openEdit()">新增模板</el-button>
-      <el-button :icon="$icons.Refresh" :loading="refreshing" @click="refreshRemote">从点众拉取</el-button>
+      <el-button :icon="$icons.Refresh" :loading="refreshing" @click="refreshRemote">
+        {{ isChangdu ? "从常读拉取" : "从点众拉取" }}
+      </el-button>
     </div>
 
     <div class="page-table-box table-wrap">
@@ -58,7 +65,7 @@
         <el-table-column prop="name" label="充值模板名称" min-width="160" show-overflow-tooltip />
         <el-table-column prop="createTime" label="创建时间" width="170" align="center" />
         <el-table-column prop="updateTime" label="更新时间" width="170" align="center" />
-        <el-table-column label="投放账号" width="110" align="center">
+        <el-table-column :label="isChangdu ? '应用' : '投放账号'" width="110" align="center">
           <template #default="{ row }">{{ channelLabel(row.channelId, channels) }}</template>
         </el-table-column>
         <el-table-column label="投入使用" width="110" align="center" fixed="right">
@@ -97,9 +104,9 @@
           <el-input v-model="editForm.name" maxlength="40" placeholder="例如：9.9" />
         </el-form-item>
         <el-form-item label="档位ID" prop="batchId">
-          <el-input v-model="editForm.batchId" placeholder="点众模板 ID，创建链接时会带上" />
+          <el-input v-model="editForm.batchId" :placeholder="isChangdu ? '常读付费面板 ID，创建链接时会带上' : '点众模板 ID，创建链接时会带上'" />
         </el-form-item>
-        <el-form-item label="投放账号">
+        <el-form-item :label="isChangdu ? '应用' : '投放账号'">
           <el-select v-model="editForm.channelId" clearable placeholder="可选" style="width: 100%">
             <el-option v-for="c in channels" :key="c.id" :label="c.label" :value="c.id" />
           </el-select>
@@ -120,7 +127,7 @@
 import { useTable } from "@/hooks/useTable"
 import CzPagination from "@/components/cz-pagination/index.vue"
 import request from "@/request"
-import { channelLabel } from "../shared"
+import { COPYRIGHT_OPTIONS, channelLabel } from "../shared"
 
 const refreshing = ref(false)
 const editVisible = ref(false)
@@ -142,13 +149,24 @@ const editRules = {
 
 const defaultTableParams = () => ({
   keyword: "",
+  source: "dianzhong",
   channel: "",
   enabled: "",
   pageNo: 1,
   pageSize: 20,
 })
 
-const { tableParams, tableData, tableTotal, tableLoading, getTableData, tableSearch, resetTable } = useTable(
+const isChangdu = computed(() => tableParams.source === "changdu")
+const channelsUrl = computed(() =>
+  isChangdu.value ? "/admin-api/novel/promo-links/changdu/channels" : "/admin-api/novel/promo-links/dianzhong/channels",
+)
+const refreshUrl = computed(() =>
+  isChangdu.value
+    ? "/admin-api/novel/recharge-templates/changdu/refresh"
+    : "/admin-api/novel/recharge-templates/dianzhong/refresh",
+)
+
+const { tableParams, tableData, tableTotal, tableLoading, getTableData, tableSearch } = useTable(
   "/admin-api/novel/recharge-templates/page",
   defaultTableParams,
 )
@@ -159,8 +177,24 @@ onMounted(() => {
 })
 
 async function loadChannels() {
-  const res = await request({ url: "/admin-api/novel/promo-links/dianzhong/channels" })
+  const res = await request({ url: channelsUrl.value })
   if (res.code === 0 && Array.isArray(res.data)) channels.value = res.data
+  else channels.value = []
+}
+
+function onSourceChange() {
+  tableParams.channel = ""
+  loadChannels()
+  tableParams.pageNo = 1
+  getTableData()
+}
+
+function resetAll() {
+  tableParams.keyword = ""
+  tableParams.channel = ""
+  tableParams.enabled = ""
+  tableParams.pageNo = 1
+  getTableData()
 }
 
 function openEdit(row) {
@@ -187,6 +221,7 @@ async function saveEdit() {
         batchId: editForm.batchId,
         channelId: editForm.channelId,
         remark: editForm.remark,
+        source: tableParams.source,
       },
     })
     if (res.code === 0) {
@@ -222,7 +257,7 @@ async function refreshRemote() {
   refreshing.value = true
   try {
     const res = await request({
-      url: "/admin-api/novel/recharge-templates/dianzhong/refresh",
+      url: refreshUrl.value,
       method: "POST",
       data: { channelId: tableParams.channel || undefined },
       timeout: 60000,
@@ -241,7 +276,10 @@ async function refreshRemote() {
 
 async function onDelete(row) {
   try {
-    await ElMessageBox.confirm(`删除充值模板「${row.name}」？仅从本系统移除，点众上仍保留。`, "提示", {
+    await ElMessageBox.confirm(
+      `删除充值模板「${row.name}」？仅从本系统移除，${isChangdu.value ? "常读" : "点众"}上仍保留。`,
+      "提示",
+      {
       confirmButtonText: "确定",
       cancelButtonText: "取消",
       type: "warning",

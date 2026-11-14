@@ -83,6 +83,8 @@ function removeDevPortFile() {
 }
 
 const server = http.createServer(app)
+// 默认 5 分钟会截断大视频原文件转发。与 Nginx proxy_read_timeout 对齐。
+server.requestTimeout = 600000
 
 /** 日志里展示本机可访问地址（绑定 0.0.0.0 / :: 时监听范围不变，仅便于终端点开） */
 function listeningUrlHostForLog() {
@@ -127,6 +129,14 @@ server.on("listening", () => {
         console.warn("[wan-ai] TOS 配置检查:", e.message)
       }
     }
+  }
+})
+
+server.on("listening", () => {
+  try {
+    require("./services/oceanengineLaunch").resumeInterrupted()
+  } catch (e) {
+    console.error("[oceanengine] launch resume", e.message)
   }
 })
 

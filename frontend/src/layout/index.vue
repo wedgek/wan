@@ -25,6 +25,7 @@
             'no-padding': route.meta?.noPadding || isFullPage,
             'content-wrapper--fullpage': isFullPage,
             'content-wrapper--wide': route.meta?.wideContent && !isFullPage,
+            'content-wrapper--tight': route.meta?.tightContent && !isFullPage,
           }"
         >
           <router-view v-slot="{ Component, route: routeItem }">
@@ -139,6 +140,10 @@ const keepAlivePages = computed(() => {
         &.content-wrapper--wide:not(.no-padding) {
           padding: clamp(12px, 1.35vw, 22px);
           padding-bottom: clamp(8px, 1vw, 16px);
+        }
+
+        &.content-wrapper--tight:not(.no-padding) {
+          padding: 8px;
         }
 
         /* 与 .page-container（flex:1）撑满主内容区，保证 el-table height="100%" 能正确计算 */

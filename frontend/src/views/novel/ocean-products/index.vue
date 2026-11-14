@@ -123,7 +123,7 @@
       </el-tab-pane>
 
       <el-tab-pane label="商品库" name="libraries">
-        <p class="hint pane-hint">打开开关的商品库会出现在上面，勾选后才会用于批量添加。小说库用「小说搭建模板」，漫剧库按现有必填项。</p>
+        <p class="hint pane-hint">「投入使用」控制上面的批量添加。右边的标签决定这座库出不出现在批量基建里，点一下即可加入或移出。</p>
         <el-table :data="libraries" v-loading="configLoading" border>
           <el-table-column label="投入使用" width="120" align="center">
             <template #default="{ row }">
@@ -133,6 +133,18 @@
           <el-table-column prop="name" label="商品库" min-width="180" show-overflow-tooltip />
           <el-table-column prop="industry" label="类型" width="120" align="center" />
           <el-table-column prop="id" label="商品库 ID" width="180" align="center" />
+          <el-table-column label="批量基建" width="120" align="center" fixed="right">
+            <template #default="{ row }">
+              <el-tag
+                class="launch-tag"
+                :type="row.launch ? 'primary' : 'info'"
+                effect="plain"
+                @click="toggleLibraryLaunch(row, !row.launch)"
+              >
+                {{ row.launch ? "已加入" : "未加入" }}
+              </el-tag>
+            </template>
+          </el-table-column>
         </el-table>
       </el-tab-pane>
 
@@ -569,6 +581,20 @@ function stopBuild() {
   buildProgress.value = "停止中"
 }
 
+async function toggleLibraryLaunch(row, launch) {
+  const prev = row.launch
+  row.launch = launch
+  const res = await request({
+    url: "/admin-api/oceanengine/libraries/launch",
+    method: "POST",
+    data: { platformId: row.id, launch },
+  })
+  if (res.code !== 0) {
+    row.launch = prev
+    ElMessage.error(res.msg || "更新失败")
+  }
+}
+
 async function toggleLibrary(row, enabled) {
   const prev = row.enabled
   row.enabled = enabled
@@ -773,6 +799,10 @@ async function removeTemplate(row) {
   color: var(--el-text-color-secondary);
   font-size: 13px;
   line-height: 1.5;
+}
+
+.launch-tag {
+  cursor: pointer;
 }
 
 .pane-hint {

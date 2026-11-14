@@ -53,4 +53,18 @@
   .link-a {
     color: var(--el-color-primary);
   }
+
+  &.has-copyright-tabs {
+    padding-top: 0;
+  }
+
+  .copyright-tabs {
+    :deep(.el-tabs__header) {
+      margin-bottom: 12px;
+    }
+
+    :deep(.el-tabs__content) {
+      display: none;
+    }
+  }
 }

@@ -392,10 +392,9 @@ async function summarizeAccountSites(advertiserIds) {
     ids.push(id)
   }
   if (!ids.length) return { error: '请选择账户' }
-  if (ids.length > 20) return { error: '一次最多查询 20 个账户的落地页' }
   const tokenResult = await auth.getAccessToken()
   if (tokenResult.error) return tokenResult
-  const list = await mapLimit(ids, 4, async (advertiserId) => {
+  const list = await mapLimit(ids, 6, async (advertiserId) => {
     const found = await listCreatedSites(tokenResult.token, advertiserId)
     if (found.error) return { advertiserId, total: 0, sites: [], error: found.error }
     return { advertiserId, total: found.total, sites: found.list, error: '' }
@@ -613,6 +612,7 @@ async function createImageSites({ advertiserIds, names, name, file } = {}) {
 
 module.exports = {
   listAccountSites,
+  listCreatedSites,
   summarizeAccountSites,
   createImageSites,
   generateSites,

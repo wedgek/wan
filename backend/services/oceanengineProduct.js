@@ -828,6 +828,20 @@ function localStoredLibraries() {
     .map(mapStoredLibrary)
 }
 
+async function refreshLibraries(appPk) {
+  const tokenResult = await auth.getAccessToken(appPk)
+  if (tokenResult.error) return localStoredLibraries()
+  const listed = await listLibraries(tokenResult.token, tokenResult.accountId || accountId())
+  if (listed.error || !listed.libraries || !listed.libraries.length) return localStoredLibraries()
+  rememberLibraries(listed.libraries)
+  return listed.libraries.map((item) => ({
+    id: item.id,
+    name: item.name,
+    industry: item.industry || '',
+    storeType: item.storeType || storeTypeFromIndustry(item.industry),
+  }))
+}
+
 function localEnabledBuildLibraries() {
   return db
     .getDb()
@@ -850,6 +864,267 @@ function localUsedNames(platformId) {
       .all(platformId)
       .map((row) => row.name),
   )
+}
+
+function numberedName(bookName, index) {
+  const base = cleanBookName(bookName).slice(0, 50)
+  const suffix = `-${Math.max(1, Number(index) || 1)}`
+  const room = Math.max(1, 50 - suffix.length)
+  return `${base.slice(0, room)}${suffix}`
+}
+
+function parseNumberedIndex(name, bookName) {
+  const text = String(name || '').trim()
+  const base = cleanBookName(bookName)
+  if (!base || !text) return 0
+  const match = text.match(/-(\d+)$/)
+  if (!match) return 0
+  const prefix = text.slice(0, text.length - match[0].length)
+  const expected = numberedName(base, Number(match[1])).replace(/-\d+$/, '')
+  if (prefix === base || prefix === expected) return Number(match[1])
+  return 0
+}
+
+function maxUsedIndex(platformId, bookName) {
+  const id = String(platformId || '').trim()
+  const base = cleanBookName(bookName)
+  if (!id || !base) return 0
+  let max = 0
+  for (const name of localUsedNames(id)) {
+    const n = parseNumberedIndex(name, base)
+    if (n > max) max = n
+  }
+  return max
+}
+
+function listBookProducts(platformId, bookName) {
+  const id = String(platformId || '').trim()
+  const base = cleanBookName(bookName)
+  if (!id || !base) return []
+  const library = db.getDb().prepare('SELECT name FROM oceanengine_libraries WHERE platform_id = ?').get(id)
+  const platformName = String((library && library.name) || '')
+  const rows = db
+    .getDb()
+    .prepare(`SELECT product_id, name FROM oceanengine_catalog_items WHERE platform_id = ? AND product_id != '' AND name != ''`)
+    .all(id)
+  const list = []
+  const seen = new Set()
+  for (const row of rows) {
+    const index = parseNumberedIndex(row.name, base)
+    if (!index || seen.has(index)) continue
+    seen.add(index)
+    list.push({
+      productId: String(row.product_id),
+      name: row.name,
+      index,
+      platformId: id,
+      platformName,
+    })
+  }
+  list.sort((a, b) => a.index - b.index)
+  return list
+}
+
+function assignLaunchProducts(platformId, bookName, count, mode) {
+  const n = Math.max(0, Math.min(Number(count) || 0, 500))
+  const id = String(platformId || '').trim()
+  const fresh = mode === 'fresh'
+  const existing = listBookProducts(id, bookName)
+  const reuse = fresh ? [] : existing.slice(0, n)
+  const need = Math.max(0, n - reuse.length)
+  const createdPlan = need
+    ? planNumberedProducts(id, bookName, need)
+    : { names: [], from: 0, to: 0, usedMax: maxUsedIndex(id, bookName) }
+  let libraryName = (existing[0] && existing[0].platformName) || ''
+  if (!libraryName && id) {
+    const library = db.getDb().prepare('SELECT name FROM oceanengine_libraries WHERE platform_id = ?').get(id)
+    libraryName = String((library && library.name) || '')
+  }
+  const slots = [
+    ...reuse.map((item) => ({ ...item, platformName: item.platformName || libraryName, reuse: true })),
+    ...createdPlan.names.map((name) => ({
+      productId: '',
+      name,
+      index: parseNumberedIndex(name, bookName),
+      platformId: id,
+      platformName: libraryName,
+      reuse: false,
+    })),
+  ]
+  return {
+    platformId: id,
+    bookName: cleanBookName(bookName),
+    count: n,
+    reuseCount: reuse.length,
+    createCount: need,
+    existingCount: existing.length,
+    usedMax: createdPlan.usedMax != null ? createdPlan.usedMax : maxUsedIndex(id, bookName),
+    from: need ? createdPlan.from : 0,
+    to: need ? createdPlan.to : 0,
+    names: slots.map((item) => item.name),
+    slots,
+    used: existing.length > 0,
+    mode: fresh ? 'fresh' : 'reuse',
+  }
+}
+
+function planNumberedProducts(platformId, bookName, count) {
+  const n = Math.max(0, Math.min(Number(count) || 0, 500))
+  const id = String(platformId || '').trim()
+  const usedMax = maxUsedIndex(id, bookName)
+  const nextIndex = usedMax + 1
+  const names = []
+  for (let i = 0; i < n; i += 1) names.push(numberedName(bookName, nextIndex + i))
+  return {
+    platformId: id,
+    bookName: cleanBookName(bookName),
+    usedMax,
+    nextIndex,
+    count: n,
+    from: n ? nextIndex : 0,
+    to: n ? nextIndex + n - 1 : 0,
+    names,
+    used: usedMax > 0,
+  }
+}
+
+function libraryCoverUrl(platformId) {
+  const id = String(platformId || '').trim()
+  if (!id) return ''
+  const row = db
+    .getDb()
+    .prepare(`SELECT image_url FROM oceanengine_catalog_items WHERE platform_id = ? AND image_url != '' LIMIT 1`)
+    .get(id)
+  return String((row && row.image_url) || process.env.OCEANENGINE_PRODUCT_IMAGE_URL || '').trim()
+}
+
+function fallbackNovelTemplate(copyrightOwner) {
+  return {
+    categoryKey: 'ancient',
+    gender: '女频书',
+    charCount: '1w-10w',
+    copyrightOwner: String(copyrightOwner || '点众').trim() || '点众',
+    author: '无名',
+    payStartChapter: '0',
+    chapterPrice: '1',
+  }
+}
+
+async function createNamedProducts(input) {
+  const bookName = cleanBookName(input && input.bookName)
+  const platformId = String((input && input.platformId) || '').trim()
+  const names = [...new Set((Array.isArray(input && input.names) ? input.names : []).map((item) => String(item || '').trim()).filter(Boolean))]
+  if (!bookName) return { error: '请选择要投的书' }
+  if (!/^\d+$/.test(platformId)) return { error: '请选择商品库' }
+  if (!names.length) return { products: [], errors: [] }
+  const known = new Map(listBookProducts(platformId, bookName).map((item) => [item.name, item]))
+  const missing = names.filter((name) => !(known.get(name) && known.get(name).productId))
+  const tokenResult = input && input.token
+    ? { token: input.token, accountId: input.accountId || '' }
+    : await auth.getAccessToken(input && input.appPk)
+  if (tokenResult.error) return { error: tokenResult.error, needAuth: !!tokenResult.needAuth }
+  const acct = tokenResult.accountId || accountId()
+  let library = localStoredLibraries().find((item) => item.id === platformId)
+  if (!library || !library.storeType) {
+    const listed = await listLibraries(tokenResult.token, acct)
+    if (!listed.error && listed.libraries && listed.libraries.length) {
+      rememberLibraries(listed.libraries)
+      library = listed.libraries.find((item) => item.id === platformId) || library
+    }
+  }
+  if (!library) return { error: '没有这个商品库，请先从巨量同步' }
+  if (missing.length) {
+    const images = listCoverUrls()
+    const fallbackImage = libraryCoverUrl(platformId)
+    if (!images.length && !fallbackImage) return { error: '请先在「产品图」上传图片，再按编号创建商品' }
+    const copyrightOwner = String((input && input.copyrightOwner) || '点众').trim() || '点众'
+    const novelTemplate = {
+      ...(enabledNovelTemplates()[0] || fallbackNovelTemplate(copyrightOwner)),
+      copyrightOwner,
+    }
+    const jobs = missing.map((finalName) => ({
+      library,
+      book: bookName,
+      finalName,
+      imageUrl: images.length ? pickOne(images) : fallbackImage,
+      template: library.storeType === 43 ? null : novelTemplate,
+    }))
+    await mapPool(jobs, MAX_INFLIGHT, (job) => createCatalogProduct(tokenResult.token, acct, job))
+  }
+  const ready = new Map(listBookProducts(platformId, bookName).map((item) => [item.name, item]))
+  const products = []
+  const errors = []
+  for (const name of names) {
+    const row = ready.get(name)
+    if (!row || !row.productId) {
+      errors.push({ name, error: '商品没有创建成功' })
+      continue
+    }
+    products.push({
+      productId: row.productId,
+      name: row.name,
+      platformId,
+      platformName: row.platformName || library.name || '',
+      status: '可投放',
+    })
+  }
+  return { products, errors }
+}
+
+async function createNumberedProducts(input) {
+  const bookName = cleanBookName(input && input.bookName)
+  const count = Math.max(0, Math.min(Number(input && input.count) || 0, 500))
+  const platformId = String((input && input.platformId) || '').trim()
+  if (!bookName) return { error: '请选择要投的书' }
+  if (!/^\d+$/.test(platformId)) return { error: '请选择商品库' }
+  if (!count) return { error: '没有要创建的商品' }
+  const tokenResult = await auth.getAccessToken(input && input.appPk)
+  if (tokenResult.error) return { error: tokenResult.error, needAuth: !!tokenResult.needAuth }
+  const acct = tokenResult.accountId || accountId()
+  let library = localStoredLibraries().find((item) => item.id === platformId)
+  if (!library || !library.storeType) {
+    const listed = await listLibraries(tokenResult.token, acct)
+    if (!listed.error && listed.libraries && listed.libraries.length) {
+      rememberLibraries(listed.libraries)
+      library = listed.libraries.find((item) => item.id === platformId) || library
+    }
+  }
+  if (!library) return { error: '没有这个商品库，请先从巨量同步' }
+  const images = listCoverUrls()
+  const fallbackImage = libraryCoverUrl(platformId)
+  if (!images.length && !fallbackImage) {
+    return { error: '请先在「产品图」上传图片，再按编号创建商品' }
+  }
+  const copyrightOwner = String((input && input.copyrightOwner) || '点众').trim() || '点众'
+  const novelTemplate = {
+    ...(enabledNovelTemplates()[0] || fallbackNovelTemplate(copyrightOwner)),
+    copyrightOwner,
+  }
+  const plan = planNumberedProducts(platformId, bookName, count)
+  const jobs = plan.names.map((finalName) => ({
+    library,
+    book: bookName,
+    finalName,
+    imageUrl: images.length ? pickOne(images) : fallbackImage,
+    template: library.storeType === 43 ? null : novelTemplate,
+  }))
+  const results = await mapPool(jobs, MAX_INFLIGHT, (job) => createCatalogProduct(tokenResult.token, acct, job))
+  const products = []
+  const errors = []
+  for (const row of results) {
+    if (!row || row.error) {
+      errors.push({ name: row && row.name, error: (row && row.error) || '创建商品失败' })
+      continue
+    }
+    products.push({
+      productId: row.productId,
+      name: row.name,
+      platformId: row.libraryId,
+      platformName: row.libraryName,
+      status: '可投放',
+    })
+  }
+  return { products, errors, plan }
 }
 
 function parseBookNames(raw) {
@@ -1191,12 +1466,54 @@ function enabledLibraries(libraries) {
   return libraries.filter((item) => on.has(item.id))
 }
 
+const LAUNCH_LIBRARY_NAMES = ['自动搭建-小说库', '自动搭建-漫剧库']
+
+function withLaunchFlags(libraries) {
+  const d = db.getDb()
+  const list = Array.isArray(libraries) ? libraries : []
+  const known = new Set(d.prepare('SELECT platform_id FROM oceanengine_library_prefs').all().map((row) => row.platform_id))
+  const ins = d.prepare(
+    `INSERT OR IGNORE INTO oceanengine_library_prefs (platform_id, enabled, updated_at) VALUES (?, 0, datetime('now'))`,
+  )
+  for (const item of list) {
+    if (item && item.id && !known.has(item.id)) ins.run(item.id)
+  }
+  const pending = d
+    .prepare(
+      `SELECT p.platform_id, l.name
+       FROM oceanengine_library_prefs p
+       LEFT JOIN oceanengine_libraries l ON l.platform_id = p.platform_id
+       WHERE p.launch IS NULL`,
+    )
+    .all()
+  if (pending.length) {
+    const upd = d.prepare(`UPDATE oceanengine_library_prefs SET launch = ? WHERE platform_id = ? AND launch IS NULL`)
+    for (const row of pending) upd.run(LAUNCH_LIBRARY_NAMES.includes(row.name) ? 1 : 0, row.platform_id)
+  }
+  const on = new Set(
+    d.prepare('SELECT platform_id FROM oceanengine_library_prefs WHERE launch = 1').all().map((row) => row.platform_id),
+  )
+  return list.map((item) => ({ ...item, launch: on.has(item.id) }))
+}
+
 function librarySettings(libraries) {
   enabledLibraries(libraries)
   const on = new Set(
     db.getDb().prepare('SELECT platform_id FROM oceanengine_library_prefs WHERE enabled = 1').all().map((row) => row.platform_id),
   )
-  return libraries.map((item) => ({ ...item, enabled: on.has(item.id) }))
+  return withLaunchFlags(libraries.map((item) => ({ ...item, enabled: on.has(item.id) })))
+}
+
+function setLibraryLaunch(platformId, launch) {
+  const id = String(platformId || '').trim()
+  if (!id) return { error: '缺少商品库' }
+  db.getDb()
+    .prepare(
+      `INSERT INTO oceanengine_library_prefs (platform_id, launch, updated_at) VALUES (?, ?, datetime('now'))
+       ON CONFLICT(platform_id) DO UPDATE SET launch = excluded.launch, updated_at = datetime('now')`,
+    )
+    .run(id, launch ? 1 : 0)
+  return { id, launch: !!launch }
 }
 
 function setLibraryEnabled(platformId, enabled) {
@@ -1248,10 +1565,20 @@ module.exports = {
   setNovelTemplateEnabled,
   deleteNovelTemplate,
   librarySettings,
+  withLaunchFlags,
   setLibraryEnabled,
+  setLibraryLaunch,
   settings,
   parseBookNames,
   allocateName,
+  numberedName,
+  maxUsedIndex,
+  planNumberedProducts,
+  assignLaunchProducts,
+  createNamedProducts,
+  createNumberedProducts,
+  localStoredLibraries,
+  refreshLibraries,
   cleanBookName,
   buildProductInfo,
   DEFAULT_BUILD_LIBRARIES,

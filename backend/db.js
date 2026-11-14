@@ -24,9 +24,12 @@ let clockInstalled = false
 
 function rewriteClockSql(sql) {
   if (typeof sql !== 'string') return sql
-  if (!sql.includes('datetime')) return sql
+  if (!sql.includes('date')) return sql
+  // SQLite 的 localtime 走 C 运行时。Windows 不认 TZ=Asia/Shanghai，会把本地时间当成 UTC。
+  // 中国没有夏令时，统一写成 UTC+8，和线上 Linux 的北京时间一致。
   return sql
-    .replace(/datetime\(\s*'now'\s*\)/g, "datetime('now', 'localtime')")
+    .replace(/datetime\(\s*'now'\s*(?:,\s*'localtime'\s*)?\)/g, "datetime('now', '+8 hours')")
+    .replace(/date\(\s*'now'\s*(?:,\s*'localtime'\s*)?\)/g, "date('now', '+8 hours')")
     .replace(/datetime\(\s*([A-Za-z_][\w.]*)\s*,\s*'localtime'\s*\)/g, '$1')
 }
 
@@ -147,6 +150,129 @@ function applySchemaPatches(dbi) {
     ensureNovelSchema(dbi)
     ensureNovelMenus(dbi)
     ensureOceanEngineSchema(dbi)
+    dbi.exec(`
+      CREATE TABLE IF NOT EXISTS oceanengine_upload_records (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL DEFAULT 0,
+        task_key TEXT NOT NULL DEFAULT '',
+        org_id TEXT NOT NULL DEFAULT '',
+        org_name TEXT NOT NULL DEFAULT '',
+        filename TEXT NOT NULL DEFAULT '',
+        local_size INTEGER NOT NULL DEFAULT 0,
+        remote_size INTEGER NOT NULL DEFAULT 0,
+        size_matched INTEGER,
+        status TEXT NOT NULL DEFAULT '',
+        error TEXT NOT NULL DEFAULT '',
+        video_id TEXT NOT NULL DEFAULT '',
+        material_id TEXT NOT NULL DEFAULT '',
+        created_at TEXT DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_ocean_upload_records_user ON oceanengine_upload_records(user_id, id);
+      CREATE TABLE IF NOT EXISTS oceanengine_upload_tasks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL DEFAULT 0,
+        org_id TEXT NOT NULL DEFAULT '',
+        org_name TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'running',
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS oceanengine_upload_task_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER NOT NULL,
+        filename TEXT NOT NULL DEFAULT '',
+        file_path TEXT NOT NULL DEFAULT '',
+        local_size INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'waiting',
+        error TEXT NOT NULL DEFAULT '',
+        video_id TEXT NOT NULL DEFAULT '',
+        material_id TEXT NOT NULL DEFAULT '',
+        remote_size INTEGER NOT NULL DEFAULT 0,
+        size_matched INTEGER,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_ocean_upload_task_items_task ON oceanengine_upload_task_items(task_id, status);
+      CREATE TABLE IF NOT EXISTS oceanengine_launch_tasks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT '',
+        book_count INTEGER NOT NULL DEFAULT 0,
+        account_count INTEGER NOT NULL DEFAULT 0,
+        added INTEGER NOT NULL DEFAULT 0,
+        failed INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS oceanengine_launch_task_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER NOT NULL,
+        advertiser_id TEXT NOT NULL DEFAULT '',
+        account_name TEXT NOT NULL DEFAULT '',
+        book_name TEXT NOT NULL DEFAULT '',
+        project_id TEXT NOT NULL DEFAULT '',
+        promotion_id TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT '',
+        message TEXT NOT NULL DEFAULT '',
+        created_at TEXT DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_ocean_launch_items_task ON oceanengine_launch_task_items(task_id, id);
+      CREATE TABLE IF NOT EXISTS oceanengine_launch_strategies (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL DEFAULT '',
+        config TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT
+      );
+    `)
+    ensureColumn(dbi, 'oceanengine_upload_tasks', 'dismissed', 'INTEGER NOT NULL DEFAULT 0')
+    ensureColumn(dbi, 'oceanengine_launch_tasks', 'strategy_name', "TEXT NOT NULL DEFAULT ''")
+    ensureColumn(dbi, 'oceanengine_launch_tasks', 'snapshot', "TEXT NOT NULL DEFAULT ''")
+    ensureColumn(dbi, 'oceanengine_launch_task_items', 'promo_path', "TEXT NOT NULL DEFAULT ''")
+    ensureColumn(dbi, 'oceanengine_launch_task_items', 'material_count', 'INTEGER NOT NULL DEFAULT 0')
+    ensureColumn(dbi, 'oceanengine_launch_task_items', 'payload', "TEXT NOT NULL DEFAULT ''")
+    ensureColumn(dbi, 'oceanengine_launch_task_items', 'error_code', "TEXT NOT NULL DEFAULT ''")
+    ensureColumn(dbi, 'oceanengine_launch_task_items', 'error_kind', "TEXT NOT NULL DEFAULT ''")
+    ensureColumn(dbi, 'oceanengine_launch_task_items', 'retryable', 'INTEGER NOT NULL DEFAULT 0')
+    try {
+      const key = 'time.upload_records_beijing_v1'
+      dbi.transaction(() => {
+        if (dbi.prepare('SELECT 1 FROM app_settings WHERE key = ?').get(key)) return
+        dbi.prepare(
+          `UPDATE oceanengine_upload_records
+           SET created_at = datetime(created_at, '+8 hours')
+           WHERE created_at GLOB '????-??-?? ??:??:??'`,
+        ).run()
+        dbi.prepare(`INSERT INTO app_settings (key, value, updated_at) VALUES (?, '1', datetime('now'))`).run(key)
+      }).immediate()
+    } catch (e) {
+      console.error('[db] upload record time', e.message)
+    }
+    try {
+      const key = 'time.upload_clock_utc_v2'
+      const repairs = [
+        ['oceanengine_upload_records', ['created_at']],
+        ['oceanengine_upload_tasks', ['created_at', 'updated_at']],
+        ['oceanengine_upload_task_items', ['created_at', 'updated_at']],
+      ]
+      dbi.transaction(() => {
+        if (dbi.prepare('SELECT 1 FROM app_settings WHERE key = ?').get(key)) return
+        for (const [table, cols] of repairs) {
+          for (const col of cols) {
+            dbi.prepare(
+              `UPDATE ${table}
+               SET ${col} = datetime(${col}, '+8 hours')
+               WHERE ${col} GLOB '????-??-?? ??:??:??'
+                 AND datetime(${col}) <= datetime('now', '+2 hours')`,
+            ).run()
+          }
+        }
+        dbi.prepare(`INSERT INTO app_settings (key, value, updated_at) VALUES (?, '1', datetime('now'))`).run(key)
+      }).immediate()
+    } catch (e) {
+      console.error('[db] upload clock utc', e.message)
+    }
+    ensureColumn(dbi, 'oceanengine_library_prefs', 'launch', 'INTEGER')
     ensureColumn(dbi, 'oceanengine_advertisers', 'in_use', 'INTEGER NOT NULL DEFAULT 0')
     ensureColumn(dbi, 'oceanengine_advertisers', 'copyright_owner', "TEXT NOT NULL DEFAULT ''")
     dbi.prepare(
@@ -743,19 +869,25 @@ function ensureNovelMenus(dbi) {
   const pages = [
     { parentId: materialId, name: '抖音提取', path: '/novel/douyin-parse', component: 'novelDouyinParse', icon: 'Film', sort: 1, perm: 'novel:douyin-parse:list', visible: 1 },
     { parentId: materialId, name: '素材库', path: '/novel/materials', component: 'novelMaterials', icon: 'VideoCamera', sort: 2, perm: 'novel:materials:list', visible: 1 },
-    { parentId: materialId, name: '产品图', path: '/novel/product-images', component: 'novelProductImages', icon: 'Picture', sort: 3, perm: 'novel:ocean-product:list', visible: 1 },
+    { parentId: materialId, name: '素材上传', path: '/novel/ocean-upload', component: 'novelOceanUpload', icon: 'Upload', sort: 3, perm: 'novel:ocean-product:list', visible: 1 },
+    { parentId: materialId, name: '产品图', path: '/novel/product-images', component: 'novelProductImages', icon: 'Picture', sort: 4, perm: 'novel:ocean-product:list', visible: 1 },
     { parentId: configId, name: '授权', path: '/novel/ocean-settings', component: 'novelOceanSettings', icon: 'Key', sort: 1, perm: 'novel:ocean-product:list', visible: 1 },
     { parentId: configId, name: '充值模板', path: '/novel/recharge-templates', component: 'novelRechargeTemplates', icon: 'Coin', sort: 2, perm: 'novel:promo:list', visible: 1 },
     { parentId: configId, name: '投放账户', path: '/novel/ocean-accounts', component: 'novelOceanAccounts', icon: 'User', sort: 3, perm: 'novel:ocean-account:list', visible: 1 },
     { parentId: configId, name: '事件管理', path: '/novel/ocean-events', component: 'novelOceanEvents', icon: 'Bell', sort: 4, perm: 'novel:ocean-product:list', visible: 1 },
     { parentId: configId, name: '落地页', path: '/novel/ocean-sites', component: 'novelOceanSites', icon: 'Document', sort: 5, perm: 'novel:ocean-product:list', visible: 1 },
+    { parentId: configId, name: '标题库', path: '/novel/ocean-titles', component: 'novelOceanTitles', icon: 'EditPen', sort: 6, perm: 'novel:ocean-product:list', visible: 1 },
+    { parentId: configId, name: '出价策略', path: '/novel/ocean-bids', component: 'novelOceanBids', icon: 'Money', sort: 7, perm: 'novel:ocean-product:list', visible: 1 },
     { parentId: launchId, name: '推广链接', path: '/novel/promo-links', component: 'novelPromoLinks', icon: 'Link', sort: 1, perm: 'novel:promo:list', visible: 1 },
     { parentId: launchId, name: '商品库', path: '/novel/ocean-products', component: 'novelOceanProducts', icon: 'Goods', sort: 2, perm: 'novel:ocean-product:list', visible: 1 },
-    { parentId: launchId, name: '书籍', path: '/novel/books', component: 'novelBooks', icon: 'Notebook', sort: 4, perm: 'novel:books:list', visible: 0 },
-    { parentId: launchId, name: '推广模板', path: '/novel/promo-templates', component: 'novelPromoTemplates', icon: 'Ticket', sort: 5, perm: 'novel:promo:list', visible: 0 },
-    { parentId: launchId, name: '同步记录', path: '/novel/sync', component: 'novelSync', icon: 'Upload', sort: 6, perm: 'novel:sync:list', visible: 0 },
+    { parentId: launchId, name: '策略模板', path: '/novel/ocean-strategies', component: 'novelOceanStrategies', icon: 'Collection', sort: 3, perm: 'novel:ocean-product:list', visible: 1 },
+    { parentId: launchId, name: '批量基建', path: '/novel/ocean-launch', component: 'novelOceanLaunch', icon: 'Files', sort: 4, perm: 'novel:ocean-product:list', visible: 1 },
+    { parentId: launchId, name: '书籍', path: '/novel/books', component: 'novelBooks', icon: 'Notebook', sort: 5, perm: 'novel:books:list', visible: 0 },
+    { parentId: launchId, name: '推广模板', path: '/novel/promo-templates', component: 'novelPromoTemplates', icon: 'Ticket', sort: 6, perm: 'novel:promo:list', visible: 0 },
+    { parentId: launchId, name: '同步记录', path: '/novel/sync', component: 'novelSync', icon: 'Upload', sort: 7, perm: 'novel:sync:list', visible: 0 },
   ]
   for (const page of pages) upsert({ ...page, type: 2 })
+  dbi.prepare(`UPDATE menus SET name = '批量基建' WHERE path = '/novel/ocean-launch'`).run()
   const grantGroup = (groupId, components) => {
     const ph = components.map(() => '?').join(',')
     const children = dbi.prepare(`SELECT id FROM menus WHERE component_name IN (${ph})`).all(...components)
@@ -765,11 +897,11 @@ function ensureNovelMenus(dbi) {
       for (const role of roles) ir.run(role.role_id, groupId)
     }
   }
-  grantGroup(materialId, ['novelDouyinParse', 'novelMaterials', 'novelProductImages'])
-  grantGroup(configId, ['novelOceanSettings', 'novelOceanAccounts', 'novelRechargeTemplates', 'novelOceanEvents', 'novelOceanSites'])
-  grantGroup(launchId, ['novelPromoLinks', 'novelOceanProducts', 'novelBooks', 'novelPromoTemplates', 'novelSync'])
+  grantGroup(materialId, ['novelDouyinParse', 'novelMaterials', 'novelOceanUpload', 'novelProductImages'])
+  grantGroup(configId, ['novelOceanSettings', 'novelOceanAccounts', 'novelRechargeTemplates', 'novelOceanEvents', 'novelOceanSites', 'novelOceanTitles', 'novelOceanBids'])
+  grantGroup(launchId, ['novelPromoLinks', 'novelOceanProducts', 'novelOceanStrategies', 'novelOceanLaunch', 'novelBooks', 'novelPromoTemplates', 'novelSync'])
   const oceanMenus = dbi
-    .prepare(`SELECT id FROM menus WHERE component_name IN ('novelOceanProducts', 'novelProductImages', 'novelOceanSettings', 'novelOceanEvents', 'novelOceanSites')`)
+    .prepare(`SELECT id FROM menus WHERE component_name IN ('novelOceanProducts', 'novelOceanStrategies', 'novelOceanLaunch', 'novelOceanUpload', 'novelProductImages', 'novelOceanSettings', 'novelOceanEvents', 'novelOceanSites', 'novelOceanTitles', 'novelOceanBids')`)
     .all()
   if (oceanMenus.length) {
     const sources = dbi
@@ -793,6 +925,13 @@ function ensureNovelMenus(dbi) {
     for (const m of extra) {
       for (const r of roles) ir.run(r.role_id, m.id)
     }
+  }
+  const uploadMenu = dbi.prepare(`SELECT id FROM menus WHERE component_name = 'novelOceanUpload' LIMIT 1`).get()
+  const productMenu = dbi.prepare(`SELECT id FROM menus WHERE component_name = 'novelOceanProducts' LIMIT 1`).get()
+  if (uploadMenu && productMenu) {
+    const uploadRoles = dbi.prepare('SELECT role_id FROM role_menus WHERE menu_id = ?').all(productMenu.id)
+    const grantUpload = dbi.prepare('INSERT OR IGNORE INTO role_menus (role_id, menu_id) VALUES (?, ?)')
+    for (const role of uploadRoles) grantUpload.run(role.role_id, uploadMenu.id)
   }
   const accountMenu = dbi.prepare(`SELECT id FROM menus WHERE component_name = 'novelOceanAccounts' LIMIT 1`).get()
   if (accountMenu) {
@@ -930,6 +1069,37 @@ function ensureOceanEngineSchema(dbi) {
     );
     CREATE INDEX IF NOT EXISTS idx_oceanengine_advertisers_company ON oceanengine_advertisers(company);
     CREATE INDEX IF NOT EXISTS idx_oceanengine_advertisers_app ON oceanengine_advertisers(app_pk);
+    CREATE TABLE IF NOT EXISTS oceanengine_title_libraries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL DEFAULT '',
+      remark TEXT NOT NULL DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS oceanengine_title_groups (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      library_id INTEGER NOT NULL,
+      name TEXT NOT NULL DEFAULT '',
+      sort INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS oceanengine_titles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      text TEXT NOT NULL DEFAULT '',
+      sort INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_ocean_title_groups_lib ON oceanengine_title_groups(library_id, id);
+    CREATE INDEX IF NOT EXISTS idx_ocean_titles_group ON oceanengine_titles(group_id, sort, id);
+    CREATE TABLE IF NOT EXISTS oceanengine_bid_strategies (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL DEFAULT '',
+      tiers TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT
+    );
   `)
 }
 
@@ -1109,18 +1279,36 @@ function ensureNovelSchema(dbi) {
   ensureColumn(dbi, 'novel_recharge_templates', 'creator', "TEXT NOT NULL DEFAULT ''")
   ensureColumn(dbi, 'novel_recharge_templates', 'remote_created_at', 'TEXT')
   ensureColumn(dbi, 'novel_recharge_templates', 'remote_updated_at', 'TEXT')
+  ensureColumn(dbi, 'novel_recharge_templates', 'source', "TEXT NOT NULL DEFAULT 'dianzhong'")
   try {
     dbi.exec(
-      `CREATE UNIQUE INDEX IF NOT EXISTS idx_novel_recharge_batch
-       ON novel_recharge_templates(batch_id) WHERE batch_id != ''`,
+      `UPDATE novel_recharge_templates SET source = 'dianzhong' WHERE source IS NULL OR source = ''`,
+    )
+  } catch (_) {
+    /* ignore */
+  }
+  try {
+    dbi.exec(`DROP INDEX IF EXISTS idx_novel_recharge_batch`)
+  } catch (_) {
+    /* ignore */
+  }
+  try {
+    dbi.exec(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_novel_recharge_source_batch
+       ON novel_recharge_templates(source, batch_id) WHERE batch_id != ''`,
     )
   } catch (_) {
     /* 旧数据可能冲突 */
   }
   try {
+    dbi.exec(`DROP INDEX IF EXISTS idx_novel_recharge_channel_batch`)
+  } catch (_) {
+    /* ignore */
+  }
+  try {
     dbi.exec(
-      `CREATE UNIQUE INDEX IF NOT EXISTS idx_novel_recharge_channel_batch
-       ON novel_recharge_templates(channel_id, batch_id) WHERE batch_id != ''`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_novel_recharge_source_channel_batch
+       ON novel_recharge_templates(source, channel_id, batch_id) WHERE batch_id != ''`,
     )
   } catch (_) {
     /* 旧数据可能冲突 */
@@ -1134,8 +1322,14 @@ function ensureNovelSchema(dbi) {
     /* ignore */
   }
   try {
+    dbi.exec(`DROP INDEX IF EXISTS idx_novel_promo_referral`)
+  } catch (_) {
+    /* ignore */
+  }
+  try {
     dbi.exec(
-      `CREATE UNIQUE INDEX IF NOT EXISTS idx_novel_promo_referral ON novel_promo_links(referral_id) WHERE referral_id != ''`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_novel_promo_source_referral
+       ON novel_promo_links(source, referral_id) WHERE referral_id != ''`,
     )
   } catch (_) {
     /* 旧数据可能冲突，列表仍按 book_id+url 去重 */

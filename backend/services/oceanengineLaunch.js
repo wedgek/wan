@@ -2394,13 +2394,13 @@ async function productImages(token, advertiserId) {
 }
 
 function hardMaterialReject(message) {
-  return /极端相似|不支持投放|审核不通过|已删除不可修改|检测结果未过|视频不存在|视频不可用/.test(String(message || ''))
+  return /极端相似|不支持投放|审核不通过|已删除不可修改|检测结果未过|视频不存在|视频不可用|平台AI生成素材|不支持手动添加/.test(String(message || ''))
 }
 
 function namedMaterialIds(message) {
   const ids = new Set()
   const text = String(message || '')
-  const re = /\d{16,20}/g
+  const re = /\d{16,20}|v[0-9a-z]{16,}/gi
   let match = re.exec(text)
   while (match) {
     ids.add(match[0])
@@ -2410,14 +2410,16 @@ function namedMaterialIds(message) {
 }
 
 function rejectedVideoIds(result, videos) {
-  const named = namedMaterialIds(result && result.error)
+  const text = String((result && result.error) || '')
+  const named = namedMaterialIds(text)
   if (!named.size) return []
   const found = []
   for (const item of videos || []) {
     const videoId = String(item.video_id || '')
     const materialId = String(item.material_id || '')
     if (!videoId) continue
-    if (named.has(materialId) || named.has(videoId)) found.push(videoId)
+    const hit = [...named].some((id) => id === videoId || id === materialId || videoId.includes(id) || (materialId && materialId.includes(id)))
+    if (hit) found.push(videoId)
   }
   return found
 }

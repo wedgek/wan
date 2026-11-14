@@ -56,6 +56,7 @@ const DEFAULT_SELLING_POINTS = [
 const DEFAULT_NAME_PATTERN = '{日期}{版权方}-{书名}-{档位}'
 const NAME_PATTERN_TOKENS = ['{日期}', '{版权方}', '{书名}', '{档位}']
 const ACCOUNT_CONCURRENCY = 12
+const PRODUCT_PREP_LIMIT = 3
 const PATH_QPS_START = 12
 const PATH_QPS_MAX = 18
 const PATH_QPS_MIN = 4
@@ -1337,6 +1338,7 @@ function mapTask(task) {
        FROM oceanengine_launch_task_items WHERE task_id = ?`,
     )
     .get(task.id)
+  const phase = taskPhase(task.id)
   return {
     id: task.id,
     status: task.status,
@@ -1347,6 +1349,12 @@ function mapTask(task) {
     bookCount: task.book_count,
     accountCount: task.account_count,
     strategyName: task.strategy_name || '',
+    name: task.name || '',
+    productLibrary: task.product_library || '',
+    productSpan: task.product_span || '',
+    phase: (phase && phase.phase) || '',
+    phaseDone: (phase && phase.done) || 0,
+    phaseTotal: (phase && phase.total) || 0,
     createdAt: task.created_at || '',
   }
 }
@@ -1440,20 +1448,117 @@ function taskDraft(id) {
   }
 }
 
-function listTasks() {
-  return database()
+function trailingProductNo(name) {
+  const match = String(name || '').match(/-(\d+)$/)
+  return match ? Number(match[1]) : 0
+}
+
+function productSpanText(plan, bookName) {
+  const source = plan || {}
+  const book = String(source.bookName || bookName || '').trim()
+  const names = Array.isArray(source.names) ? source.names : []
+  const first = String(source.firstName || names[0] || '')
+  const last = String(source.lastName || (names.length ? names[names.length - 1] : '') || '')
+  const nameFrom = trailingProductNo(first)
+  const nameTo = trailingProductNo(last)
+  let from = Number(source.from) || nameFrom
+  let to = Number(source.to) || nameTo
+  if (nameFrom && (!from || nameFrom < from)) from = nameFrom
+  if (nameTo && (!to || nameTo > to)) to = nameTo
+  if (book && from && to) return from === to ? `${book}-${from}` : `${book}-${from}～${to}`
+  if (first && last) return first === last ? first : `${first}～${last}`
+  return first
+}
+
+function libraryNameOf(platformId) {
+  const id = String(platformId || '').trim()
+  if (!id) return ''
+  const row = database().prepare(`SELECT name FROM oceanengine_libraries WHERE platform_id = ?`).get(id)
+  return String((row && row.name) || '').trim()
+}
+
+function rememberProductUse(taskId, snapshotText) {
+  const snap = typeof snapshotText === 'string' ? parsePayload(snapshotText) : snapshotText || {}
+  const plan = snap.productPlan || {}
+  const library = libraryNameOf(snap.platformId || plan.platformId)
+  const span = productSpanText(plan, snap.bookName)
+  database()
+    .prepare(`UPDATE oceanengine_launch_tasks SET product_library = ?, product_span = ? WHERE id = ?`)
+    .run(library, span, taskId)
+  return { library, span }
+}
+
+function backfillProductUse() {
+  const rows = database()
+    .prepare(`SELECT id, snapshot FROM oceanengine_launch_tasks WHERE product_library = '' AND product_span = '' AND snapshot != ''`)
+    .all()
+  for (const row of rows) rememberProductUse(row.id, row.snapshot)
+}
+
+function buildTaskName(bookName) {
+  return String(bookName || '').trim().slice(0, 40) || '未命名书'
+}
+
+function backfillTaskNames() {
+  const rows = database()
     .prepare(
-      `SELECT id, status, added, failed, book_count, account_count, strategy_name, created_at
-       FROM oceanengine_launch_tasks ORDER BY id DESC LIMIT 30`,
+      `SELECT id, name, snapshot FROM oceanengine_launch_tasks
+       WHERE name = '' OR name GLOB '*[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9]'`,
     )
     .all()
-    .map(mapTask)
+  if (!rows.length) return
+  const update = database().prepare(`UPDATE oceanengine_launch_tasks SET name = ? WHERE id = ?`)
+  for (const row of rows) {
+    const snap = parsePayload(row.snapshot)
+    const name = buildTaskName(snap.bookName)
+    if (name !== row.name) update.run(name, row.id)
+  }
+}
+
+function listTasks(query) {
+  backfillTaskNames()
+  backfillProductUse()
+  const pageSize = Math.min(100, Math.max(1, Number(query && query.pageSize) || 20))
+  const page = Math.max(1, Number(query && query.page) || 1)
+  const keyword = String((query && (query.keyword || query.q)) || '').trim()
+  const where = []
+  const args = []
+  if (keyword) {
+    where.push(`(name LIKE ? OR strategy_name LIKE ? OR created_at LIKE ? OR product_library LIKE ? OR product_span LIKE ? OR CAST(id AS TEXT) = ?)`)
+    args.push(`%${keyword}%`, `%${keyword}%`, `%${keyword}%`, `%${keyword}%`, `%${keyword}%`, keyword)
+  }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
+  const total = Number(database().prepare(`SELECT COUNT(*) AS n FROM oceanengine_launch_tasks ${whereSql}`).get(...args).n) || 0
+  const rows = database()
+    .prepare(
+      `SELECT id, name, status, added, failed, book_count, account_count, strategy_name, created_at, product_library, product_span
+       FROM oceanengine_launch_tasks ${whereSql}
+       ORDER BY id DESC
+       LIMIT ? OFFSET ?`,
+    )
+    .all(...args, pageSize, (page - 1) * pageSize)
+  const active = database()
+    .prepare(
+      `SELECT id, name, status, added, failed, book_count, account_count, strategy_name, created_at, product_library, product_span
+       FROM oceanengine_launch_tasks
+       WHERE status IN ('running', 'preparing', 'ready')
+       ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'preparing' THEN 1 ELSE 2 END, id
+       LIMIT 1`,
+    )
+    .get()
+  return {
+    list: rows.map(mapTask),
+    total,
+    page,
+    pageSize,
+    active: active ? mapTask(active) : null,
+  }
 }
 
 function recentTask() {
   const task = database()
     .prepare(
-      `SELECT id, status, added, failed, book_count, account_count, strategy_name, created_at
+      `SELECT id, name, status, added, failed, book_count, account_count, strategy_name, created_at, product_library, product_span
        FROM oceanengine_launch_tasks ORDER BY id DESC LIMIT 1`,
     )
     .get()
@@ -1498,28 +1603,41 @@ function interruptedTasks() {
 function settleInterrupted() {
   if (settled) return
   settled = true
-  let tasks = []
   try {
-    tasks = interruptedTasks()
+    const active = database()
+      .prepare(
+        `SELECT id, status, snapshot FROM oceanengine_launch_tasks
+         WHERE status IN ('running', 'preparing', 'ready', 'queued')
+         ORDER BY id`,
+      )
+      .all()
+    for (const task of active) {
+      const snapshot = parsePayload(task.snapshot)
+      const template = snapshot.template ? normalizeTemplate(snapshot.template) : null
+      if (!template) {
+        finishTask(task.id, 'fail')
+        continue
+      }
+      if (task.status === 'preparing' || (task.status === 'running' && pendingProductNames(task.id).length)) {
+        if (task.status !== 'preparing') {
+          database()
+            .prepare(`UPDATE oceanengine_launch_tasks SET status = 'preparing', updated_at = datetime('now') WHERE id = ?`)
+            .run(task.id)
+        }
+        console.log('[oceanengine] launch resume products', { taskId: task.id })
+        startProduct(task.id)
+        continue
+      }
+      if (task.status === 'running') {
+        console.log('[oceanengine] launch resume plans', { taskId: task.id })
+        startPlans(task.id)
+      }
+    }
+    kickQueues()
   } catch (e) {
     settled = false
     console.error('[oceanengine] launch settle', e.message)
-    return
   }
-  for (const task of tasks) {
-    const snapshot = parsePayload(task.snapshot)
-    const template = snapshot.template ? normalizeTemplate(snapshot.template) : null
-    if (!template) {
-      finishTask(task.id, 'fail')
-      continue
-    }
-    database()
-      .prepare(`UPDATE oceanengine_launch_tasks SET status = 'running', updated_at = datetime('now') WHERE id = ?`)
-      .run(task.id)
-    console.log('[oceanengine] launch resume', { taskId: task.id })
-    startTask(task.id)
-  }
-  if (!tasks.length) kickQueue()
 }
 
 async function options() {
@@ -1536,6 +1654,7 @@ async function options() {
   } catch (e) {
     console.error('[oceanengine] launch libraries', e.message)
   }
+  const taskPage = listTasks({ page: 1, pageSize: 20 })
   return {
     accounts,
     copyrights: orderCopyrights([
@@ -1550,7 +1669,8 @@ async function options() {
     titleLibraries: titles.listLibraries(),
     books,
     libraries,
-    tasks: listTasks(),
+    tasks: taskPage.list,
+    taskTotal: taskPage.total,
   }
 }
 
@@ -1908,7 +2028,7 @@ const taskPhases = new Map()
 const awemeCache = new Map()
 
 function noteTaskPhase(taskId, phase, done, total) {
-  taskPhases.set(Number(taskId), { phase, done, total })
+  taskPhases.set(Number(taskId), { phase, done, total, at: Date.now() })
 }
 
 function taskPhase(taskId) {
@@ -2495,7 +2615,13 @@ function openTask(userId, accounts, books, strategyName, snapshot, taskStatus = 
        ) VALUES (?, ?, ?, ?, ?, ?, 0, 0, datetime('now'), datetime('now'))`,
     )
     .run(Number(userId) || 0, status, books.length, accounts.length, strategyName || '', snapshot || '')
-  return Number(inserted.lastInsertRowid)
+  const id = Number(inserted.lastInsertRowid)
+  const row = database().prepare(`SELECT created_at, snapshot FROM oceanengine_launch_tasks WHERE id = ?`).get(id)
+  const snap = parsePayload(row && row.snapshot)
+  const name = buildTaskName(snap.bookName)
+  database().prepare(`UPDATE oceanengine_launch_tasks SET name = ? WHERE id = ?`).run(name, id)
+  rememberProductUse(id, snap)
+  return id
 }
 
 function refreshCounts(taskId) {
@@ -2579,7 +2705,8 @@ function finishTask(taskId, status) {
   database()
     .prepare(`UPDATE oceanengine_launch_tasks SET status = ?, updated_at = datetime('now') WHERE id = ?`)
     .run(status, taskId)
-  if (status !== 'running' && status !== 'queued') kickQueue()
+  if (status === 'running' || status === 'queued' || status === 'preparing' || status === 'ready') return
+  kickQueues()
 }
 
 function loadTaskSnapshot(taskId) {
@@ -2591,7 +2718,7 @@ function taskById(id) {
   const taskId = Number(id) || 0
   const task = database()
     .prepare(
-      `SELECT id, status, added, failed, book_count, account_count, strategy_name, created_at
+      `SELECT id, name, status, added, failed, book_count, account_count, strategy_name, created_at, product_library, product_span
        FROM oceanengine_launch_tasks WHERE id = ?`,
     )
     .get(taskId)
@@ -2880,106 +3007,117 @@ async function runPending(taskId, template, token) {
     const counts = database()
       .prepare(`SELECT added, failed FROM oceanengine_launch_tasks WHERE id = ?`)
       .get(taskId)
+    if (taskStopped(taskId)) {
+      markStopped(taskId)
+      finishTask(taskId, 'stopped')
+      stopFlags.delete(Number(taskId))
+      console.log('[oceanengine] launch stopped', { taskId })
+      return
+    }
     const added = Number(counts && counts.added) || 0
     const failed = Number(counts && counts.failed) || 0
     finishTask(taskId, added && failed ? 'partial' : added ? 'done' : 'fail')
     console.log('[oceanengine] launch', { taskId, added, failed, autoRetry: autoIds.length })
   } catch (e) {
+    if (taskStopped(taskId)) {
+      markStopped(taskId)
+      finishTask(taskId, 'stopped')
+      return
+    }
     console.error('[oceanengine] launch', e.message)
     finishTask(taskId, 'fail')
   }
 }
 
 const stopFlags = new Set()
-const activeWorkers = new Set()
+const stopControllers = new Map()
+const productWorkers = new Set()
+const planWorkers = new Set()
 
 function taskStopped(taskId) {
   return stopFlags.has(Number(taskId))
 }
 
 function markStopped(taskId) {
-  for (const row of pendingRows(taskId)) {
-    writeItem(taskId, {
-      id: row.id,
-      status: 'fail',
-      message: '已手动停止',
-      promoPath: row.promo_path,
-      materialCount: row.material_count,
-      payload: row.payload,
-    })
-  }
+  database()
+    .prepare(
+      `UPDATE oceanengine_launch_task_items
+       SET status = 'fail', message = '已手动停止', error_code = '', error_kind = 'stopped', retryable = 0
+       WHERE task_id = ? AND status = 'pending'`,
+    )
+    .run(taskId)
+  refreshCounts(taskId)
 }
 
 function stopTask(taskId) {
   const id = Number(taskId) || 0
   const task = database().prepare('SELECT id, status FROM oceanengine_launch_tasks WHERE id = ?').get(id)
   if (!task) return { error: '没有这批投放' }
-  if (task.status === 'queued') {
-    markStopped(id)
-    finishTask(id, 'stopped')
-    return { id, status: 'stopped' }
-  }
-  if (task.status !== 'running') return { error: '这批已经结束' }
+  if (!['queued', 'preparing', 'ready', 'running'].includes(task.status)) return { error: '这批已经结束' }
   stopFlags.add(id)
-  if (!activeWorkers.has(id)) {
-    markStopped(id)
-    finishTask(id, 'stopped')
-    stopFlags.delete(id)
-  }
-  return { id, status: 'stopping' }
+  const ctrl = stopControllers.get(id)
+  if (ctrl) ctrl.abort()
+  const released = task.status === 'running' || task.status === 'preparing'
+  productWorkers.delete(id)
+  planWorkers.delete(id)
+  markStopped(id)
+  finishTask(id, 'stopped')
+  console.log('[oceanengine] launch stop', { taskId: id, was: task.status })
+  return { id, status: 'stopped', released }
 }
 
-let queueBusy = false
-
-function startTask(taskId) {
-  const id = Number(taskId) || 0
-  if (!id || activeWorkers.has(id)) return
-  queueBusy = true
-  activeWorkers.add(id)
-  const snapshot = loadTaskSnapshot(id)
-  const template = snapshot.template ? normalizeTemplate(snapshot.template) : null
-  if (!template) {
-    activeWorkers.delete(id)
-    queueBusy = activeWorkers.size > 0
-    finishTask(id, 'fail')
-    return
-  }
-  auth.getAccessToken().then((tokenResult) => {
-    if (tokenResult.error) {
-      activeWorkers.delete(id)
-      queueBusy = activeWorkers.size > 0
-      console.error('[oceanengine] launch queue', tokenResult.error)
-      finishTask(id, 'fail')
-      return
-    }
-    prepareAndRun(id, template, tokenResult.token, tokenResult.accountId || '').catch((e) => {
-      console.error('[oceanengine] launch', e.message)
-      finishTask(id, 'fail')
-    })
-  }).catch((e) => {
-    activeWorkers.delete(id)
-    queueBusy = activeWorkers.size > 0
-    console.error('[oceanengine] launch queue', e.message)
-    finishTask(id, 'fail')
-  })
+function watchStall(id) {
+  return setInterval(() => {
+    if (taskStopped(id)) return
+    const phase = taskPhase(id)
+    const beat = phase && phase.at ? phase.at : 0
+    if (!beat || Date.now() - beat < 3 * 60 * 1000) return
+    console.error('[oceanengine] launch stall', { taskId: id, phase: phase && phase.phase, done: phase && phase.done })
+    stopTask(id)
+  }, 15000)
 }
 
-function kickQueue() {
-  if (queueBusy || activeWorkers.size) return
+function kickProductQueue() {
+  while (productWorkers.size < PRODUCT_PREP_LIMIT) {
+    const next = database()
+      .prepare(`SELECT id FROM oceanengine_launch_tasks WHERE status = 'queued' ORDER BY id LIMIT 1`)
+      .get()
+    if (!next) return
+    const changed = database()
+      .prepare(`UPDATE oceanengine_launch_tasks SET status = 'preparing', updated_at = datetime('now') WHERE id = ? AND status = 'queued'`)
+      .run(next.id)
+    if (!changed.changes) continue
+    console.log('[oceanengine] launch products start', { taskId: next.id })
+    startProduct(next.id)
+  }
+}
+
+function kickPlanQueue() {
+  if (planWorkers.size) return
   const next = database()
-    .prepare(`SELECT id FROM oceanengine_launch_tasks WHERE status = 'queued' ORDER BY id LIMIT 1`)
+    .prepare(`SELECT id FROM oceanengine_launch_tasks WHERE status = 'ready' ORDER BY id LIMIT 1`)
     .get()
   if (!next) return
   const changed = database()
-    .prepare(`UPDATE oceanengine_launch_tasks SET status = 'running', updated_at = datetime('now') WHERE id = ? AND status = 'queued'`)
+    .prepare(`UPDATE oceanengine_launch_tasks SET status = 'running', updated_at = datetime('now') WHERE id = ? AND status = 'ready'`)
     .run(next.id)
   if (!changed.changes) return
-  console.log('[oceanengine] launch queue start', { taskId: next.id })
-  startTask(next.id)
+  console.log('[oceanengine] launch plans start', { taskId: next.id })
+  startPlans(next.id)
 }
 
-function runningTask() {
-  return database().prepare(`SELECT id FROM oceanengine_launch_tasks WHERE status = 'running' LIMIT 1`).get()
+function kickQueues() {
+  kickProductQueue()
+  kickPlanQueue()
+}
+
+function markReady(taskId) {
+  const changed = database()
+    .prepare(`UPDATE oceanengine_launch_tasks SET status = 'ready', updated_at = datetime('now') WHERE id = ? AND status = 'preparing'`)
+    .run(taskId)
+  if (!changed.changes) return
+  console.log('[oceanengine] launch products ready', { taskId })
+  kickPlanQueue()
 }
 
 function pendingRows(taskId) {
@@ -3014,9 +3152,7 @@ function markPreparingProducts(taskId) {
   }
   if (!ids.length) return 0
   database()
-    .prepare(
-      `UPDATE oceanengine_launch_task_items SET message = '正在创建商品' WHERE id IN (${ids.map(() => '?').join(',')})`,
-    )
+    .prepare(`UPDATE oceanengine_launch_task_items SET message = '正在创建商品' WHERE id IN (${ids.map(() => '?').join(',')})`)
     .run(...ids)
   return ids.length
 }
@@ -3070,9 +3206,75 @@ function bindReadyProducts(taskId, readyProducts, errors) {
   }
 }
 
-async function prepareAndRun(taskId, template, token, accountId) {
+function loadTaskTemplate(taskId) {
+  const snapshot = loadTaskSnapshot(taskId)
+  const template = snapshot.template ? normalizeTemplate(snapshot.template) : null
+  return { snapshot, template }
+}
+
+function startProduct(taskId) {
+  const id = Number(taskId) || 0
+  if (!id || productWorkers.has(id) || planWorkers.has(id)) return
+  stopFlags.delete(id)
+  productWorkers.add(id)
+  const { template } = loadTaskTemplate(id)
+  if (!template) {
+    productWorkers.delete(id)
+    finishTask(id, 'fail')
+    return
+  }
+  auth.getAccessToken().then((tokenResult) => {
+    if (tokenResult.error) {
+      productWorkers.delete(id)
+      console.error('[oceanengine] launch products', tokenResult.error)
+      finishTask(id, 'fail')
+      return
+    }
+    prepareProducts(id, tokenResult.token, tokenResult.accountId || '').catch((e) => {
+      console.error('[oceanengine] launch products', e.message)
+      finishTask(id, 'fail')
+    })
+  }).catch((e) => {
+    productWorkers.delete(id)
+    console.error('[oceanengine] launch products', e.message)
+    finishTask(id, 'fail')
+  })
+}
+
+function startPlans(taskId) {
+  const id = Number(taskId) || 0
+  if (!id || planWorkers.has(id) || productWorkers.has(id)) return
+  stopFlags.delete(id)
+  planWorkers.add(id)
+  const { template } = loadTaskTemplate(id)
+  if (!template) {
+    planWorkers.delete(id)
+    finishTask(id, 'fail')
+    return
+  }
+  auth.getAccessToken().then((tokenResult) => {
+    if (tokenResult.error) {
+      planWorkers.delete(id)
+      console.error('[oceanengine] launch plans', tokenResult.error)
+      finishTask(id, 'fail')
+      return
+    }
+    runPlans(id, template, tokenResult.token).catch((e) => {
+      console.error('[oceanengine] launch plans', e.message)
+      finishTask(id, 'fail')
+    })
+  }).catch((e) => {
+    planWorkers.delete(id)
+    console.error('[oceanengine] launch plans', e.message)
+    finishTask(id, 'fail')
+  })
+}
+
+async function prepareProducts(taskId, token, accountId) {
   const id = Number(taskId)
-  activeWorkers.add(id)
+  const ctrl = new AbortController()
+  stopControllers.set(id, ctrl)
+  const stallTimer = watchStall(id)
   try {
     if (taskStopped(id)) {
       markStopped(id)
@@ -3080,6 +3282,7 @@ async function prepareAndRun(taskId, template, token, accountId) {
       return
     }
     const names = [...new Set(pendingProductNames(taskId))]
+    noteTaskPhase(id, 'products', 0, names.length)
     if (names.length) {
       const snapshot = loadTaskSnapshot(taskId)
       const created = await products.createNamedProducts({
@@ -3089,7 +3292,15 @@ async function prepareAndRun(taskId, template, token, accountId) {
         copyrightOwner: snapshot.copyrightOwner || '',
         token,
         accountId: accountId || '',
+        signal: ctrl.signal,
+        shouldStop: () => taskStopped(id),
+        onProgress: (done, total) => noteTaskPhase(taskId, 'products', done, total),
       })
+      if (taskStopped(id) || created.stopped) {
+        markStopped(id)
+        finishTask(id, 'stopped')
+        return
+      }
       if (created.error) failUnbound(taskId, created.error)
       else bindReadyProducts(taskId, created.products || [], created.errors || [])
     }
@@ -3098,26 +3309,69 @@ async function prepareAndRun(taskId, template, token, accountId) {
       finishTask(id, 'stopped')
       return
     }
-    await runPending(taskId, template, token)
+    if (!pendingRows(id).length) {
+      const counts = database().prepare(`SELECT added, failed FROM oceanengine_launch_tasks WHERE id = ?`).get(id)
+      const added = Number(counts && counts.added) || 0
+      const failed = Number(counts && counts.failed) || 0
+      finishTask(id, added && failed ? 'partial' : added ? 'done' : 'fail')
+      return
+    }
+    markReady(id)
   } catch (e) {
-    console.error('[oceanengine] launch', e.message)
+    console.error('[oceanengine] launch products', e.message)
+    if (taskStopped(id)) {
+      markStopped(id)
+      finishTask(id, 'stopped')
+      return
+    }
     failUnbound(taskId, e.message || '准备商品失败')
     for (const row of pendingRows(taskId)) {
       writeItem(taskId, {
         id: row.id,
         status: 'fail',
-        message: taskStopped(id) ? '已手动停止' : (e.message || '准备商品失败'),
+        message: e.message || '准备商品失败',
         promoPath: row.promo_path,
         materialCount: row.material_count,
         payload: row.payload,
       })
     }
-    finishTask(taskId, taskStopped(id) ? 'stopped' : 'fail')
+    finishTask(taskId, 'fail')
   } finally {
-    activeWorkers.delete(id)
+    clearInterval(stallTimer)
+    stopControllers.delete(id)
+    productWorkers.delete(id)
     stopFlags.delete(id)
-    queueBusy = activeWorkers.size > 0
-    kickQueue()
+    kickQueues()
+  }
+}
+
+async function runPlans(taskId, template, token) {
+  const id = Number(taskId)
+  const ctrl = new AbortController()
+  stopControllers.set(id, ctrl)
+  const stallTimer = watchStall(id)
+  try {
+    if (taskStopped(id)) {
+      markStopped(id)
+      finishTask(id, 'stopped')
+      return
+    }
+    noteTaskPhase(id, 'prepare', 0, 1)
+    await runPending(taskId, template, token)
+  } catch (e) {
+    console.error('[oceanengine] launch plans', e.message)
+    if (taskStopped(id)) {
+      markStopped(id)
+      finishTask(id, 'stopped')
+      return
+    }
+    finishTask(id, 'fail')
+  } finally {
+    clearInterval(stallTimer)
+    stopControllers.delete(id)
+    planWorkers.delete(id)
+    stopFlags.delete(id)
+    kickQueues()
   }
 }
 
@@ -3220,7 +3474,7 @@ async function submit(input, userId) {
     )
   }
   const preparingProducts = pendingProductNames(taskId).length > 0
-  kickQueue()
+  kickQueues()
   const queuedRow = database().prepare('SELECT status FROM oceanengine_launch_tasks WHERE id = ?').get(taskId)
   const status = (queuedRow && queuedRow.status) || 'queued'
   return {
@@ -3240,7 +3494,7 @@ function retry(input, userId) {
   const taskId = Number(input && input.taskId) || 0
   const task = database().prepare(`SELECT id, snapshot, status FROM oceanengine_launch_tasks WHERE id = ?`).get(taskId)
   if (!task) return { error: '没有这批投放' }
-  if (task.status === 'running' || task.status === 'queued') return { error: '这批还在进行' }
+  if (['running', 'queued', 'preparing', 'ready'].includes(task.status)) return { error: '这批还在进行' }
   const snapshot = parsePayload(task.snapshot)
   const template = snapshot.template ? normalizeTemplate(snapshot.template) : null
   if (!template) return { error: '这批任务没有保存创建参数，请重新搭建' }
@@ -3260,19 +3514,20 @@ function retry(input, userId) {
        WHERE task_id = ? AND id IN (${ids.map(() => '?').join(',')})`,
     )
     .run(taskId, ...ids)
+  const needsProducts = pendingProductNames(taskId).length > 0
   database()
-    .prepare(`UPDATE oceanengine_launch_tasks SET status = 'queued', updated_at = datetime('now') WHERE id = ?`)
-    .run(taskId)
+    .prepare(`UPDATE oceanengine_launch_tasks SET status = ?, updated_at = datetime('now') WHERE id = ?`)
+    .run(needsProducts ? 'queued' : 'ready', taskId)
   refreshCounts(taskId)
-  const preparingProducts = markPreparingProducts(taskId) > 0
-  kickQueue()
+  if (needsProducts) markPreparingProducts(taskId)
+  kickQueues()
   const queuedRow = database().prepare('SELECT status FROM oceanengine_launch_tasks WHERE id = ?').get(taskId)
   return {
     id: taskId,
-    status: (queuedRow && queuedRow.status) || 'queued',
-    queued: !queuedRow || queuedRow.status === 'queued',
+    status: (queuedRow && queuedRow.status) || (needsProducts ? 'queued' : 'ready'),
+    queued: !queuedRow || queuedRow.status === 'queued' || queuedRow.status === 'ready',
     jobs: ids.length,
-    preparingProducts,
+    preparingProducts: needsProducts,
     userId: Number(userId) || 0,
   }
 }

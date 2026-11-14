@@ -87,16 +87,63 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function sleepAbortable(ms, signal) {
+  if (signal && signal.aborted) return Promise.resolve(false)
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      if (signal) signal.removeEventListener('abort', onAbort)
+      resolve(true)
+    }, ms)
+    const onAbort = () => {
+      clearTimeout(timer)
+      resolve(false)
+    }
+    if (signal) signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+function fetchSignal(signal) {
+  const timeout = AbortSignal.timeout(20000)
+  if (!signal) return timeout
+  if (signal.aborted) return signal
+  if (typeof AbortSignal.any === 'function') return AbortSignal.any([timeout, signal])
+  return timeout
+}
+
 function rateLimited(message) {
   return /限频|40100|too many|请求频率/i.test(String(message || ''))
 }
 
-function takeOceanSlot() {
+function takeOceanSlot(signal) {
+  if (signal && signal.aborted) {
+    const error = new Error('已手动停止')
+    error.stopped = true
+    return Promise.reject(error)
+  }
   if (inflight < MAX_INFLIGHT) {
     inflight += 1
     return Promise.resolve()
   }
-  return new Promise((resolve) => slotWaiters.push(resolve))
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const waiter = () => {
+      if (settled) return
+      settled = true
+      if (signal) signal.removeEventListener('abort', onAbort)
+      resolve()
+    }
+    const onAbort = () => {
+      if (settled) return
+      settled = true
+      const index = slotWaiters.indexOf(waiter)
+      if (index >= 0) slotWaiters.splice(index, 1)
+      const error = new Error('已手动停止')
+      error.stopped = true
+      reject(error)
+    }
+    slotWaiters.push(waiter)
+    if (signal) signal.addEventListener('abort', onAbort, { once: true })
+  })
 }
 
 function freeOceanSlot() {
@@ -122,7 +169,8 @@ function noteOceanOk(isWrite) {
   createGapMs = Math.max(CREATE_GAP_MS, Math.floor(createGapMs * 0.85))
 }
 
-async function oceanFetchOnce(token, method, path, { query, body } = {}) {
+async function oceanFetchOnce(token, method, path, options = {}) {
+  const { query, body, signal } = options || {}
   const url = new URL(API + path)
   if (query) {
     for (const [key, value] of Object.entries(query)) {
@@ -139,9 +187,10 @@ async function oceanFetchOnce(token, method, path, { query, body } = {}) {
         ...(body ? { 'Content-Type': 'application/json' } : {}),
       },
       body: body ? stringifyOcean(body) : undefined,
-      signal: AbortSignal.timeout(20000),
+      signal: fetchSignal(signal),
     })
   } catch (e) {
+    if (signal && signal.aborted) return { error: '已手动停止', stopped: true }
     return { error: `巨量接口请求失败：${e.message || e}` }
   }
   let json
@@ -159,13 +208,22 @@ async function oceanFetchOnce(token, method, path, { query, body } = {}) {
 }
 
 async function oceanFetch(token, method, path, options) {
+  const signal = options && options.signal
   const isWrite = String(method || 'GET').toUpperCase() !== 'GET'
-  await takeOceanSlot()
+  if (signal && signal.aborted) return { error: '已手动停止', stopped: true }
+  let held = false
   try {
+    await takeOceanSlot(signal)
+    held = true
     for (let attempt = 0; attempt < 6; attempt += 1) {
+      if (signal && signal.aborted) return { error: '已手动停止', stopped: true }
       const wait = reserveOceanStart(isWrite ? createGapMs : Math.max(READ_GAP_MS, createGapMs))
-      if (wait > 0) await sleep(wait)
+      if (wait > 0) {
+        const finished = await sleepAbortable(wait, signal)
+        if (!finished) return { error: '已手动停止', stopped: true }
+      }
       const result = await oceanFetchOnce(token, method, path, options || {})
+      if (result.stopped || (signal && signal.aborted)) return { error: '已手动停止', stopped: true }
       if (result.error && rateLimited(result.error) && attempt < 5) {
         noteOceanLimit()
         continue
@@ -174,8 +232,11 @@ async function oceanFetch(token, method, path, options) {
       return result
     }
     return { error: '巨量接口达到限频，请稍后再试' }
+  } catch (e) {
+    if (e && e.stopped) return { error: '已手动停止', stopped: true }
+    throw e
   } finally {
-    freeOceanSlot()
+    if (held) freeOceanSlot()
   }
 }
 
@@ -190,7 +251,7 @@ function normalizeLibrary(row) {
   }
 }
 
-async function listLibraries(token, acct = accountId()) {
+async function listLibraries(token, acct = accountId(), options) {
   const result = await oceanFetch(token, 'GET', LIBRARY_LIST, {
     query: {
       account_id: acct,
@@ -198,6 +259,7 @@ async function listLibraries(token, acct = accountId()) {
       page: 1,
       page_size: 100,
     },
+    signal: options && options.signal,
   })
   if (result.error) return result
   const libraries = asList(result.data)
@@ -1017,6 +1079,8 @@ async function createNamedProducts(input) {
   if (!bookName) return { error: '请选择要投的书' }
   if (!/^\d+$/.test(platformId)) return { error: '请选择商品库' }
   if (!names.length) return { products: [], errors: [] }
+  const stoppedNow = () => typeof input.shouldStop === 'function' && input.shouldStop()
+  if (stoppedNow()) return { products: [], errors: [], stopped: true }
   const known = new Map(listBookProducts(platformId, bookName).map((item) => [item.name, item]))
   const missing = names.filter((name) => !(known.get(name) && known.get(name).productId))
   const tokenResult = input && input.token
@@ -1024,15 +1088,17 @@ async function createNamedProducts(input) {
     : await auth.getAccessToken(input && input.appPk)
   if (tokenResult.error) return { error: tokenResult.error, needAuth: !!tokenResult.needAuth }
   const acct = tokenResult.accountId || accountId()
+  if (stoppedNow()) return { products: [], errors: [], stopped: true }
   let library = localStoredLibraries().find((item) => item.id === platformId)
   if (!library || !library.storeType) {
-    const listed = await listLibraries(tokenResult.token, acct)
+    const listed = await listLibraries(tokenResult.token, acct, { signal: input.signal })
     if (!listed.error && listed.libraries && listed.libraries.length) {
       rememberLibraries(listed.libraries)
       library = listed.libraries.find((item) => item.id === platformId) || library
     }
   }
   if (!library) return { error: '没有这个商品库，请先从巨量同步' }
+  if (stoppedNow()) return { products: [], errors: [], stopped: true }
   if (missing.length) {
     const images = listCoverUrls()
     const fallbackImage = libraryCoverUrl(platformId)
@@ -1048,8 +1114,20 @@ async function createNamedProducts(input) {
       finalName,
       imageUrl: images.length ? pickOne(images) : fallbackImage,
       template: library.storeType === 43 ? null : novelTemplate,
+      signal: input.signal,
     }))
-    await mapPool(jobs, MAX_INFLIGHT, (job) => createCatalogProduct(tokenResult.token, acct, job))
+    let createdCount = 0
+    const report = typeof input.onProgress === 'function' ? input.onProgress : null
+    if (report) report(0, jobs.length)
+    await mapPool(jobs, MAX_INFLIGHT, async (job) => {
+      if (stoppedNow()) return { name: job.finalName, error: '已手动停止', stopped: true }
+      const result = await createCatalogProduct(tokenResult.token, acct, job)
+      if (result && result.stopped) return result
+      createdCount += 1
+      if (report) report(createdCount, jobs.length)
+      return result
+    })
+    if (stoppedNow()) return { products: [], errors: [], stopped: true }
   }
   const ready = new Map(listBookProducts(platformId, bookName).map((item) => [item.name, item]))
   const products = []
@@ -1302,7 +1380,11 @@ async function createCatalogProduct(token, acct, job) {
       platform_id: library.id,
       product_info: productInfo,
     },
+    signal: job.signal,
   })
+  if (created.stopped || (job.signal && job.signal.aborted)) {
+    return { book, libraryId: library.id, libraryName: library.name, name: finalName, error: '已手动停止', stopped: true }
+  }
   if (created.error) {
     saveRecord({ bookName: finalName, platformId: library.id, platformName: library.name, status: 'error', error: created.error })
     return { book, libraryId: library.id, libraryName: library.name, name: finalName, error: created.error }

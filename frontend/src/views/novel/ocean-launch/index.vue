@@ -314,11 +314,11 @@
       <el-tab-pane name="records">
         <template #label>
           <span>任务记录</span>
-          <i v-if="liveRunning" class="tab-dot" />
+          <i v-if="liveActive" class="tab-dot" />
         </template>
         <div class="task-pane">
           <div class="task-body records-body">
-            <div v-if="liveRunning" class="live-banner">
+            <div v-if="liveActive" class="live-banner">
               <div class="live-copy">
                 <strong>{{ liveBannerTitle }}</strong>
                 <span>{{ liveBannerDetail }}</span>
@@ -326,43 +326,75 @@
               </div>
               <el-progress :percentage="liveProgress" :stroke-width="8" />
             </div>
-            <div class="records-toolbar">
-              <el-button :icon="$icons.Refresh" :loading="tasksLoading" @click="loadTasks">刷新</el-button>
-              <span class="hint">点开详情可勾选失败记录，批量重试或查看官方拒绝原因。</span>
+            <div class="page-filter-box">
+              <div class="page-filter-left filters-wrap">
+                <el-input
+                  v-model="taskKeyword"
+                  class="filter-input-keyword"
+                  placeholder="书名 / 提交时间 / 编号"
+                  :suffix-icon="$icons.Search"
+                  clearable
+                  clear-icon="Close"
+                  @keyup.enter="searchTasks"
+                  @clear="searchTasks"
+                />
+                <el-button type="primary" @click="searchTasks">查询</el-button>
+                <el-button @click="resetTaskSearch">重置</el-button>
+                <el-button :icon="$icons.Refresh" :loading="tasksLoading" @click="loadTasks()">刷新</el-button>
+              </div>
             </div>
             <div class="records-table-wrap">
-            <el-table :data="tasks" border size="small" height="100%" @row-click="openTask">
-              <el-table-column prop="id" label="任务" width="72" align="center" />
-              <el-table-column prop="createdAt" label="时间" width="170" align="center" />
-              <el-table-column prop="strategyName" label="策略" min-width="120" show-overflow-tooltip />
-              <el-table-column label="范围" min-width="180">
-                <template #default="{ row }">{{ planCount(row) }} 个计划，各 1 个商品</template>
+            <el-table :data="tasks" border size="small" height="100%" :header-cell-style="{ 'text-align': 'center' }" @row-click="openTask">
+              <el-table-column prop="name" label="书名" min-width="220" show-overflow-tooltip />
+              <el-table-column prop="createdAt" label="提交时间" width="170" align="center" />
+              <el-table-column prop="id" label="编号" width="72" align="center" />
+              <el-table-column prop="strategyName" label="策略" min-width="150" show-overflow-tooltip />
+              <el-table-column label="商品" min-width="220" show-overflow-tooltip>
+                <template #default="{ row }">
+                  <div v-if="row.productLibrary || row.productSpan" class="product-cell">
+                    <strong>{{ row.productLibrary || "未记录商品库" }}</strong>
+                    <span>{{ row.productSpan || "—" }}</span>
+                  </div>
+                  <span v-else>—</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="计划" width="88" align="center">
+                <template #default="{ row }">{{ planCount(row) }}</template>
               </el-table-column>
               <el-table-column label="进度" min-width="160">
                 <template #default="{ row }">
                   <el-progress
-                    v-if="row.status === 'running'"
+                    v-if="row.status === 'running' || row.status === 'preparing'"
                     :percentage="taskProgress(row)"
                     :stroke-width="6"
                     :show-text="false"
                   />
-                  <span v-else-if="row.status === 'queued'">排队等待</span>
+                  <span v-else-if="row.status === 'ready'">商品已齐</span>
+                  <span v-else-if="row.status === 'queued'">排队建商品</span>
                   <span v-else>成功 {{ row.added }} · 失败 {{ row.failed }}</span>
                 </template>
               </el-table-column>
-              <el-table-column label="状态" width="110" align="center">
+              <el-table-column label="状态" width="118" align="center">
                 <template #default="{ row }">
                   <el-tag :type="taskType(row.status)" size="small" effect="plain">{{ taskLabel(row.status) }}</el-tag>
                 </template>
               </el-table-column>
               <el-table-column label="" width="210" align="center">
                 <template #default="{ row }">
-                  <el-button v-if="row.status === 'running' || row.status === 'queued'" link type="danger" :loading="stopping" @click.stop="stopRunning(row)">停止</el-button>
+                  <el-button v-if="['running', 'preparing', 'ready', 'queued'].includes(row.status)" link type="danger" :loading="stopping" @click.stop="stopRunning(row)">停止</el-button>
                   <el-button link type="primary" @click.stop="reuseTask(row)">再搭一次</el-button>
                   <el-button link type="primary" @click.stop="openTask(row)">详情</el-button>
                 </template>
               </el-table-column>
             </el-table>
+            </div>
+            <div class="page-pagination-box">
+              <CzPagination
+                :total="taskTotal"
+                v-model:pageNo="taskPage"
+                v-model:pageSize="taskPageSize"
+                @change="loadTasks()"
+              />
             </div>
           </div>
         </div>
@@ -447,6 +479,7 @@
 <script setup name="novelOceanLaunch">
 import { useRouter } from "vue-router"
 import request from "@/request"
+import CzPagination from "@/components/cz-pagination/index.vue"
 
 const router = useRouter()
 const DEFAULT_TIERS = ["1.9", "2.9", "3.9", "9.9", "29.9", "39.9"]
@@ -473,6 +506,10 @@ const accountDrawer = ref(false)
 const accountDrawerTier = ref("")
 const accountKeyword = ref("")
 const tasks = ref([])
+const taskKeyword = ref("")
+const taskPage = ref(1)
+const taskPageSize = ref(20)
+const taskTotal = ref(0)
 const liveTask = ref(null)
 const detailVisible = ref(false)
 const detailItems = ref([])
@@ -502,7 +539,9 @@ const videoEmptyText = computed(() => {
   const first = ((plan.value && plan.value.tiers) || []).find((row) => row.messages && row.messages.length)
   return (first && first.messages[0]) || "巨量线上素材库里没有对上这本书的视频"
 })
-const liveRunning = computed(() => Boolean(liveTask.value && liveTask.value.status === "running"))
+const liveActive = computed(() =>
+  ["running", "preparing", "ready"].includes(liveTask.value && liveTask.value.status),
+)
 const videoList = computed(() => (plan.value && plan.value.videos) || [])
 const pickedVideoPreview = computed(() =>
   videoList.value.filter((item) => isPickedVideo(item) && item.posterUrl).slice(0, 8),
@@ -637,14 +676,19 @@ const liveProgress = computed(() => taskProgress(liveTask.value))
 const liveBannerTitle = computed(() => {
   const row = liveTask.value
   if (!row) return "正在创建"
-  if (row.preparingProducts) return "正在准备商品"
+  if (row.status === "preparing" || row.preparingProducts) return "正在创建商品"
+  if (row.status === "ready") return "等待搭建"
+  if (row.status === "running") return "正在搭建计划"
   if ((row.added || 0) + (row.failed || 0) > 0) return "正在提交巨量"
-  if (row.phase === "prepare") return "正在核对账户"
-  return "正在提交巨量"
+  return "正在搭建计划"
 })
 const liveBannerDetail = computed(() => {
   const row = liveTask.value || {}
-  if (row.preparingProducts) return "商品编号备齐后，会自动开始创建计划"
+  if (row.status === "preparing" || row.preparingProducts || row.phase === "products") {
+    if (row.phase === "products" && row.phaseTotal) return `已创建商品 ${row.phaseDone || 0}/${row.phaseTotal}。其他书可以同时建商品，搭计划会按顺序接上`
+    return "多本书同时建商品。商品齐了，等前面的计划搭完就自动开始"
+  }
+  if (row.status === "ready") return "商品已经齐了，上一本计划搭完就自动开始这一本"
   const counts = `成功 ${row.added || 0} · 失败 ${row.failed || 0} · 排队 ${row.pending || 0}`
   if (row.phase === "prepare" && row.phaseTotal) return `已核对 ${row.phaseDone || 0}/${row.phaseTotal} 个户 · ${counts}`
   return counts
@@ -654,10 +698,12 @@ const detailFailed = computed(() => detailItems.value.filter((row) => row.status
 const failSummary = computed(() => {
   const rows = detailItems.value.filter((row) => row.status === "fail")
   if (!rows.length) {
-    if (detailItems.value.length && detailItems.value.every((row) => !row.status || row.status === "pending")) {
-      return "这批在拿到巨量结果前就中断了，所以每条记录都还没有原因。"
-    }
-    return ""
+    const pending = detailItems.value.length && detailItems.value.every((row) => !row.status || row.status === "pending")
+    if (!pending) return ""
+    const creating = detailItems.value.some((row) => String(row.message || "").includes("正在创建商品"))
+    const active = liveTask.value && ["running", "preparing", "ready"].includes(liveTask.value.status)
+    if (creating || active) return "正在创建商品。编号齐了才搭计划，所以现在还没有成功或失败。"
+    return "这批在拿到巨量结果前就中断了，所以每条记录都还没有原因。"
   }
   const counts = new Map()
   for (const row of rows) {
@@ -704,7 +750,7 @@ const footTitle = computed(() => {
   return `${copyrightFilter.value} · ${bookName.value} · ${selectedTiers.value.join(" / ") || "未选档位"}`
 })
 const footHint = computed(() => {
-  if (liveRunning.value) return "上一批还在创建。这次提交会排在后面，结束后自动开始。"
+  if (liveActive.value) return "这一本会先建商品。搭计划等前面的书结束，商品齐了自动接上。"
   if (!strategyId.value) return "先选一个策略模板。"
   if (!copyrightFilter.value) return "先选点众或番茄。"
   if (!bookName.value) return "再选要投的书。"
@@ -736,12 +782,18 @@ function statusLabel(status) {
 }
 function taskType(status) {
   if (status === "done") return "success"
-  if (status === "partial" || status === "running") return "warning"
-  if (status === "queued" || status === "stopped") return "info"
+  if (status === "partial" || status === "running" || status === "preparing") return "warning"
+  if (status === "queued" || status === "ready" || status === "stopped") return "info"
   return "danger"
 }
+function taskHeading(row) {
+  if (!row) return "任务详情"
+  return `${row.name || "任务 " + row.id} · ${taskLabel(row.status)}`
+}
 function taskLabel(status) {
-  if (status === "running") return "创建中"
+  if (status === "preparing") return "创建商品"
+  if (status === "ready") return "等待搭建"
+  if (status === "running") return "搭建计划"
   if (status === "queued") return "排队中"
   if (status === "done") return "全部成功"
   if (status === "partial") return "部分成功"
@@ -903,10 +955,15 @@ function openAccountDrawer(tier) {
 }
 function taskProgress(row) {
   if (!row) return 0
+  if (row.status === "preparing") {
+    const total = Number(row.phaseTotal) || 0
+    if (!total) return 0
+    return Math.min(100, Math.round((Number(row.phaseDone || 0) / total) * 100))
+  }
   const total = Number(row.total) || Number(row.added || 0) + Number(row.failed || 0) + Number(row.pending || 0)
   const done = Number(row.added || 0) + Number(row.failed || 0)
   if (!done && row.phase === "prepare" && row.phaseTotal) {
-    return Math.min(35, Math.round((Number(row.phaseDone || 0) / Number(row.phaseTotal)) * 35))
+    return Math.min(70, 40 + Math.round((Number(row.phaseDone || 0) / Number(row.phaseTotal)) * 30))
   }
   if (!total) return 0
   return Math.min(100, Math.round((done / total) * 100))
@@ -1037,6 +1094,7 @@ async function loadOptions() {
   optionCopyrights.value = res.data.copyrights || []
   launchTiers.value = (res.data.tiers && res.data.tiers.length ? res.data.tiers : DEFAULT_TIERS).slice()
   tasks.value = res.data.tasks || []
+  taskTotal.value = Number(res.data.taskTotal) || tasks.value.length
   pickDefaultLibrary()
   if (!strategyId.value && strategies.value.length) strategyId.value = strategies.value[0].id
   syncLaunchTiers()
@@ -1044,8 +1102,10 @@ async function loadOptions() {
     copyrightFilter.value = copyrights.value[0]
   }
   await fetchBooks("")
-  const running = tasks.value.find((item) => item.status === "running")
-  if (running) pollTask(running.id)
+  const active = tasks.value.find((item) => item.status === "running")
+    || tasks.value.find((item) => item.status === "preparing")
+    || tasks.value.find((item) => item.status === "ready")
+  if (active) pollTask(active.id)
 }
 function mergeBookOptions(rows) {
   const list = Array.isArray(rows) ? rows : []
@@ -1125,10 +1185,13 @@ function stopPoll() {
   pollTimer = 0
 }
 function applyTask(res) {
-  liveTask.value = res.data
+  const row = res.data
+  const active = ["running", "preparing", "ready"].includes(row.status)
+  if (active || (liveTask.value && liveTask.value.id === row.id)) liveTask.value = row
   const index = tasks.value.findIndex((item) => item.id === res.data.id)
   const summary = {
     id: res.data.id,
+    name: res.data.name || "",
     status: res.data.status,
     added: res.data.added,
     failed: res.data.failed,
@@ -1137,42 +1200,78 @@ function applyTask(res) {
     bookCount: res.data.bookCount,
     accountCount: res.data.accountCount,
     strategyName: res.data.strategyName,
+    productLibrary: res.data.productLibrary || "",
+    productSpan: res.data.productSpan || "",
+    phase: res.data.phase || "",
+    phaseDone: res.data.phaseDone || 0,
+    phaseTotal: res.data.phaseTotal || 0,
     createdAt: res.data.createdAt,
   }
   if (index >= 0) tasks.value.splice(index, 1, summary)
   else tasks.value.unshift(summary)
   if (detailVisible.value && detailTaskId.value === res.data.id) {
     detailItems.value = res.data.items || []
-    detailTitle.value = `任务 ${res.data.id} · ${taskLabel(res.data.status)}${res.data.strategyName ? " · " + res.data.strategyName : ""}`
+    detailTitle.value = taskHeading(res.data)
   }
 }
-async function pullTask(id) {
-  const res = await request({ url: `/admin-api/oceanengine/launch/tasks/${id}` })
-  if (res.code !== 0) return
-  applyTask(res)
-  if (res.data.status === "running") return
-  stopPoll()
-  await loadTasks()
-  const running = tasks.value.find((item) => item.status === "running" && item.id !== id)
-  if (running) pollTask(running.id)
+function activeTaskRow(list) {
+  const rows = list || []
+  return rows.find((item) => item.status === "running")
+    || rows.find((item) => item.status === "preparing")
+    || rows.find((item) => item.status === "ready")
 }
-function pollTask(id) {
-  stopPoll()
-  pullTask(id)
-  pollTimer = setInterval(() => pullTask(id), 1500)
+async function refreshBoard() {
+  await loadTasks(true)
+  if (detailVisible.value && detailTaskId.value) {
+    const res = await request({ url: `/admin-api/oceanengine/launch/tasks/${detailTaskId.value}` })
+    if (res.code === 0) {
+      detailItems.value = res.data.items || []
+      detailTitle.value = taskHeading(res.data)
+      applyTask(res)
+    }
+  }
+  if (!liveTask.value || !["running", "preparing", "ready"].includes(liveTask.value.status)) stopPoll()
 }
-async function loadTasks() {
-  tasksLoading.value = true
+function pollTask() {
+  stopPoll()
+  refreshBoard()
+  pollTimer = setInterval(() => {
+    refreshBoard()
+  }, 1500)
+}
+async function loadTasks(quiet) {
+  if (!quiet) tasksLoading.value = true
   try {
-    const res = await request({ url: "/admin-api/oceanengine/launch/tasks" })
+    const res = await request({
+      url: "/admin-api/oceanengine/launch/tasks",
+      params: {
+        keyword: taskKeyword.value.trim(),
+        page: taskPage.value,
+        pageSize: taskPageSize.value,
+      },
+    })
     if (res.code !== 0) {
       ElMessage.error(res.msg || "读取任务失败")
       return
     }
-    tasks.value = res.data || []
+    const data = res.data || {}
+    const list = Array.isArray(data) ? data : data.list || []
+    tasks.value = list
+    taskTotal.value = Array.isArray(data) ? list.length : Number(data.total) || 0
+    if (data.active) liveTask.value = data.active
+    else if (!activeTaskRow(list)) liveTask.value = null
   } finally {
     tasksLoading.value = false
   }
+}
+function searchTasks() {
+  taskPage.value = 1
+  loadTasks()
+}
+function resetTaskSearch() {
+  taskKeyword.value = ""
+  taskPage.value = 1
+  loadTasks()
 }
 async function reuseTask(row) {
   const res = await request({ url: `/admin-api/oceanengine/launch/tasks/${row.id}/draft` })
@@ -1227,9 +1326,9 @@ async function stopRunning(row) {
   const id = row && row.id
   if (!id) return
   try {
-    await ElMessageBox.confirm("还没提交的计划会停掉。已经创建成功的会留在巨量里。", "停止搭建", {
+    await ElMessageBox.confirm("停掉这一本。后面排队的书会接着搭建。已经建好的商品编号会留着。", "停止搭建", {
       type: "warning",
-      confirmButtonText: "停止",
+      confirmButtonText: "停止这一本",
       cancelButtonText: "继续",
     })
   } catch {
@@ -1242,7 +1341,9 @@ async function stopRunning(row) {
       ElMessage.error(res.msg || "停止失败")
       return
     }
-    ElMessage.success("正在停止，未创建的计划不再提交")
+    if (row) row.status = "stopped"
+    if (liveTask.value && liveTask.value.id === id) liveTask.value = { ...liveTask.value, status: "stopped" }
+    ElMessage.success(res.data && res.data.released ? "已停止这一本，后面排队的书会接着搭建" : "已停止这一本")
     pollTask(id)
   } finally {
     stopping.value = false
@@ -1257,10 +1358,10 @@ async function openTask(row) {
   detailTaskId.value = row.id
   detailFilter.value = res.data.failed ? "fail" : "all"
   detailItems.value = res.data.items || []
-  detailTitle.value = `任务 ${row.id} · ${taskLabel(res.data.status)}${res.data.strategyName ? " · " + res.data.strategyName : ""}`
+  detailTitle.value = taskHeading(res.data)
   detailVisible.value = true
   applyTask(res)
-  if (res.data.status === "running") pollTask(row.id)
+  if (["running", "preparing", "ready"].includes(res.data.status)) pollTask(row.id)
 }
 function onDetailSelect(rows) {
   detailSelected.value = rows.filter((row) => row.status === "fail")
@@ -1285,9 +1386,12 @@ async function retrySelected(allFail) {
       ElMessage.error(res.msg || "重试失败")
       return
     }
-    ElMessage.success(res.data && res.data.status === "queued" ? `已排队，上一批结束后自动重试 ${ids.length} 条` : `已开始重试 ${ids.length} 条`)
+    const retryStatus = res.data && res.data.status
+    if (retryStatus === "ready") ElMessage.success(`商品已齐，上一本搭完就重试 ${ids.length} 条`)
+    else if (retryStatus === "preparing" || retryStatus === "queued") ElMessage.success(`已开始补商品，齐了再重试 ${ids.length} 条`)
+    else ElMessage.success(`已开始重试 ${ids.length} 条`)
     tab.value = "records"
-    if (res.data && res.data.status === "running") pollTask(res.data.id)
+    if (res.data && ["running", "preparing", "ready", "queued"].includes(res.data.status)) pollTask(res.data.id)
     else await loadTasks()
   } finally {
     retrying.value = false
@@ -1307,7 +1411,7 @@ async function submitLaunch() {
   } else if (current.count) {
     productText = `新建 ${current.count} 个商品（${range}）。`
   }
-  const queueNote = liveRunning.value ? "上一批还在创建，这次会排在后面，结束后自动开始。" : ""
+  const queueNote = liveActive.value ? "这一本会先建商品。搭计划等前面的书结束，商品齐了自动接上。" : ""
   try {
     await ElMessageBox.confirm(`将按勾选的 ${liveAccountCount.value} 个户创建 ${jobs} 条计划。${productText}带上 ${pickedVideoIds.value.length} 条线上视频。${extra}${queueNote}`, "确认搭建", {
       type: "warning",
@@ -1330,9 +1434,14 @@ async function submitLaunch() {
       return
     }
     tab.value = "records"
-    ElMessage.success(res.data && res.data.status === "queued" ? "已排队，上一批结束后自动开始" : (res.data && res.data.preparingProducts ? "已开始创建，正在准备商品" : "已开始创建"))
-    const running = res.data && res.data.status === "running" ? res.data.id : ""
-    if (running) pollTask(running)
+    const status = res.data && res.data.status
+    if (status === "preparing") ElMessage.success(res.data.preparingProducts ? "已开始创建商品，搭计划会在前面结束后接上" : "已开始创建")
+    else if (status === "ready") ElMessage.success("商品已齐，上一本搭完就自动开始")
+    else if (status === "queued") ElMessage.success("已排队创建商品，前面的空出来就建")
+    else if (status === "running") ElMessage.success("已开始搭建计划")
+    else ElMessage.success("已开始创建")
+    const activeId = res.data && ["running", "preparing", "ready", "queued"].includes(res.data.status) ? res.data.id : ""
+    if (activeId) pollTask(activeId)
     else await loadTasks()
   } finally {
     submitting.value = false
@@ -1424,14 +1533,37 @@ onBeforeUnmount(() => {
 }
 
 .records-body {
+  flex: 1;
+  height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 8px 10px 10px;
+  padding: 12px 8px 0;
+  overflow: hidden;
+}
+
+.records-body .page-filter-box {
+  flex-shrink: 0;
+  margin-bottom: 12px;
 }
 
 .records-table-wrap {
   flex: 1;
   min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.records-table-wrap :deep(.el-table) {
+  flex: 1;
+  min-height: 0;
+}
+
+.records-body .page-pagination-box {
+  flex-shrink: 0;
+  margin-top: auto;
+  padding: 12px 0 8px;
 }
 
 .step {
@@ -2077,6 +2209,29 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 12px;
   margin-bottom: 12px;
+}
+
+.product-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  line-height: 1.4;
+}
+
+.product-cell strong {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.product-cell span {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tab-dot {

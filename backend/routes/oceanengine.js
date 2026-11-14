@@ -817,7 +817,7 @@ router.get('/launch/videos', requireAuth, requireOceanProducts, (req, res) => {
 
 router.get('/launch/tasks', requireAuth, requireOceanProducts, (req, res) => {
   try {
-    res.json(ok(launch.listTasks()))
+    res.json(ok(launch.listTasks(req.query)))
   } catch (e) {
     console.error('[oceanengine] launch tasks', e.message)
     res.json(fail(500, '读取任务失败'))

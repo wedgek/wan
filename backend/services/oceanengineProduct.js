@@ -1120,18 +1120,30 @@ async function createNamedProducts(input) {
     const fallbackImage = libraryCoverUrl(platformId)
     if (!images.length && !fallbackImage) return { error: '请先在「产品图」上传图片，再按编号创建商品' }
     const copyrightOwner = String((input && input.copyrightOwner) || '点众').trim() || '点众'
-    const novelTemplate = {
-      ...(enabledNovelTemplates()[0] || fallbackNovelTemplate(copyrightOwner)),
-      copyrightOwner,
-    }
-    const jobs = missing.map((finalName) => ({
-      library,
-      book: bookName,
-      finalName,
-      imageUrl: images.length ? pickOne(images) : fallbackImage,
-      template: library.storeType === 43 ? null : novelTemplate,
-      signal: input.signal,
-    }))
+    const templates = enabledNovelTemplates()
+    const categoryDeck = shuffle(NOVEL_CATEGORIES)
+    const templateDeck = shuffle(templates.length ? templates : [fallbackNovelTemplate(copyrightOwner)])
+    let categoryCursor = 0
+    const jobs = missing.map((finalName) => {
+      const base = templateDeck[categoryCursor % templateDeck.length]
+      const category = categoryDeck[categoryCursor % categoryDeck.length]
+      categoryCursor += 1
+      return {
+        library,
+        book: bookName,
+        finalName,
+        imageUrl: images.length ? pickOne(images) : fallbackImage,
+        signal: input.signal,
+        template: library.storeType === 43
+          ? null
+          : {
+              ...base,
+              categoryKey: category.key,
+              copyrightOwner,
+              gender: pickOne(['男频书', '女频书']),
+            },
+      }
+    })
     let createdCount = 0
     const report = typeof input.onProgress === 'function' ? input.onProgress : null
     if (report) report(0, jobs.length)
@@ -1303,9 +1315,19 @@ const PLAYLET_CATEGORIES = [
   },
 ]
 
+function nextPlayletCategory() {
+  if (!nextPlayletCategory.deck || nextPlayletCategory.cursor >= nextPlayletCategory.deck.length) {
+    nextPlayletCategory.deck = shuffle(PLAYLET_CATEGORIES)
+    nextPlayletCategory.cursor = 0
+  }
+  const category = nextPlayletCategory.deck[nextPlayletCategory.cursor]
+  nextPlayletCategory.cursor += 1
+  return category
+}
+
 function buildPlayletProduct(name, imageUrl) {
   const title = name.replace(/[《》\s]/g, '').slice(0, 50)
-  const category = pickOne(PLAYLET_CATEGORIES)
+  const category = nextPlayletCategory()
   return {
     name: title,
     image_url: imageUrl,

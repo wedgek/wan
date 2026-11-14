@@ -2425,8 +2425,31 @@ function rejectedVideoIds(result, videos) {
 function oceanVideos(videos) {
   return (videos || []).map((item) => ({
     video_id: item.video_id,
-    image_mode: item.image_mode || 'CREATIVE_IMAGE_MODE_VIDEO_VERTICAL',
+    image_mode: item.image_mode || videoImageMode(item.width, item.height),
   }))
+}
+
+function videoImageMode(width, height) {
+  const w = Number(width) || 0
+  const h = Number(height) || 0
+  if (w && h && w > h) return 'CREATIVE_IMAGE_MODE_VIDEO'
+  return 'CREATIVE_IMAGE_MODE_VIDEO_VERTICAL'
+}
+
+async function lookupVideoSize(token, advertiserId, videoId) {
+  const found = await oceanSendRetry(token, 'GET', VIDEO_GET, {
+    query: {
+      advertiser_id: advertiserId,
+      filtering: { video_ids: [videoId] },
+      page: 1,
+      page_size: 1,
+    },
+  })
+  const row = found && found.data && ((found.data.list || [])[0])
+  return {
+    width: Number(row && row.width) || 0,
+    height: Number(row && row.height) || 0,
+  }
 }
 
 function stamp() {
@@ -2827,6 +2850,22 @@ async function executePending(taskId, template, token) {
   noteTaskPhase(taskId, 'prepare', 0, accounts.length)
   console.log('[oceanengine] launch start', { taskId, accounts: accounts.length, jobs: jobs.length })
   const blockedVideos = new Set()
+  const modeByVideo = new Map()
+  const missingSize = []
+  for (const job of jobs) {
+    for (const material of (job.book && job.book.materials) || []) {
+      const videoId = material.videoId
+      if (!videoId || modeByVideo.has(videoId) || missingSize.includes(videoId)) continue
+      if (Number(material.width) && Number(material.height)) modeByVideo.set(videoId, videoImageMode(material.width, material.height))
+      else missingSize.push(videoId)
+    }
+  }
+  if (missingSize.length && accounts[0]) {
+    await mapPool(missingSize, 4, async (videoId) => {
+      const size = await lookupVideoSize(token, accounts[0].advertiserId, videoId)
+      modeByVideo.set(videoId, videoImageMode(size.width, size.height))
+    })
+  }
   async function runJob(job, ready, image) {
     const { row, account, book } = job
     const base = {
@@ -2855,7 +2894,9 @@ async function executePending(taskId, template, token) {
     const allVideos = (book.materials || []).map((material) => ({
       video_id: material.videoId,
       material_id: material.materialId || '',
-      image_mode: 'CREATIVE_IMAGE_MODE_VIDEO_VERTICAL',
+      width: Number(material.width) || 0,
+      height: Number(material.height) || 0,
+      image_mode: modeByVideo.get(material.videoId) || videoImageMode(material.width, material.height),
     })).filter((item) => item.video_id)
     const skipped = allVideos.filter((item) => blockedVideos.has(item.video_id)).length
     let videos = allVideos.filter((item) => !blockedVideos.has(item.video_id))

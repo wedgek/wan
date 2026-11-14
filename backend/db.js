@@ -286,6 +286,7 @@ function applySchemaPatches(dbi) {
     ensureColumn(dbi, 'oceanengine_catalog_items', 'sub_category', "TEXT NOT NULL DEFAULT ''")
     ensureColumn(dbi, 'oceanengine_catalog_items', 'third_category', "TEXT NOT NULL DEFAULT ''")
     ensureColumn(dbi, 'oceanengine_catalog_items', 'online_time', 'INTEGER NOT NULL DEFAULT 0')
+    dbi.exec(`CREATE INDEX IF NOT EXISTS idx_ocean_catalog_platform_name ON oceanengine_catalog_items(platform_id, name)`)
     ensureAiVideoModelMenuInSidebar(dbi)
     ensureModelCatalogSchema(dbi)
     ensureModelCatalogMenu(dbi)

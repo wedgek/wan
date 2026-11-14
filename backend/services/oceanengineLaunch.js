@@ -2638,7 +2638,7 @@ function refreshCounts(taskId) {
     .run(Number(counts && counts.added) || 0, Number(counts && counts.failed) || 0, taskId)
 }
 
-function writeItem(taskId, item) {
+function writeItem(taskId, item, options) {
   const isFail = item.status === 'fail'
   const classified = isFail ? classifyError({ error: item.message, code: item.errorCode }, item.message) : null
   const payload = item.payload || ''
@@ -2697,8 +2697,35 @@ function writeItem(taskId, item) {
       )
     item.id = Number(inserted.lastInsertRowid)
   }
-  refreshCounts(taskId)
+  if (!options || !options.skipRefresh) refreshCounts(taskId)
   return item.id
+}
+
+function launchBook(book) {
+  const materials = Array.isArray(book && book.materials)
+    ? book.materials.map((item) => ({
+        videoId: item.videoId || '',
+        materialId: item.materialId || '',
+        width: Number(item.width) || 0,
+        height: Number(item.height) || 0,
+      }))
+    : []
+  return {
+    name: book && book.name,
+    bookName: (book && (book.bookName || book.name)) || '',
+    promo: (book && book.promo) || null,
+    product: (book && book.product) || null,
+    materials,
+    materialCount: materials.length,
+  }
+}
+
+function seedJobs(taskId, specs) {
+  const tx = database().transaction((list) => {
+    for (const spec of list) writeItem(taskId, spec, { skipRefresh: true })
+  })
+  tx(specs)
+  refreshCounts(taskId)
 }
 
 function finishTask(taskId, status) {
@@ -2756,7 +2783,7 @@ function seedJob(taskId, account, book, status, extra) {
     materialCount: (book.materials && book.materials.length) || 0,
     status,
     message: (classified && classified.message) || (extra && extra.message) || '',
-    payload: jobPayload(account, book),
+    payload: jobPayload(account, launchBook(book)),
     errorCode: classified && classified.code,
     errorKind: classified && classified.kind,
     retryable: classified ? classified.retryable : 0,
@@ -3094,10 +3121,21 @@ function kickProductQueue() {
 
 function kickPlanQueue() {
   if (planWorkers.size) return
+  const running = database()
+    .prepare(`SELECT id FROM oceanengine_launch_tasks WHERE status = 'running' ORDER BY id LIMIT 1`)
+    .get()
+  if (running) {
+    if (productWorkers.has(running.id)) return
+    if (!planWorkers.has(running.id)) {
+      console.log('[oceanengine] launch plans resume', { taskId: running.id })
+      startPlans(running.id)
+    }
+    return
+  }
   const next = database()
     .prepare(`SELECT id FROM oceanengine_launch_tasks WHERE status = 'ready' ORDER BY id LIMIT 1`)
     .get()
-  if (!next) return
+  if (!next || productWorkers.has(next.id)) return
   const changed = database()
     .prepare(`UPDATE oceanengine_launch_tasks SET status = 'running', updated_at = datetime('now') WHERE id = ? AND status = 'ready'`)
     .run(next.id)
@@ -3111,13 +3149,20 @@ function kickQueues() {
   kickPlanQueue()
 }
 
+setInterval(() => {
+  try {
+    kickQueues()
+  } catch (e) {
+    console.error('[oceanengine] launch queue', e.message)
+  }
+}, 5000).unref()
+
 function markReady(taskId) {
   const changed = database()
     .prepare(`UPDATE oceanengine_launch_tasks SET status = 'ready', updated_at = datetime('now') WHERE id = ? AND status = 'preparing'`)
     .run(taskId)
   if (!changed.changes) return
   console.log('[oceanengine] launch products ready', { taskId })
-  kickPlanQueue()
 }
 
 function pendingRows(taskId) {
@@ -3243,7 +3288,7 @@ function startProduct(taskId) {
 
 function startPlans(taskId) {
   const id = Number(taskId) || 0
-  if (!id || planWorkers.has(id) || productWorkers.has(id)) return
+  if (!id || planWorkers.has(id)) return
   stopFlags.delete(id)
   planWorkers.add(id)
   const { template } = loadTaskTemplate(id)
@@ -3448,10 +3493,20 @@ async function submit(input, userId) {
     productPlan: presentProductPlan(assignment),
   })
   const taskId = openTask(userId, plan.accounts, plan.books, strategy.name || plan.strategyName, snapshot)
+  const specs = []
   let slotIndex = 0
   for (const job of jobs) {
     if (job.status !== 'pending') {
-      seedJob(taskId, job.account, job.book, 'fail', { message: job.message })
+      specs.push({
+        advertiserId: job.account.advertiserId,
+        accountName: job.account.name,
+        bookName: job.book.name,
+        promoPath: (job.book.promo && (job.book.promo.referralId || job.book.promo.path)) || '',
+        materialCount: (job.book.materials && job.book.materials.length) || 0,
+        status: 'fail',
+        message: job.message,
+        payload: jobPayload(job.account, launchBook(job.book)),
+      })
       continue
     }
     const slot = assignment.slots[slotIndex] || null
@@ -3465,14 +3520,19 @@ async function submit(input, userId) {
           platformName: (slot && slot.platformName) || libraryName,
           status: '准备中',
         }
-    seedJob(
-      taskId,
-      job.account,
-      { ...job.book, name: product.name || job.book.name, product },
-      'pending',
-      product.productId ? undefined : { message: '正在创建商品' },
-    )
+    const book = launchBook({ ...job.book, name: product.name || job.book.name, product })
+    specs.push({
+      advertiserId: job.account.advertiserId,
+      accountName: job.account.name,
+      bookName: book.name,
+      promoPath: (book.promo && (book.promo.referralId || book.promo.path)) || '',
+      materialCount: book.materialCount,
+      status: 'pending',
+      message: product.productId ? '' : '正在创建商品',
+      payload: jobPayload({ ...job.account, bid: job.account.bid }, book),
+    })
   }
+  seedJobs(taskId, specs)
   const preparingProducts = pendingProductNames(taskId).length > 0
   kickQueues()
   const queuedRow = database().prepare('SELECT status FROM oceanengine_launch_tasks WHERE id = ?').get(taskId)

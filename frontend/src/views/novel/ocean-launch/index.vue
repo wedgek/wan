@@ -318,14 +318,6 @@
         </template>
         <div class="task-pane">
           <div class="task-body records-body">
-            <div v-if="liveActive" class="live-banner">
-              <div class="live-copy">
-                <strong>{{ liveBannerTitle }}</strong>
-                <span>{{ liveBannerDetail }}</span>
-                <el-button type="danger" plain :loading="stopping" @click="stopRunning(liveTask)">停止</el-button>
-              </div>
-              <el-progress :percentage="liveProgress" :stroke-width="8" />
-            </div>
             <div class="page-filter-box">
               <div class="page-filter-left filters-wrap">
                 <el-input
@@ -361,17 +353,17 @@
               <el-table-column label="计划" width="88" align="center">
                 <template #default="{ row }">{{ planCount(row) }}</template>
               </el-table-column>
-              <el-table-column label="进度" min-width="160">
+              <el-table-column label="进度" min-width="180">
                 <template #default="{ row }">
-                  <el-progress
-                    v-if="row.status === 'running' || row.status === 'preparing'"
-                    :percentage="taskProgress(row)"
-                    :stroke-width="6"
-                    :show-text="false"
-                  />
-                  <span v-else-if="row.status === 'ready'">商品已齐</span>
-                  <span v-else-if="row.status === 'queued'">排队建商品</span>
-                  <span v-else>成功 {{ row.added }} · 失败 {{ row.failed }}</span>
+                  <div class="row-progress">
+                    <el-progress
+                      v-if="row.status === 'running' || row.status === 'preparing'"
+                      :percentage="taskProgress(row)"
+                      :stroke-width="6"
+                      :show-text="false"
+                    />
+                    <span>{{ progressText(row) }}</span>
+                  </div>
                 </template>
               </el-table-column>
               <el-table-column label="状态" width="118" align="center">
@@ -379,9 +371,16 @@
                   <el-tag :type="taskType(row.status)" size="small" effect="plain">{{ taskLabel(row.status) }}</el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="" width="210" align="center">
+              <el-table-column label="" width="250" align="center">
                 <template #default="{ row }">
                   <el-button v-if="['running', 'preparing', 'ready', 'queued'].includes(row.status)" link type="danger" :loading="stopping" @click.stop="stopRunning(row)">停止</el-button>
+                  <el-button
+                    v-else-if="row.failed > 0"
+                    link
+                    type="primary"
+                    :loading="retryingId === row.id"
+                    @click.stop="retryFailed(row)"
+                  >重试失败</el-button>
                   <el-button link type="primary" @click.stop="reuseTask(row)">再搭一次</el-button>
                   <el-button link type="primary" @click.stop="openTask(row)">详情</el-button>
                 </template>
@@ -469,7 +468,7 @@
         </el-table-column>
         <el-table-column prop="projectId" label="项目 ID" width="170" align="center" show-overflow-tooltip />
         <el-table-column label="原因" min-width="280" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.reason || row.message || "没有返回原因" }}</template>
+          <template #default="{ row }">{{ row.status === "pending" ? (row.message || "排队中") : (row.reason || row.message || "没有返回原因") }}</template>
         </el-table-column>
       </el-table>
     </el-dialog>
@@ -521,6 +520,7 @@ const previewing = ref(false)
 const submitting = ref(false)
 const stopping = ref(false)
 const retrying = ref(false)
+const retryingId = ref(0)
 const tasksLoading = ref(false)
 const bookLoading = ref(false)
 const detailTable = ref(null)
@@ -672,27 +672,22 @@ const tierCards = computed(() =>
     }
   }),
 )
-const liveProgress = computed(() => taskProgress(liveTask.value))
-const liveBannerTitle = computed(() => {
-  const row = liveTask.value
-  if (!row) return "正在创建"
-  if (row.status === "preparing" || row.preparingProducts) return "正在创建商品"
-  if (row.status === "ready") return "等待搭建"
-  if (row.status === "running") return "正在搭建计划"
-  if ((row.added || 0) + (row.failed || 0) > 0) return "正在提交巨量"
-  return "正在搭建计划"
-})
-const liveBannerDetail = computed(() => {
-  const row = liveTask.value || {}
-  if (row.status === "preparing" || row.preparingProducts || row.phase === "products") {
-    if (row.phase === "products" && row.phaseTotal) return `已创建商品 ${row.phaseDone || 0}/${row.phaseTotal}。其他书可以同时建商品，搭计划会按顺序接上`
-    return "多本书同时建商品。商品齐了，等前面的计划搭完就自动开始"
+function progressText(row) {
+  if (!row) return "—"
+  if (row.status === "preparing") {
+    if (row.phaseTotal) return `商品 ${row.phaseDone || 0}/${row.phaseTotal}`
+    return "正在创建商品"
   }
-  if (row.status === "ready") return "商品已经齐了，上一本计划搭完就自动开始这一本"
-  const counts = `成功 ${row.added || 0} · 失败 ${row.failed || 0} · 排队 ${row.pending || 0}`
-  if (row.phase === "prepare" && row.phaseTotal) return `已核对 ${row.phaseDone || 0}/${row.phaseTotal} 个户 · ${counts}`
-  return counts
-})
+  if (row.status === "ready") return "商品已齐，等待搭建"
+  if (row.status === "queued") return "排队建商品"
+  if (row.status === "running") {
+    if (!(row.added || row.failed) && row.phase === "prepare" && row.phaseTotal) {
+      return `核对 ${row.phaseDone || 0}/${row.phaseTotal}`
+    }
+    return `成功 ${row.added || 0} · 失败 ${row.failed || 0}`
+  }
+  return `成功 ${row.added || 0} · 失败 ${row.failed || 0}`
+}
 const detailAdded = computed(() => detailItems.value.filter((row) => row.status === "added").length)
 const detailFailed = computed(() => detailItems.value.filter((row) => row.status === "fail").length)
 const failSummary = computed(() => {
@@ -701,8 +696,9 @@ const failSummary = computed(() => {
     const pending = detailItems.value.length && detailItems.value.every((row) => !row.status || row.status === "pending")
     if (!pending) return ""
     const creating = detailItems.value.some((row) => String(row.message || "").includes("正在创建商品"))
-    const active = liveTask.value && ["running", "preparing", "ready"].includes(liveTask.value.status)
-    if (creating || active) return "正在创建商品。编号齐了才搭计划，所以现在还没有成功或失败。"
+    const status = liveTask.value && liveTask.value.status
+    if (status === "running") return ""
+    if (creating || status === "preparing" || status === "ready") return "正在创建商品。编号齐了才搭计划，所以现在还没有成功或失败。"
     return "这批在拿到巨量结果前就中断了，所以每条记录都还没有原因。"
   }
   const counts = new Map()
@@ -1365,6 +1361,30 @@ async function openTask(row) {
 }
 function onDetailSelect(rows) {
   detailSelected.value = rows.filter((row) => row.status === "fail")
+}
+async function retryFailed(row) {
+  if (!row || !row.id) return
+  retryingId.value = row.id
+  try {
+    const res = await request({
+      url: "/admin-api/oceanengine/launch/retry",
+      method: "POST",
+      data: { taskId: row.id },
+      timeout: 60000,
+    })
+    if (res.code !== 0) {
+      ElMessage.error(res.msg || "重试失败")
+      return
+    }
+    const retryStatus = res.data && res.data.status
+    const count = (res.data && res.data.jobs) || row.failed
+    if (retryStatus === "ready") ElMessage.success(`商品已齐，开始重试 ${count} 条失败计划`)
+    else if (retryStatus === "preparing" || retryStatus === "queued") ElMessage.success(`先补商品，齐了再重试 ${count} 条`)
+    else ElMessage.success(`已开始重试 ${count} 条`)
+    pollTask(row.id)
+  } finally {
+    retryingId.value = 0
+  }
 }
 async function retrySelected(allFail) {
   const ids = (allFail ? detailItems.value.filter((row) => row.status === "fail") : detailSelected.value)
@@ -2188,20 +2208,17 @@ onBeforeUnmount(() => {
   gap: 8px;
 }
 
-.live-banner {
-  margin-bottom: 12px;
-  padding: 12px 14px;
-  border: 1px solid var(--el-color-primary-light-5);
-  border-radius: 10px;
-  background: var(--el-color-primary-light-9);
+.row-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
 }
 
-.live-copy {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
-  font-size: 13px;
+.row-progress span {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .records-toolbar {

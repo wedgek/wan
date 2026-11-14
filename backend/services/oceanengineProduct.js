@@ -947,13 +947,33 @@ function parseNumberedIndex(name, bookName) {
   return 0
 }
 
-function maxUsedIndex(platformId, bookName) {
+function likePrefix(value) {
+  return String(value || '').replace(/[\\%_]/g, (ch) => `\\${ch}`)
+}
+
+function bookProductRows(platformId, bookName) {
   const id = String(platformId || '').trim()
   const base = cleanBookName(bookName)
-  if (!id || !base) return 0
+  if (!id || !base) return []
+  const stem = numberedName(base, 1).replace(/-\d+$/, '')
+  const prefixes = [...new Set([base, stem].filter(Boolean))]
+  const clauses = prefixes.map(() => `name LIKE ? ESCAPE '\\'`).join(' OR ')
+  const args = prefixes.map((item) => `${likePrefix(item)}-%`)
+  return db
+    .getDb()
+    .prepare(
+      `SELECT product_id, name FROM oceanengine_catalog_items
+       WHERE platform_id = ? AND product_id != '' AND name != '' AND (${clauses})`,
+    )
+    .all(id, ...args)
+}
+
+function maxUsedIndex(platformId, bookName) {
+  const base = cleanBookName(bookName)
+  if (!String(platformId || '').trim() || !base) return 0
   let max = 0
-  for (const name of localUsedNames(id)) {
-    const n = parseNumberedIndex(name, base)
+  for (const row of bookProductRows(platformId, bookName)) {
+    const n = parseNumberedIndex(row.name, base)
     if (n > max) max = n
   }
   return max
@@ -965,13 +985,9 @@ function listBookProducts(platformId, bookName) {
   if (!id || !base) return []
   const library = db.getDb().prepare('SELECT name FROM oceanengine_libraries WHERE platform_id = ?').get(id)
   const platformName = String((library && library.name) || '')
-  const rows = db
-    .getDb()
-    .prepare(`SELECT product_id, name FROM oceanengine_catalog_items WHERE platform_id = ? AND product_id != '' AND name != ''`)
-    .all(id)
   const list = []
   const seen = new Set()
-  for (const row of rows) {
+  for (const row of bookProductRows(id, base)) {
     const index = parseNumberedIndex(row.name, base)
     if (!index || seen.has(index)) continue
     seen.add(index)

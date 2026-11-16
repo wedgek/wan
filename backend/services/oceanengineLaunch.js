@@ -2,6 +2,7 @@
  * 批量基建：版权→书→户→商品库编号建品→素材→策略，按巨量接口频控并发创建暂停中的智擎项目。
  */
 const crypto = require('crypto')
+const sharp = require('sharp')
 const db = require('../db')
 const auth = require('./oceanengineAuth')
 const events = require('./oceanengineEvent')
@@ -179,7 +180,7 @@ function classifyError(result, fallback) {
   if (/授权|access_token|无权限|权限不足/i.test(text)) {
     return { kind: 'auth', retryable: 0, code: String(code || ''), message: text }
   }
-  if (/还没有倾心书馆|还没有付费|还没有落地页|还没有已过审|事件资产|账户还没准备好/i.test(text)) {
+  if (/还没有倾心书馆|还没有付费|还没有落地页|还没有已过审|还没有产品图|产品图没有传到|事件资产|账户还没准备好/i.test(text)) {
     return { kind: 'account', retryable: 1, code: '', message: text }
   }
   if (/对不上|没有对上|商品库里没有|视频已经被前面/i.test(text)) {
@@ -2341,6 +2342,7 @@ async function videoCover(token, advertiserId, video) {
 
 const PRODUCT_IMAGE_COUNT = 10
 const accountImageCache = new Map()
+const coverSquareCache = new Map()
 
 function shuffleRows(rows) {
   const copy = rows.slice()
@@ -2359,7 +2361,7 @@ async function listAccountImages(token, advertiserId, filtering) {
       advertiser_id: advertiserId,
       ...(filtering ? { filtering } : {}),
       page: 1,
-      page_size: 20,
+      page_size: 100,
     },
   })
   if (listed.error) return []
@@ -2367,29 +2369,130 @@ async function listAccountImages(token, advertiserId, filtering) {
   return data.list || data.images || []
 }
 
-async function productImages(token, advertiserId) {
-  const cached = accountImageCache.get(advertiserId)
-  if (cached) return cached
-  let rows = await listAccountImages(token, advertiserId, { width: 108, height: 108 })
-  if (!rows.length) {
-    const all = await listAccountImages(token, advertiserId)
-    rows = all.filter((row) => {
-      const width = Number(row && row.width) || 0
-      const height = Number(row && row.height) || 0
-      return width >= 108 && width === height
-    })
-  }
+function launchCoverUrls() {
+  return database()
+    .prepare(`SELECT url FROM oceanengine_cover_images WHERE TRIM(url) != '' ORDER BY id DESC`)
+    .all()
+    .map((row) => String(row.url || '').trim())
+    .filter(Boolean)
+}
+
+function collectImageIds(rows, limit, seen) {
   const imageIds = []
-  const seen = new Set()
-  for (const row of shuffleRows(rows)) {
+  for (const row of rows) {
     const id = idText(row && (row.id || row.image_id))
     if (!id || seen.has(id)) continue
     seen.add(id)
     imageIds.push(id)
-    if (imageIds.length >= PRODUCT_IMAGE_COUNT) break
+    if (imageIds.length >= limit) break
   }
-  const result = { imageIds, error: '' }
-  accountImageCache.set(advertiserId, result)
+  return imageIds
+}
+
+async function accountProductRows(token, advertiserId) {
+  const matched = await listAccountImages(token, advertiserId, { width: 108, height: 108 })
+  if (matched.length) return matched
+  const all = await listAccountImages(token, advertiserId)
+  return all.filter((row) => {
+    const width = Number(row && row.width) || 0
+    const height = Number(row && row.height) || 0
+    return width >= 108 && width === height
+  })
+}
+
+async function renderCoverSquare(url) {
+  const file = await downloadBytes(url)
+  if (file.error) return { error: '产品图下载失败' }
+  try {
+    const buffer = await sharp(file.buffer, { failOn: 'none' })
+      .rotate()
+      .resize(108, 108, { fit: 'cover', position: 'centre' })
+      .jpeg({ quality: 85 })
+      .toBuffer()
+    if (!buffer || buffer.length < 32) return { error: '产品图是空的' }
+    return { buffer }
+  } catch (e) {
+    console.error('[oceanengine] product image', e.message)
+    return { error: '产品图处理失败' }
+  }
+}
+
+function librarySquare(url) {
+  const hit = coverSquareCache.get(url)
+  if (hit) return hit
+  const pending = renderCoverSquare(url).then((result) => {
+    if (result.error) coverSquareCache.delete(url)
+    return result
+  })
+  coverSquareCache.set(url, pending)
+  return pending
+}
+
+async function fillProductImages(token, advertiserId, need, seen) {
+  const covers = shuffleRows(launchCoverUrls())
+  const imageIds = []
+  let error = ''
+  let stoppedEarly = false
+  if (!covers.length || need <= 0) return { imageIds, error, exhausted: true }
+  for (const url of covers) {
+    if (imageIds.length >= need) break
+    const square = await librarySquare(url)
+    if (square.error) {
+      error = square.error
+      continue
+    }
+    const uploaded = await uploadImage(token, advertiserId, square.buffer, 'product.jpg', 'image/jpeg')
+    if (uploaded.error) {
+      error = uploaded.error
+      if (rateLimited(uploaded)) {
+        stoppedEarly = true
+        break
+      }
+      continue
+    }
+    const id = uploaded.imageId
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    imageIds.push(id)
+  }
+  return { imageIds, error, exhausted: !stoppedEarly }
+}
+
+async function productImages(token, advertiserId) {
+  const cached = accountImageCache.get(advertiserId)
+  if (cached) return cached
+  const seen = new Set()
+  const fromAccount = collectImageIds(
+    shuffleRows(await accountProductRows(token, advertiserId)),
+    PRODUCT_IMAGE_COUNT,
+    seen,
+  )
+  const imageIds = fromAccount.slice()
+  let error = ''
+  let exhausted = true
+  if (imageIds.length < PRODUCT_IMAGE_COUNT) {
+    const filled = await fillProductImages(token, advertiserId, PRODUCT_IMAGE_COUNT - imageIds.length, seen)
+    imageIds.push(...filled.imageIds)
+    error = filled.error || ''
+    exhausted = filled.exhausted
+  }
+  if (imageIds.length > fromAccount.length) {
+    console.log('[oceanengine] product images', {
+      advertiserId,
+      account: fromAccount.length,
+      library: imageIds.length - fromAccount.length,
+      total: imageIds.length,
+    })
+  }
+  const result = {
+    imageIds,
+    error: imageIds.length
+      ? ''
+      : (error ? `产品图没有传到这个户：${error}` : '这个户还没有产品图，产品图库里也没有可补的图'),
+  }
+  if (imageIds.length && (imageIds.length >= PRODUCT_IMAGE_COUNT || exhausted)) {
+    accountImageCache.set(advertiserId, { imageIds: imageIds.slice(), error: '' })
+  }
   return result
 }
 
@@ -2891,6 +2994,14 @@ async function executePending(taskId, template, token) {
     if (coolUntil > Date.now()) await sleep(coolUntil - Date.now())
     if (!ready || ready.error) {
       writeItem(taskId, { ...base, status: 'fail', message: (ready && ready.error) || '账户还没准备好' })
+      return
+    }
+    if (!image || !image.imageIds || !image.imageIds.length) {
+      writeItem(taskId, {
+        ...base,
+        status: 'fail',
+        message: (image && image.error) || '这个户还没有产品图，产品图库里也没有可补的图',
+      })
       return
     }
     const allVideos = (book.materials || []).map((material) => ({

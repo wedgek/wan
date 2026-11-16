@@ -523,7 +523,7 @@ function listLocal(query) {
     if (bySubject) return bySubject
     const byTemplate = (Number(a.template) || 0) - (Number(b.template) || 0)
     if (byTemplate) return byTemplate
-    return a.name.localeCompare(b.name, 'zh')
+    return String(a.name || '').localeCompare(String(b.name || ''), 'zh', { numeric: true, sensitivity: 'base' })
   })
   const start = (pageNo - 1) * pageSize
   return {

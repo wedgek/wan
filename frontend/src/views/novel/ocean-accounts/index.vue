@@ -528,6 +528,8 @@ async function applyAvatar(url) {
 }
 
 async function afterBatch() {
+  tableRef.value?.clearSelection()
+  selectedRows.value = []
   await getTableData()
 }
 </script>

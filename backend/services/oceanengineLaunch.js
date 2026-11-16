@@ -1092,7 +1092,7 @@ function selectedAccounts(ids) {
 }
 
 function productModeOf(input) {
-  return input && input.productMode === 'fresh' ? 'fresh' : 'reuse'
+  return input && input.productMode === 'reuse' ? 'reuse' : 'fresh'
 }
 
 function presentProductPlan(plan) {
@@ -1242,7 +1242,7 @@ function buildPreview({ bookName, promos, accounts, accountTotal, selectedTiers,
       messages,
     })
   }
-  const productMode = extra.productMode === 'fresh' ? 'fresh' : 'reuse'
+  const productMode = extra.productMode === 'reuse' ? 'reuse' : 'fresh'
   const emptyPlan = {
     names: [],
     usedMax: 0,
@@ -1447,7 +1447,7 @@ function taskDraft(id) {
     platformName,
     videoIds,
     titleLibraryId: Number(snapshot.titleLibraryId) || Number(template.titleLibraryId) || 0,
-    productMode: snapshot.productMode === 'fresh' ? 'fresh' : 'reuse',
+    productMode: snapshot.productMode === 'reuse' ? 'reuse' : 'fresh',
   }
 }
 

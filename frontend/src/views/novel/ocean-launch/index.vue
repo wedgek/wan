@@ -117,7 +117,7 @@
                     <em>{{ item.count }}</em>
                   </button>
                 </div>
-                <p class="hint">一户一条计划。主体默认全选，点掉的主体整组不投。点户上的叉只去掉这一个。</p>
+                <p class="hint">一户一条计划。主体默认勾上，择影先不投，点亮就能加上。点户上的叉只去掉这一个。</p>
                 <article v-for="row in tierViews" :key="row.tier" class="tier-panel" :class="row.state.status">
                   <header class="tier-head">
                     <div class="tier-id">
@@ -171,16 +171,6 @@
                     <span>{{ item.industry || "商品库" }}</span>
                     <em v-if="platformId === item.id && productPlan.count">{{ libraryActionText }}</em>
                     <em v-else>按书名编号，用多少备多少</em>
-                  </button>
-                </div>
-                <div v-if="showProductMode" class="product-mode">
-                  <button type="button" class="mode-card" :class="{ on: productMode === 'reuse' }" @click="setProductMode('reuse')">
-                    <strong>复用已有编号</strong>
-                    <span>{{ reuseOptionText }}</span>
-                  </button>
-                  <button type="button" class="mode-card" :class="{ on: productMode === 'fresh' }" @click="setProductMode('fresh')">
-                    <strong>往后新建</strong>
-                    <span>{{ freshOptionText }}</span>
                   </button>
                 </div>
                 <p v-if="!libraries.length" class="hint">还没有放进批量基建的商品库。到商品库页打开「批量基建」开关。</p>
@@ -514,12 +504,12 @@ const strategyId = ref(null)
 const bookName = ref("")
 const copyrightFilter = ref("点众")
 const platformId = ref("")
-const productMode = ref("reuse")
 const selectedTiers = ref([])
 const plan = ref(null)
 const pickedVideoIds = ref([])
 const pickedAdvertiserIds = ref([])
-const excludedSubjects = ref([])
+const SUBJECTS_OFF_BY_DEFAULT = ["择影"]
+const excludedSubjects = ref(SUBJECTS_OFF_BY_DEFAULT.slice())
 const accountDrawer = ref(false)
 const accountDrawerTier = ref("")
 const accountKeyword = ref("")
@@ -632,15 +622,11 @@ const strategyHint = computed(() => {
 })
 const libraryHint = computed(() => {
   const current = productPlan.value
-  if (!current.count) return "商品名按「书名-编号」准备。库里已经有的编号可以直接复用。"
-  if (current.mode === "reuse" && current.reuseCount && !current.createCount) {
-    return `库里已有 ${current.existingCount} 个编号。这次 ${current.count} 条计划全部套用 ${planRange(current)}。`
+  if (!current.count) return "商品名按「书名-编号」准备。新开一批从最大编号往后建，不套用已经投过的。"
+  if (current.existingCount) {
+    return `已有编号留着。这次从 -${current.from} 新建到 -${current.to}。失败记录重试时才沿用那次的商品。`
   }
-  if (current.mode === "reuse" && current.reuseCount) {
-    return `先套用 ${current.reuseCount} 个已有编号，不够的 ${current.createCount} 个从 -${current.from} 继续建。`
-  }
-  if (current.existingCount) return `已有编号留着。这次从 -${current.from} 新建到 -${current.to}。`
-  return `这次新建 ${current.count} 个商品：${planRange(current)}`
+  return `这次新建 ${current.count} 个商品：${planRange(current)}。失败记录重试时才沿用那次的商品。`
 })
 const libraryActionText = computed(() => {
   const current = productPlan.value
@@ -650,10 +636,6 @@ const libraryActionText = computed(() => {
   if (current.from && current.to) return `新建 ${current.from}–${current.to}`
   return `新建 ${current.count} 个`
 })
-const productOptions = computed(() => (plan.value && plan.value.productOptions) || [])
-const showProductMode = computed(() => productOptions.value.length > 0)
-const reuseOptionText = computed(() => productOptionText(productOptions.value.find((item) => item.mode === "reuse")))
-const freshOptionText = computed(() => productOptionText(productOptions.value.find((item) => item.mode === "fresh")))
 const productRangeText = computed(() => {
   if (!platformId.value) return "未选库"
   const current = productPlan.value
@@ -845,13 +827,6 @@ function planRange(current) {
   if (!first) return "—"
   return first === last ? first : `${first} ～ ${last}`
 }
-function productOptionText(option) {
-  if (!option) return "对照后显示编号"
-  if (option.mode === "reuse" && option.reuseCount && !option.createCount) return planRange(option)
-  if (option.mode === "reuse" && option.reuseCount) return `已有 ${option.reuseCount} 个，再新建 ${option.createCount} 个`
-  if (option.from && option.to) return `新建 -${option.from} ～ -${option.to}`
-  return planRange(option)
-}
 function accountId(item) {
   return String((item && item.advertiserId) || "").trim()
 }
@@ -861,11 +836,6 @@ function accountInitial(name) {
 }
 function isPickedAccount(item) {
   return pickedAdvertiserIds.value.includes(accountId(item))
-}
-function setProductMode(mode) {
-  if (productMode.value === mode) return
-  productMode.value = mode
-  markDirty()
 }
 function compareAccountName(a, b) {
   return String(a || "").localeCompare(String(b || ""), "zh", { numeric: true, sensitivity: "base" })
@@ -877,6 +847,9 @@ function sortAccountRows(list) {
     if (tierA !== tierB) return tierA - tierB
     return compareAccountName(a && a.name, b && b.name)
   })
+}
+function defaultExcludedSubjects() {
+  return SUBJECTS_OFF_BY_DEFAULT.slice()
 }
 function accountSubject(item) {
   const named = String((item && item.subject) || "").trim()
@@ -1094,7 +1067,7 @@ function goStrategies() {
 function setCopyright(value) {
   if (copyrightFilter.value === value) return
   copyrightFilter.value = value
-  excludedSubjects.value = []
+  excludedSubjects.value = defaultExcludedSubjects()
   loadedBookKey = ""
   const keepName = bookName.value
   fetchBooks("").then(() => {
@@ -1141,7 +1114,7 @@ function onBookChange(name) {
     if (copyrightFilter.value && item.copyrightOwner !== copyrightFilter.value) return false
     return item.tier === tier
   }))
-  excludedSubjects.value = []
+  excludedSubjects.value = defaultExcludedSubjects()
   resetSuggestedAccounts()
   plan.value = null
   markDirty()
@@ -1228,7 +1201,7 @@ function payload() {
     tiers: selectedTiers.value.slice(),
     copyrightOwner: copyrightFilter.value || "",
     platformId: platformId.value || "",
-    productMode: productMode.value === "fresh" ? "fresh" : "reuse",
+    productMode: "fresh",
     advertiserIds: pickedAdvertiserIds.value.slice(),
   }
   if (pickedVideoIds.value.length) data.videoIds = pickedVideoIds.value.slice()
@@ -1369,7 +1342,6 @@ async function reuseTask(row) {
   }
   bookName.value = draft.bookName || ""
   selectedTiers.value = Array.isArray(draft.tiers) ? draft.tiers.slice() : []
-  if (draft.productMode === "fresh" || draft.productMode === "reuse") productMode.value = draft.productMode
   if (draft.platformId) {
     platformId.value = String(draft.platformId)
     if (!libraries.value.some((item) => item.id === platformId.value)) {
@@ -1377,7 +1349,11 @@ async function reuseTask(row) {
     }
   } else missing.push("商品库")
   accountsTouched.value = true
-  pickedAdvertiserIds.value = Array.isArray(draft.advertiserIds) ? draft.advertiserIds.slice() : []
+  excludedSubjects.value = defaultExcludedSubjects()
+  pickedAdvertiserIds.value = (Array.isArray(draft.advertiserIds) ? draft.advertiserIds : []).filter((id) => {
+    const row = accounts.value.find((item) => accountId(item) === String(id))
+    return !row || !defaultExcludedSubjects().includes(accountSubject(row))
+  })
   keepVideoPick = true
   pickedVideoIds.value = Array.isArray(draft.videoIds) ? draft.videoIds.slice() : []
   plan.value = null

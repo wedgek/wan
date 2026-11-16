@@ -10,7 +10,7 @@
       >
         <el-button type="primary" :icon="$icons.Upload" :loading="uploading">上传图片</el-button>
       </el-upload>
-      <span class="hint">搭建商品时从这里随机抽一张。点击图片可预览，支持 JPG、PNG、WebP。</span>
+      <span class="hint">只收 108×108。其它尺寸不会保存，搭建时也不会拿去补主图。支持 JPG、PNG、WebP。</span>
     </div>
     <div v-loading="loading" class="grid">
       <div v-for="(item, index) in list" :key="item.id" class="card">
@@ -66,9 +66,37 @@ async function load() {
   }
 }
 
+function imageSize(file) {
+  const url = URL.createObjectURL(file)
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => {
+      const size = { width: img.naturalWidth, height: img.naturalHeight }
+      URL.revokeObjectURL(url)
+      resolve(size)
+    }
+    img.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error("读不到图片尺寸"))
+    }
+    img.src = url
+  })
+}
+
 async function onPick(file) {
   const raw = file?.raw
   if (!raw) return
+  let size
+  try {
+    size = await imageSize(raw)
+  } catch (e) {
+    ElMessage.error(e.message || "读不到图片尺寸")
+    return
+  }
+  if (size.width !== 108 || size.height !== 108) {
+    ElMessage.warning(`只收 108×108 的图片，这张是 ${size.width}×${size.height}`)
+    return
+  }
   uploading.value = true
   try {
     const uploaded = await uploadWithProgress(raw, { dir: "image/" })

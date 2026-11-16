@@ -180,7 +180,7 @@ function classifyError(result, fallback) {
   if (/授权|access_token|无权限|权限不足/i.test(text)) {
     return { kind: 'auth', retryable: 0, code: String(code || ''), message: text }
   }
-  if (/还没有倾心书馆|还没有付费|还没有落地页|还没有已过审|还没有产品图|产品图没有传到|事件资产|账户还没准备好/i.test(text)) {
+  if (/还没有倾心书馆|还没有付费|还没有落地页|还没有已过审|还没有产品图|产品图没有传到|产品图库里没有|事件资产|账户还没准备好/i.test(text)) {
     return { kind: 'account', retryable: 1, code: '', message: text }
   }
   if (/对不上|没有对上|商品库里没有|视频已经被前面/i.test(text)) {
@@ -1053,6 +1053,7 @@ function loadAccounts() {
           avatarUrl: avatar && avatar !== '-' ? avatar : '',
           tier: usage.template || parseAccountTier(row.name),
           bid: usage.bid ? Number(usage.bid) : bidOfTier(usage.template),
+          subject: usage.subject || '',
         }
       }),
   )
@@ -1225,6 +1226,7 @@ function buildPreview({ bookName, promos, accounts, accountTotal, selectedTiers,
       accounts: rows.map((item) => ({
         advertiserId: item.advertiserId,
         name: item.name,
+        subject: item.subject || '',
         avatarUrl: item.avatarUrl || '',
         bid: priceOf(item.tier),
         productName: '',
@@ -2404,13 +2406,17 @@ async function renderCoverSquare(url) {
   const file = await downloadBytes(url)
   if (file.error) return { error: '产品图下载失败' }
   try {
-    const buffer = await sharp(file.buffer, { failOn: 'none' })
-      .rotate()
-      .resize(108, 108, { fit: 'cover', position: 'centre' })
-      .jpeg({ quality: 85 })
-      .toBuffer()
+    const meta = await sharp(file.buffer, { failOn: 'none' }).metadata()
+    const width = Number(meta.width) || 0
+    const height = Number(meta.height) || 0
+    if (width !== products.COVER_SIZE || height !== products.COVER_SIZE) return { skip: true }
+    const format = String(meta.format || '').toLowerCase()
+    if (format === 'png') return { buffer: file.buffer, mime: 'image/png', filename: 'product.png' }
+    if (format === 'jpeg' || format === 'jpg') return { buffer: file.buffer, mime: 'image/jpeg', filename: 'product.jpg' }
+    if (format === 'bmp') return { buffer: file.buffer, mime: 'image/bmp', filename: 'product.bmp' }
+    const buffer = await sharp(file.buffer, { failOn: 'none' }).jpeg({ quality: 90 }).toBuffer()
     if (!buffer || buffer.length < 32) return { error: '产品图是空的' }
-    return { buffer }
+    return { buffer, mime: 'image/jpeg', filename: 'product.jpg' }
   } catch (e) {
     console.error('[oceanengine] product image', e.message)
     return { error: '产品图处理失败' }
@@ -2432,16 +2438,21 @@ async function fillProductImages(token, advertiserId, need, seen) {
   const covers = shuffleRows(launchCoverUrls())
   const imageIds = []
   let error = ''
+  let skipped = 0
   let stoppedEarly = false
-  if (!covers.length || need <= 0) return { imageIds, error, exhausted: true }
+  if (!covers.length || need <= 0) return { imageIds, error, exhausted: true, skipped }
   for (const url of covers) {
     if (imageIds.length >= need) break
     const square = await librarySquare(url)
+    if (square.skip) {
+      skipped += 1
+      continue
+    }
     if (square.error) {
       error = square.error
       continue
     }
-    const uploaded = await uploadImage(token, advertiserId, square.buffer, 'product.jpg', 'image/jpeg')
+    const uploaded = await uploadImage(token, advertiserId, square.buffer, square.filename || 'product.jpg', square.mime || 'image/jpeg')
     if (uploaded.error) {
       error = uploaded.error
       if (rateLimited(uploaded)) {
@@ -2455,7 +2466,7 @@ async function fillProductImages(token, advertiserId, need, seen) {
     seen.add(id)
     imageIds.push(id)
   }
-  return { imageIds, error, exhausted: !stoppedEarly }
+  return { imageIds, error, exhausted: !stoppedEarly, skipped }
 }
 
 async function productImages(token, advertiserId) {
@@ -2470,11 +2481,13 @@ async function productImages(token, advertiserId) {
   const imageIds = fromAccount.slice()
   let error = ''
   let exhausted = true
+  let skipped = 0
   if (imageIds.length < PRODUCT_IMAGE_COUNT) {
     const filled = await fillProductImages(token, advertiserId, PRODUCT_IMAGE_COUNT - imageIds.length, seen)
     imageIds.push(...filled.imageIds)
     error = filled.error || ''
     exhausted = filled.exhausted
+    skipped = filled.skipped || 0
   }
   if (imageIds.length > fromAccount.length) {
     console.log('[oceanengine] product images', {
@@ -2488,7 +2501,9 @@ async function productImages(token, advertiserId) {
     imageIds,
     error: imageIds.length
       ? ''
-      : (error ? `产品图没有传到这个户：${error}` : '这个户还没有产品图，产品图库里也没有可补的图'),
+      : (error
+        ? `产品图没有传到这个户：${error}`
+        : (skipped ? '产品图库里没有 108×108 的图' : '这个户还没有产品图，产品图库里也没有可补的图')),
   }
   if (imageIds.length && (imageIds.length >= PRODUCT_IMAGE_COUNT || exhausted)) {
     accountImageCache.set(advertiserId, { imageIds: imageIds.slice(), error: '' })

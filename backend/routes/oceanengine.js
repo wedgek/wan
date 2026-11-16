@@ -300,11 +300,13 @@ router.get('/covers', requireAuth, requireOceanProducts, (req, res) => {
   }
 })
 
-router.post('/covers', requireAuth, requireOceanProducts, (req, res) => {
+router.post('/covers', requireAuth, requireOceanProducts, async (req, res) => {
   try {
     const url = String((req.body && req.body.url) || '').trim()
     const name = String((req.body && req.body.name) || '').trim().slice(0, 80)
     if (!url) return res.json(fail(400, '缺少图片地址'))
+    const checked = await products.assertCoverSize(url)
+    if (checked.error) return res.json(fail(400, checked.error))
     const info = db
       .getDb()
       .prepare('INSERT INTO oceanengine_cover_images (url, name) VALUES (?, ?)')

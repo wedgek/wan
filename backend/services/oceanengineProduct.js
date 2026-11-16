@@ -2,6 +2,7 @@
  * 巨量升级版工作台 · 通用版商品库。
  * 输入书名创建商品：分类、主图、品牌沿用该库里已有的一条商品，只改名称。
  */
+const sharp = require('sharp')
 const db = require('../db')
 const auth = require('./oceanengineAuth')
 
@@ -1265,6 +1266,34 @@ function listCoverUrls() {
     .filter(Boolean)
 }
 
+const COVER_SIZE = 108
+
+async function assertCoverSize(url) {
+  const address = String(url || '').trim()
+  if (!/^https?:\/\//i.test(address)) return { error: '图片地址无效' }
+  let res
+  try {
+    res = await fetch(address, { signal: AbortSignal.timeout(20000) })
+  } catch {
+    return { error: '读取图片失败' }
+  }
+  if (!res.ok) return { error: '读取图片失败' }
+  const buffer = Buffer.from(await res.arrayBuffer())
+  if (buffer.length < 32) return { error: '图片是空的' }
+  if (buffer.length > 5 * 1024 * 1024) return { error: '图片不能超过 5MB' }
+  try {
+    const meta = await sharp(buffer, { failOn: 'none' }).metadata()
+    const width = Number(meta.width) || 0
+    const height = Number(meta.height) || 0
+    if (width !== COVER_SIZE || height !== COVER_SIZE) {
+      return { error: `产品图必须是 ${COVER_SIZE}×${COVER_SIZE}，这张是 ${width}×${height}` }
+    }
+  } catch {
+    return { error: '读不到图片尺寸' }
+  }
+  return { ok: true }
+}
+
 function buildNovelProduct(name, imageUrl, template) {
   const category = NOVEL_CATEGORIES.find((item) => item.key === template.categoryKey) || NOVEL_CATEGORIES[0]
   const { key, label, ...fields } = category
@@ -1701,5 +1730,7 @@ module.exports = {
   refreshLibraries,
   cleanBookName,
   buildProductInfo,
+  assertCoverSize,
+  COVER_SIZE,
   DEFAULT_BUILD_LIBRARIES,
 }

@@ -90,7 +90,7 @@
                     <span>{{ item.accountCount }} 个户</span>
                   </button>
                 </div>
-                <p class="hint">有推广链接的档位才能勾，没链接的点不了。</p>
+                <p class="hint">有推广链接的档位才能勾。没有户的档位默认不勾。</p>
               </section>
 
               <section class="step">
@@ -103,7 +103,21 @@
                     <el-button link type="primary" @click="openAccountDrawer">新增</el-button>
                   </div>
                 </header>
-                <p class="hint">一户一条计划，默认带上同档全部在投户。点标签上的叉去掉，点新增从同档位池里加回来。</p>
+                <div v-if="subjectOptions.length" class="subject-row">
+                  <span>主体</span>
+                  <button
+                    v-for="item in subjectOptions"
+                    :key="item.name"
+                    type="button"
+                    class="subject-chip"
+                    :class="{ on: item.on }"
+                    @click="toggleSubject(item.name)"
+                  >
+                    {{ item.name }}
+                    <em>{{ item.count }}</em>
+                  </button>
+                </div>
+                <p class="hint">一户一条计划。主体默认全选，点掉的主体整组不投。点户上的叉只去掉这一个。</p>
                 <article v-for="row in tierViews" :key="row.tier" class="tier-panel" :class="row.state.status">
                   <header class="tier-head">
                     <div class="tier-id">
@@ -230,6 +244,10 @@
                   <div class="fact">
                     <label>版权 / 书名</label>
                     <strong>{{ copyrightFilter || "—" }} · {{ bookName || "未选书" }}</strong>
+                  </div>
+                  <div class="fact wide">
+                    <label>投放主体</label>
+                    <span>{{ activeSubjectText }}</span>
                   </div>
                   <div class="fact">
                     <label>商品库</label>
@@ -501,6 +519,7 @@ const selectedTiers = ref([])
 const plan = ref(null)
 const pickedVideoIds = ref([])
 const pickedAdvertiserIds = ref([])
+const excludedSubjects = ref([])
 const accountDrawer = ref(false)
 const accountDrawerTier = ref("")
 const accountKeyword = ref("")
@@ -727,6 +746,7 @@ const addableTiers = computed(() => {
       tier: row.tier,
       rest: sortAccountRows((row.accounts || []).filter((item) => {
         if (isPickedAccount(item)) return false
+        if (excludedSubjects.value.includes(accountSubject(item))) return false
         if (!keyword) return true
         return String(item.name || "").includes(keyword)
       })),
@@ -858,12 +878,37 @@ function sortAccountRows(list) {
     return compareAccountName(a && a.name, b && b.name)
   })
 }
+function accountSubject(item) {
+  const named = String((item && item.subject) || "").trim()
+  if (named) return named
+  const novel = String((item && item.name) || "").match(/^(.+?)-?点众小说\d+(?:\.\d+)?/)
+  if (novel && novel[1]) return novel[1]
+  const company = String((item && item.company) || "").trim()
+  return company || "未标主体"
+}
 function matchingAccounts() {
   return sortAccountRows(accounts.value.filter((item) => {
     if (copyrightFilter.value && item.copyrightOwner !== copyrightFilter.value) return false
-    return selectedTiers.value.includes(item.tier)
+    if (!selectedTiers.value.includes(item.tier)) return false
+    return !excludedSubjects.value.includes(accountSubject(item))
   }))
 }
+const subjectOptions = computed(() => {
+  const counts = new Map()
+  for (const item of accounts.value) {
+    if (copyrightFilter.value && item.copyrightOwner !== copyrightFilter.value) continue
+    if (!selectedTiers.value.includes(item.tier)) continue
+    const name = accountSubject(item)
+    counts.set(name, (counts.get(name) || 0) + 1)
+  }
+  return [...counts.entries()]
+    .map(([name, count]) => ({ name, count, on: !excludedSubjects.value.includes(name) }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, "zh"))
+})
+const activeSubjectText = computed(() => {
+  const names = subjectOptions.value.filter((item) => item.on).map((item) => item.name)
+  return names.length ? names.join("、") : "未选主体"
+})
 function resetSuggestedAccounts() {
   accountsTouched.value = false
   pickedAdvertiserIds.value = matchingAccounts().slice(0, accountLimit.value).map(accountId).filter(Boolean)
@@ -913,12 +958,13 @@ function syncPickedAccounts(data) {
       if (id && !incoming.includes(id)) incoming.push(id)
     }
   }
-  const keep = pickedAdvertiserIds.value.filter((id) => incoming.includes(id))
+  const allowed = new Set(matchingAccounts().map(accountId))
+  const keep = pickedAdvertiserIds.value.filter((id) => incoming.includes(id) && allowed.has(id))
   if (accountsTouched.value) {
     pickedAdvertiserIds.value = keep
     return
   }
-  const suggested = ((data && data.suggestedAccountIds) || []).filter((id) => incoming.includes(id))
+  const suggested = ((data && data.suggestedAccountIds) || []).filter((id) => incoming.includes(id) && allowed.has(id))
   pickedAdvertiserIds.value = keep.length ? keep : suggested
 }
 function removeAccount(item) {
@@ -939,9 +985,35 @@ function addAccount(item) {
   schedulePreview()
 }
 function selectSuggestedAccounts() {
-  accountsTouched.value = false
-  const suggested = ((plan.value && plan.value.suggestedAccountIds) || []).slice(0, accountLimit.value)
-  pickedAdvertiserIds.value = suggested.length ? suggested : matchingAccounts().slice(0, accountLimit.value).map(accountId).filter(Boolean)
+  const allowed = matchingAccounts().map(accountId).filter(Boolean)
+  const allowedSet = new Set(allowed)
+  const suggested = ((plan.value && plan.value.suggestedAccountIds) || []).filter((id) => allowedSet.has(id))
+  pickedAdvertiserIds.value = (suggested.length ? suggested : allowed).slice(0, accountLimit.value)
+  accountsTouched.value = excludedSubjects.value.length > 0
+  schedulePreview()
+}
+function toggleSubject(name) {
+  const turningOff = !excludedSubjects.value.includes(name)
+  const ids = accounts.value.filter((item) => {
+    if (copyrightFilter.value && item.copyrightOwner !== copyrightFilter.value) return false
+    if (!selectedTiers.value.includes(item.tier)) return false
+    return accountSubject(item) === name
+  }).map(accountId).filter(Boolean)
+  if (turningOff) {
+    excludedSubjects.value = [...excludedSubjects.value, name]
+    const drop = new Set(ids)
+    pickedAdvertiserIds.value = pickedAdvertiserIds.value.filter((id) => !drop.has(id))
+  } else {
+    excludedSubjects.value = excludedSubjects.value.filter((item) => item !== name)
+    const merged = pickedAdvertiserIds.value.slice()
+    for (const id of ids) {
+      if (merged.includes(id)) continue
+      if (merged.length >= accountLimit.value) break
+      merged.push(id)
+    }
+    pickedAdvertiserIds.value = merged
+  }
+  accountsTouched.value = excludedSubjects.value.length > 0
   schedulePreview()
 }
 function openAccountDrawer(tier) {
@@ -1022,6 +1094,7 @@ function goStrategies() {
 function setCopyright(value) {
   if (copyrightFilter.value === value) return
   copyrightFilter.value = value
+  excludedSubjects.value = []
   loadedBookKey = ""
   const keepName = bookName.value
   fetchBooks("").then(() => {
@@ -1064,7 +1137,11 @@ function onBookChange(name) {
   pickedVideoIds.value = []
   const row = books.value.find((item) => item.bookName === bookName.value)
   const tiers = row && row.tiers && row.tiers.length ? row.tiers.slice() : []
-  selectedTiers.value = tiers.filter((tier) => tier !== "1.9")
+  selectedTiers.value = tiers.filter((tier) => accounts.value.some((item) => {
+    if (copyrightFilter.value && item.copyrightOwner !== copyrightFilter.value) return false
+    return item.tier === tier
+  }))
+  excludedSubjects.value = []
   resetSuggestedAccounts()
   plan.value = null
   markDirty()
@@ -2066,6 +2143,45 @@ onBeforeUnmount(() => {
 
 .tier-panel.block .tier-msg {
   color: var(--el-color-danger);
+}
+
+.subject-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 10px;
+}
+
+.subject-row > span {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+
+.subject-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 999px;
+  background: var(--el-fill-color-blank);
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.subject-chip em {
+  font-style: normal;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.subject-chip.on {
+  border-color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
 }
 
 .account-chips {

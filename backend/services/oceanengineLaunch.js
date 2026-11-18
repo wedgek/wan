@@ -13,16 +13,25 @@ const accountService = require('./oceanengineAccount')
 const products = require('./oceanengineProduct')
 
 const TEMPLATE_BID = accountService.TEMPLATE_BID
-const LAUNCH_TIER_ORDER = ['9.9', '3.9', '39.9', '29.9', '2.9', '1.9']
+const DISPLAY_TIER_ORDER = ['1.9', '2.9', '3.9', '9.9', '29.9', '39.9']
+const LAUNCH_TIER_ORDER = ['9.9', '3.9', '2.9', '39.9', '29.9', '1.9']
 
-function tierRank(tier) {
+function rankIn(order, tier) {
   const key = String(tier || '')
-  const index = LAUNCH_TIER_ORDER.indexOf(key)
+  const index = order.indexOf(key)
   if (index >= 0) return index
-  return LAUNCH_TIER_ORDER.length + (Number(key) || 0)
+  return order.length + (Number(key) || 0)
 }
 
-const LAUNCH_TIERS = Object.keys(TEMPLATE_BID).sort((a, b) => tierRank(a) - tierRank(b))
+function tierRank(tier) {
+  return rankIn(LAUNCH_TIER_ORDER, tier)
+}
+
+function displayRank(tier) {
+  return rankIn(DISPLAY_TIER_ORDER, tier)
+}
+
+const LAUNCH_TIERS = Object.keys(TEMPLATE_BID).sort((a, b) => displayRank(a) - displayRank(b))
 const PROMO_SELECT = `SELECT p.id, p.path, p.url, p.monitor1, p.monitor2, p.referral_id, p.status, p.source,
          p.name AS promo_name, p.goods_batch_id, b.name AS book_name, rt.name AS recharge_name
        FROM novel_promo_links p
@@ -441,7 +450,7 @@ function productDistance(bookKey, nameKey) {
 function sortTiers(list, allow) {
   const gate = tierGate(allow)
   const rows = list == null ? [] : Array.isArray(list) ? list : [...list]
-  return [...new Set(rows.map((item) => String(item || '').trim()).filter((item) => gate.has(item)))].sort((a, b) => tierRank(a) - tierRank(b))
+  return [...new Set(rows.map((item) => String(item || '').trim()).filter((item) => gate.has(item)))].sort((a, b) => displayRank(a) - displayRank(b))
 }
 
 function normalizeTiers(raw) {
@@ -1464,7 +1473,7 @@ function taskDraft(id) {
       videoIds.push(videoId)
     }
   }
-  tiers.sort((a, b) => tierRank(a) - tierRank(b))
+  tiers.sort((a, b) => displayRank(a) - displayRank(b))
   let copyright = normalizeCopyright(snapshot.copyrightOwner || '')
   if (!copyright && advertiserIds.length) {
     const owner = database()

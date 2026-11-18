@@ -28,14 +28,15 @@
                 <header class="step-head"><em>2</em><h3>版权</h3></header>
                 <div class="chip-row">
                   <button
-                    v-for="item in copyrights"
-                    :key="item"
+                    v-for="item in copyrightOptions"
+                    :key="item.name"
                     type="button"
                     class="chip"
-                    :class="{ on: copyrightFilter === item }"
-                    @click="setCopyright(item)"
+                    :class="{ on: copyrightFilter === item.name }"
+                    @click="setCopyright(item.name)"
                   >
-                    {{ item }}
+                    <span>{{ item.name }}</span>
+                    <em>{{ item.count }}</em>
                   </button>
                 </div>
                 <p class="hint">先选版权。书名可远程搜索，书籍库里的书都能找，打过链接的就能投。</p>
@@ -90,7 +91,7 @@
                     <span>{{ item.accountCount }} 个户</span>
                   </button>
                 </div>
-                <p class="hint">有推广链接的档位才能勾。没有户的档位默认不勾。搭建先跑 9.9，接着 3.9、39.9、29.9、2.9、1.9，没勾的档会跳过。</p>
+                <p class="hint">有推广链接的档位才能勾。没有户的档位默认不勾。这里按 1.9、2.9、3.9、9.9、29.9、39.9 排。搭建先跑 9.9，接着 3.9、2.9、39.9、29.9、1.9，没勾的档会跳过。</p>
               </section>
 
               <section class="step">
@@ -166,7 +167,7 @@
                     <em>{{ item.count }}</em>
                   </button>
                 </div>
-                <p class="hint">一户一条计划，按上面的顺序先搭 9.9。主体默认勾上，择影先不投，点亮就能加上。点户上的叉只去掉这一个。</p>
+                <p class="hint">一户一条计划。下面按 1.9 到 39.9 排开，真正搭建先跑 9.9，接着 3.9、2.9、39.9、29.9、1.9。主体默认勾上，择影先不投，点亮就能加上。点户上的叉只去掉这一个。</p>
                 <article v-for="row in tierViews" :key="row.tier" class="tier-panel" :class="row.state.status">
                   <header class="tier-head">
                     <div class="tier-id">
@@ -489,7 +490,7 @@ import request from "@/request"
 import CzPagination from "@/components/cz-pagination/index.vue"
 
 const router = useRouter()
-const DEFAULT_TIERS = ["9.9", "3.9", "39.9", "29.9", "2.9", "1.9"]
+const DEFAULT_TIERS = ["1.9", "2.9", "3.9", "9.9", "29.9", "39.9"]
 const BID_OF = { "1.9": "2.1", "2.9": "3.1", "3.9": "4.1", "9.9": "13", "29.9": "32", "39.9": "43" }
 const ACCOUNT_LIMIT = 500
 const tab = ref("task")
@@ -586,6 +587,12 @@ const copyrights = computed(() => {
     : [...new Set(accounts.value.map((item) => item.copyrightOwner).filter(Boolean))]
   return rows.length ? rows : ["点众", "番茄"]
 })
+const copyrightOptions = computed(() =>
+  copyrights.value.map((name) => ({
+    name,
+    count: accounts.value.filter((item) => item.copyrightOwner === name).length,
+  })),
+)
 const visibleBooks = computed(() => books.value)
 const currentStrategy = computed(() => strategies.value.find((item) => item.id === strategyId.value) || null)
 const currentTitlePack = computed(() => {
@@ -1712,25 +1719,61 @@ onBeforeUnmount(() => {
 
 .chip-row {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: 8px;
 }
 
 .chip {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   height: 32px;
-  padding: 0 14px;
+  margin: 0;
+  padding: 0 4px 0 12px;
   border: 1px solid var(--el-border-color);
   border-radius: 999px;
   background: var(--el-fill-color-blank);
-  color: var(--el-text-color-regular);
-  font-size: 13px;
+  color: var(--el-text-color-primary);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
   cursor: pointer;
+
+  span,
+  em {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 22px;
+    margin: 0;
+    line-height: 1;
+  }
+
+  em {
+    min-width: 28px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--el-fill-color);
+    color: var(--el-text-color-secondary);
+    font-style: normal;
+    font-size: 12px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
 }
 
 .chip.on {
   border-color: var(--el-color-primary);
   background: var(--el-color-primary-light-9);
   color: var(--el-color-primary);
+
+  em {
+    background: #fff;
+    color: var(--el-color-primary);
+  }
 }
 
 .full-select {

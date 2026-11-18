@@ -90,12 +90,61 @@
                     <span>{{ item.accountCount }} 个户</span>
                   </button>
                 </div>
-                <p class="hint">有推广链接的档位才能勾。没有户的档位默认不勾。</p>
+                <p class="hint">有推广链接的档位才能勾。没有户的档位默认不勾。搭建先跑 9.9，接着 3.9、39.9、29.9、2.9、1.9，没勾的档会跳过。</p>
               </section>
 
               <section class="step">
                 <header class="step-head">
                   <em>4</em>
+                  <h3>素材</h3>
+                  <span class="muted">选用 {{ pickedVideoIds.length }} / {{ videoList.length }}</span>
+                  <div v-if="videoList.length" class="head-actions">
+                    <el-button link @click="selectAllVideos">全选</el-button>
+                    <el-button link @click="clearVideos">清空</el-button>
+                  </div>
+                </header>
+                <p v-if="previewing && !videoList.length" class="hint">正在按书名拉取巨量线上素材…</p>
+                <p v-else-if="!bookName" class="hint">选书后会按书名自动匹配线上视频，点掉不要的即可。</p>
+                <p v-else-if="!videoList.length" class="block-line">{{ videoEmptyText }}</p>
+                <div v-else class="video-grid">
+                  <figure
+                    v-for="item in videoList"
+                    :key="videoKey(item)"
+                    :class="{ off: !isPickedVideo(item), on: isPickedVideo(item) }"
+                    @click="toggleVideo(item)"
+                  >
+                    <img v-if="item.posterUrl" :src="item.posterUrl" :alt="item.filename" draggable="false" />
+                    <div v-else class="video-fallback">无封面</div>
+                    <i class="video-check" :class="{ on: isPickedVideo(item) }" />
+                    <figcaption :title="item.filename">{{ item.filename }}</figcaption>
+                  </figure>
+                </div>
+              </section>
+
+              <section class="step">
+                <header class="step-head"><em>5</em><h3>商品库</h3></header>
+                <div class="library-grid">
+                  <button
+                    v-for="item in libraries"
+                    :key="item.id"
+                    type="button"
+                    class="library-card"
+                    :class="{ on: platformId === item.id, preferred: item.preferred }"
+                    @click="setLibrary(item.id)"
+                  >
+                    <strong>{{ item.name }}</strong>
+                    <span>{{ item.industry || "商品库" }}</span>
+                    <em v-if="platformId === item.id && productPlan.count">{{ libraryActionText }}</em>
+                    <em v-else>按书名编号，用多少备多少</em>
+                  </button>
+                </div>
+                <p v-if="!libraries.length" class="hint">还没有放进批量基建的商品库。到商品库页打开「批量基建」开关。</p>
+                <p v-else class="hint">{{ libraryHint }}</p>
+              </section>
+
+              <section class="step">
+                <header class="step-head">
+                  <em>6</em>
                   <h3>投放账户</h3>
                   <span class="muted">选用 {{ liveAccountCount }} / {{ livePoolCount }} · 将建 {{ liveJobs }} 条</span>
                   <div class="head-actions">
@@ -117,7 +166,7 @@
                     <em>{{ item.count }}</em>
                   </button>
                 </div>
-                <p class="hint">一户一条计划。主体默认勾上，择影先不投，点亮就能加上。点户上的叉只去掉这一个。</p>
+                <p class="hint">一户一条计划，按上面的顺序先搭 9.9。主体默认勾上，择影先不投，点亮就能加上。点户上的叉只去掉这一个。</p>
                 <article v-for="row in tierViews" :key="row.tier" class="tier-panel" :class="row.state.status">
                   <header class="tier-head">
                     <div class="tier-id">
@@ -154,55 +203,6 @@
                   </div>
                 </article>
                 <p v-if="!tierViews.length" class="hint">选版权和书之后，会按档位带上在投户。</p>
-              </section>
-
-              <section class="step">
-                <header class="step-head"><em>5</em><h3>商品库</h3></header>
-                <div class="library-grid">
-                  <button
-                    v-for="item in libraries"
-                    :key="item.id"
-                    type="button"
-                    class="library-card"
-                    :class="{ on: platformId === item.id, preferred: item.preferred }"
-                    @click="setLibrary(item.id)"
-                  >
-                    <strong>{{ item.name }}</strong>
-                    <span>{{ item.industry || "商品库" }}</span>
-                    <em v-if="platformId === item.id && productPlan.count">{{ libraryActionText }}</em>
-                    <em v-else>按书名编号，用多少备多少</em>
-                  </button>
-                </div>
-                <p v-if="!libraries.length" class="hint">还没有放进批量基建的商品库。到商品库页打开「批量基建」开关。</p>
-                <p v-else class="hint">{{ libraryHint }}</p>
-              </section>
-
-              <section class="step">
-                <header class="step-head">
-                  <em>6</em>
-                  <h3>素材</h3>
-                  <span class="muted">选用 {{ pickedVideoIds.length }} / {{ videoList.length }}</span>
-                  <div v-if="videoList.length" class="head-actions">
-                    <el-button link @click="selectAllVideos">全选</el-button>
-                    <el-button link @click="clearVideos">清空</el-button>
-                  </div>
-                </header>
-                <p v-if="previewing && !videoList.length" class="hint">正在按书名拉取巨量线上素材…</p>
-                <p v-else-if="!bookName" class="hint">选书后会按书名自动匹配线上视频，点掉不要的即可。</p>
-                <p v-else-if="!videoList.length" class="block-line">{{ videoEmptyText }}</p>
-                <div v-else class="video-grid">
-                  <figure
-                    v-for="item in videoList"
-                    :key="videoKey(item)"
-                    :class="{ off: !isPickedVideo(item), on: isPickedVideo(item) }"
-                    @click="toggleVideo(item)"
-                  >
-                    <img v-if="item.posterUrl" :src="item.posterUrl" :alt="item.filename" draggable="false" />
-                    <div v-else class="video-fallback">无封面</div>
-                    <i class="video-check" :class="{ on: isPickedVideo(item) }" />
-                    <figcaption :title="item.filename">{{ item.filename }}</figcaption>
-                  </figure>
-                </div>
               </section>
 
             </div>
@@ -489,7 +489,7 @@ import request from "@/request"
 import CzPagination from "@/components/cz-pagination/index.vue"
 
 const router = useRouter()
-const DEFAULT_TIERS = ["1.9", "2.9", "3.9", "9.9", "29.9", "39.9"]
+const DEFAULT_TIERS = ["9.9", "3.9", "39.9", "29.9", "2.9", "1.9"]
 const BID_OF = { "1.9": "2.1", "2.9": "3.1", "3.9": "4.1", "9.9": "13", "29.9": "32", "39.9": "43" }
 const ACCOUNT_LIMIT = 500
 const tab = ref("task")
@@ -840,11 +840,15 @@ function isPickedAccount(item) {
 function compareAccountName(a, b) {
   return String(a || "").localeCompare(String(b || ""), "zh", { numeric: true, sensitivity: "base" })
 }
+function tierRank(tier) {
+  const index = DEFAULT_TIERS.indexOf(String(tier || ""))
+  if (index >= 0) return index
+  return DEFAULT_TIERS.length + (Number(tier) || 0)
+}
 function sortAccountRows(list) {
   return [...(Array.isArray(list) ? list : [])].sort((a, b) => {
-    const tierA = Number(a && a.tier) || 0
-    const tierB = Number(b && b.tier) || 0
-    if (tierA !== tierB) return tierA - tierB
+    const byTier = tierRank(a && a.tier) - tierRank(b && b.tier)
+    if (byTier) return byTier
     return compareAccountName(a && a.name, b && b.name)
   })
 }
@@ -854,7 +858,7 @@ function defaultExcludedSubjects() {
 function accountSubject(item) {
   const named = String((item && item.subject) || "").trim()
   if (named) return named
-  const novel = String((item && item.name) || "").match(/^(.+?)-?点众小说\d+(?:\.\d+)?/)
+  const novel = String((item && item.name) || "").match(/^(.+?)-?(?:点众|番茄|常读)小说\d+(?:\.\d+)?/)
   if (novel && novel[1]) return novel[1]
   const company = String((item && item.company) || "").trim()
   return company || "未标主体"

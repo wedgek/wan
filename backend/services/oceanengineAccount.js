@@ -437,7 +437,7 @@ const TEMPLATE_BID = {
 
 function parseUsage(name) {
   const text = String(name || '').trim()
-  const novel = text.match(/^(.+?)-?点众小说(\d+(?:\.\d+)?)/)
+  const novel = text.match(/^(.+?)-?(?:点众|番茄|常读)小说(\d+(?:\.\d+)?)/)
   if (novel) {
     const template = novel[2]
     return { subject: novel[1], template, bid: TEMPLATE_BID[template] || '' }
@@ -737,6 +737,12 @@ function fillKnownCopyright() {
     .prepare(
       `UPDATE oceanengine_advertisers SET copyright_owner = '点众'
        WHERE copyright_owner = '' AND name LIKE '%点众小说%'`,
+    )
+    .run()
+  database()
+    .prepare(
+      `UPDATE oceanengine_advertisers SET copyright_owner = '番茄'
+       WHERE copyright_owner = '' AND (name LIKE '%番茄小说%' OR name LIKE '%常读小说%')`,
     )
     .run()
 }

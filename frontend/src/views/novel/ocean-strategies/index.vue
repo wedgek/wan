@@ -167,7 +167,7 @@
                     用投放户「{{ awemeAccountName || "最近一次搭建的户" }}」查授权，各户目前是同一个号。
                     <el-button type="primary" link :loading="awemesLoading" @click="loadAwemes">重新拉取</el-button>
                   </p>
-                  <p v-else-if="field.widget === 'namePattern'" class="hint">搭建时替换花括号。示例：{{ namePreview }}</p>
+                  <p v-else-if="field.widget === 'namePattern'" class="hint">搭建时替换花括号。版权方用这次选的版权，选番茄就是番茄。示例：{{ namePreview }}</p>
                   <div v-else-if="field.widget === 'bidStrategy' && bidStrategyTiers.length" class="bid-map">
                     <p class="hint">模板对应出价</p>
                     <div>
@@ -279,11 +279,11 @@ function fieldVisible(field) {
 const namePreview = computed(() => {
   const today = new Date()
   const date = `${today.getMonth() + 1}.${today.getDate()}`
-  return String(form.value.namePattern || "{日期}{版权方}-{书名}-{档位}")
+  return String(form.value.namePattern || "{档位}{版权方}-{书名}-{日期}")
     .replaceAll("{日期}", date)
-    .replaceAll("{版权方}", "版权方")
+    .replaceAll("{版权方}", "点众")
     .replaceAll("{书名}", "书名")
-    .replaceAll("{档位}", "2.9")
+    .replaceAll("{档位}", "9.9")
 })
 
 function selectInput(event) {

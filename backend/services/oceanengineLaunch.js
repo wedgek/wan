@@ -13,7 +13,16 @@ const accountService = require('./oceanengineAccount')
 const products = require('./oceanengineProduct')
 
 const TEMPLATE_BID = accountService.TEMPLATE_BID
-const LAUNCH_TIERS = Object.keys(TEMPLATE_BID).sort((a, b) => Number(a) - Number(b))
+const LAUNCH_TIER_ORDER = ['9.9', '3.9', '39.9', '29.9', '2.9', '1.9']
+
+function tierRank(tier) {
+  const key = String(tier || '')
+  const index = LAUNCH_TIER_ORDER.indexOf(key)
+  if (index >= 0) return index
+  return LAUNCH_TIER_ORDER.length + (Number(key) || 0)
+}
+
+const LAUNCH_TIERS = Object.keys(TEMPLATE_BID).sort((a, b) => tierRank(a) - tierRank(b))
 const PROMO_SELECT = `SELECT p.id, p.path, p.url, p.monitor1, p.monitor2, p.referral_id, p.status, p.source,
          p.name AS promo_name, p.goods_batch_id, b.name AS book_name, rt.name AS recharge_name
        FROM novel_promo_links p
@@ -54,8 +63,13 @@ const DEFAULT_SELLING_POINTS = [
   '高分人气好书推荐',
   '高评分热门好文推荐',
 ]
-const DEFAULT_NAME_PATTERN = '{日期}{版权方}-{书名}-{档位}'
-const NAME_PATTERN_TOKENS = ['{日期}', '{版权方}', '{书名}', '{档位}']
+const DEFAULT_NAME_PATTERN = '{档位}{版权方}-{书名}-{日期}'
+const LEGACY_NAME_PATTERNS = new Set([
+  '{日期}{版权方}-{书名}-{档位}',
+  '{日期}{版权方}-{书名}-{档位}公共',
+  '{档位}{版权方}-{书名}',
+])
+const NAME_PATTERN_TOKENS = ['{档位}', '{版权方}', '{书名}', '{日期}']
 const ACCOUNT_CONCURRENCY = 12
 const PRODUCT_PREP_LIMIT = 3
 const PATH_QPS_START = 12
@@ -312,9 +326,8 @@ function compareAccountName(a, b) {
 
 function sortAccounts(list) {
   return [...(Array.isArray(list) ? list : [])].sort((a, b) => {
-    const tierA = Number(a && a.tier) || 0
-    const tierB = Number(b && b.tier) || 0
-    if (tierA !== tierB) return tierA - tierB
+    const byTier = tierRank(a && a.tier) - tierRank(b && b.tier)
+    if (byTier) return byTier
     return compareAccountName(a && a.name, b && b.name)
   })
 }
@@ -367,15 +380,15 @@ function formatLaunchDate(date = new Date()) {
 
 function resolveNamePattern(source, fallback = DEFAULT_NAME_PATTERN) {
   const explicit = String((source && source.namePattern) || '').trim().slice(0, 80)
-  if (explicit) return explicit
+  if (explicit && !LEGACY_NAME_PATTERNS.has(explicit)) return explicit
   const suffix = String((source && source.nameSuffix) || '').trim()
   if (suffix && suffix !== '公共') return `${DEFAULT_NAME_PATTERN}${suffix}`
   return fallback
 }
 
-function projectName({ account, bookName, pattern }) {
+function projectName({ account, bookName, pattern, copyrightOwner }) {
   const date = formatLaunchDate()
-  const copyright = String((account && account.copyrightOwner) || '')
+  const copyright = String(copyrightOwner || (account && account.copyrightOwner) || '').trim()
   const tier = String((account && account.tier) || '')
   const book = String(bookName || '')
   const raw = resolveNamePattern({ namePattern: pattern }, DEFAULT_NAME_PATTERN)
@@ -428,7 +441,7 @@ function productDistance(bookKey, nameKey) {
 function sortTiers(list, allow) {
   const gate = tierGate(allow)
   const rows = list == null ? [] : Array.isArray(list) ? list : [...list]
-  return [...new Set(rows.map((item) => String(item || '').trim()).filter((item) => gate.has(item)))].sort((a, b) => Number(a) - Number(b))
+  return [...new Set(rows.map((item) => String(item || '').trim()).filter((item) => gate.has(item)))].sort((a, b) => tierRank(a) - tierRank(b))
 }
 
 function normalizeTiers(raw) {
@@ -752,7 +765,27 @@ function insertStrategy(name, config) {
   return getStrategy(inserted.lastInsertRowid)
 }
 
+function migrateLaunchNamePatterns() {
+  const rows = database().prepare(`SELECT id, config FROM oceanengine_launch_strategies`).all()
+  const update = database().prepare(
+    `UPDATE oceanengine_launch_strategies SET config = ?, updated_at = datetime('now') WHERE id = ?`,
+  )
+  for (const row of rows) {
+    let config
+    try {
+      config = JSON.parse(row.config || '{}')
+    } catch {
+      continue
+    }
+    const pattern = String(config.namePattern || '').trim()
+    if (pattern && !LEGACY_NAME_PATTERNS.has(pattern)) continue
+    config.namePattern = DEFAULT_NAME_PATTERN
+    update.run(JSON.stringify(config), row.id)
+  }
+}
+
 function migrateStrategies() {
+  migrateLaunchNamePatterns()
   const count = database().prepare(`SELECT COUNT(*) AS n FROM oceanengine_launch_strategies`).get()
   if (count && Number(count.n) > 0) return
   const legacy = readLegacyTemplate()
@@ -1038,8 +1071,7 @@ function loadAccounts() {
         `SELECT advertiser_id, name, company, copyright_owner, avatar_url
          FROM oceanengine_advertisers
          WHERE in_use = 1
-         ORDER BY name, advertiser_id
-         LIMIT 500`,
+         ORDER BY name, advertiser_id`,
       )
       .all()
       .map((row) => {
@@ -1208,7 +1240,12 @@ function buildPreview({ bookName, promos, accounts, accountTotal, selectedTiers,
     }
     const sampleAccount = pickedRows[0] || rows[0]
     const sampleName = sampleAccount
-      ? projectName({ account: sampleAccount, bookName, pattern: template.namePattern })
+      ? projectName({
+          account: sampleAccount,
+          bookName,
+          pattern: template.namePattern,
+          copyrightOwner: extra.copyrightOwner || sampleAccount.copyrightOwner,
+        })
       : ''
     let jobs = 0
     for (const account of pickedRows) {
@@ -1427,7 +1464,7 @@ function taskDraft(id) {
       videoIds.push(videoId)
     }
   }
-  tiers.sort((a, b) => Number(a) - Number(b))
+  tiers.sort((a, b) => tierRank(a) - tierRank(b))
   let copyright = normalizeCopyright(snapshot.copyrightOwner || '')
   if (!copyright && advertiserIds.length) {
     const owner = database()
@@ -2737,6 +2774,7 @@ function jobPayload(account, book) {
     accountName: account.name || account.advertiserId,
     tier: account.tier || '',
     bid: Number(account.bid) || bidOfTier(account.tier) || 0,
+    copyrightOwner: String((account && account.copyrightOwner) || '').trim(),
     book,
   })
 }
@@ -2938,6 +2976,8 @@ async function executePending(taskId, template, token) {
     .prepare(`SELECT * FROM oceanengine_launch_task_items WHERE task_id = ? AND status = 'pending' ORDER BY id`)
     .all(taskId)
   if (!rows.length) return
+  const snapshot = loadTaskSnapshot(taskId)
+  const selectedCopyright = String(snapshot.copyrightOwner || '').trim()
   const jobs = rows.map((row) => {
     const payload = parsePayload(row.payload)
     const account = {
@@ -2945,6 +2985,7 @@ async function executePending(taskId, template, token) {
       name: payload.accountName || row.account_name,
       tier: payload.tier || accountService.parseUsage(payload.accountName || row.account_name).template,
       bid: payload.bid || bidOfTier(payload.tier),
+      copyrightOwner: String(payload.copyrightOwner || '').trim() || selectedCopyright,
     }
     return { row, account, book: payload.book || { name: row.book_name, materials: [] } }
   })
@@ -2962,7 +3003,6 @@ async function executePending(taskId, template, token) {
     list.push(job)
     jobsByAccount.set(job.account.advertiserId, list)
   }
-  const snapshot = loadTaskSnapshot(taskId)
   const advertiserCool = new Map()
   let prepared = 0
   let createdCount = 0
@@ -3618,8 +3658,10 @@ async function submit(input, userId) {
   const tokenResult = await auth.getAccessToken()
   if (tokenResult.error) return tokenResult
   const mode = productModeOf(input)
+  const selectedCopyright = normalizeCopyright(plan.copyrightOwner || (input && input.copyrightOwner) || '')
   const jobs = []
-  for (const account of sortAccounts(plan.accounts)) {
+  for (const rawAccount of sortAccounts(plan.accounts)) {
+    const account = { ...rawAccount, copyrightOwner: selectedCopyright || rawAccount.copyrightOwner || '' }
     const bid = Number(account.bid) || bidOfTier(account.tier)
     for (const book of blockedBooks) {
       jobs.push({

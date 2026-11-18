@@ -48,7 +48,10 @@
         </el-dropdown>
       </div>
       <div class="page-table-header-actions">
-        <span class="batch-selected">正在使用 {{ usingTotal }} 个</span>
+        <span class="using-total" title="点众、番茄等所有版权加在一起">
+          <em>全部</em>
+          <strong>{{ usingTotal }}</strong>
+        </span>
         <span v-if="selectedRows.length" class="batch-selected">已选 {{ selectedRows.length }} 个</span>
       </div>
     </div>
@@ -541,6 +544,31 @@ async function afterBatch() {
   font-size: 13px;
   color: var(--el-text-color-secondary);
   white-space: nowrap;
+}
+
+.using-total {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 14px;
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+  white-space: nowrap;
+
+  em {
+    font-style: normal;
+    font-size: 12px;
+    line-height: 28px;
+  }
+
+  strong {
+    font-size: 16px;
+    font-weight: 700;
+    line-height: 28px;
+    font-variant-numeric: tabular-nums;
+  }
 }
 
 .novel-ocean-accounts.page-container {

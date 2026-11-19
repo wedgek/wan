@@ -2200,23 +2200,38 @@ function awemeNameList(rows) {
   return names.join('、')
 }
 
-function awemeSampleAccount() {
-  const latest = database().prepare(`SELECT id FROM oceanengine_launch_tasks ORDER BY id DESC LIMIT 1`).get()
-  if (latest) {
-    const row = database()
+function awemeSampleAccount(copyright) {
+  const wanted = normalizeCopyright(copyright)
+  const accounts = loadAccounts().filter((account) => {
+    if (!wanted) return true
+    if (!accountMatchesCopyright(account, wanted)) return false
+    const named = normalizeCopyright(account.name)
+    return !named || named === wanted
+  })
+  const allowed = new Set(accounts.map((account) => account.advertiserId))
+  if (wanted && !accounts.length) return null
+  const tasks = database().prepare(`SELECT id FROM oceanengine_launch_tasks ORDER BY id DESC LIMIT 30`).all()
+  for (const task of tasks) {
+    const rows = database()
       .prepare(
         `SELECT advertiser_id, account_name
          FROM oceanengine_launch_task_items
          WHERE task_id = ? AND advertiser_id != ''
-         ORDER BY id
-         LIMIT 1`,
+         ORDER BY id`,
       )
-      .get(latest.id)
-    if (row && row.advertiser_id) {
-      return { advertiserId: idText(row.advertiser_id), name: row.account_name || idText(row.advertiser_id) }
+      .all(task.id)
+    for (const row of rows) {
+      const advertiserId = idText(row.advertiser_id)
+      if (wanted && !allowed.has(advertiserId)) continue
+      const known = accounts.find((account) => account.advertiserId === advertiserId)
+      return {
+        advertiserId,
+        name: (known && known.name) || row.account_name || advertiserId,
+      }
     }
+    if (!wanted) break
   }
-  const account = loadAccounts()[0]
+  const account = accounts[0]
   if (!account) return null
   return { advertiserId: account.advertiserId, name: account.name || account.advertiserId }
 }
@@ -2239,9 +2254,17 @@ async function fetchAwemeRows(token, advertiserId, send = oceanSend) {
   return { rows: [], error: listed.error || fallback.error }
 }
 
-async function listAwemes() {
-  const account = awemeSampleAccount()
-  if (!account) return { list: [], accountName: '', advertiserId: '', error: '还没有在用的投放账户' }
+async function listAwemes(copyright) {
+  const wanted = normalizeCopyright(copyright)
+  const account = awemeSampleAccount(wanted)
+  if (!account) {
+    return {
+      list: [],
+      accountName: '',
+      advertiserId: '',
+      error: wanted ? `还没有在用的${wanted}投放账户` : '还没有在用的投放账户',
+    }
+  }
   const tokenResult = await auth.getAccessToken()
   if (tokenResult.error) {
     return { list: [], accountName: account.name, advertiserId: account.advertiserId, error: tokenResult.error }

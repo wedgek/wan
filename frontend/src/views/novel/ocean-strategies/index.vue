@@ -64,14 +64,15 @@
                     @change="onMiniAppChange"
                   >
                     <el-option
-                      v-for="item in miniApps"
+                      v-for="item in miniAppOptions"
                       :key="item.appId"
                       :label="miniAppLabel(item)"
                       :value="item.appId"
                     />
                   </el-select>
-                  <p v-if="field.widget === 'miniApp' && form.copyrightOwner" class="hint">版权方 {{ form.copyrightOwner }}，跟这个小程序走。</p>
+                  <p v-if="field.widget === 'miniApp' && form.microAppId && form.copyrightOwner" class="hint">版权方 {{ form.copyrightOwner }}，跟这个小程序走。</p>
                   <p v-else-if="field.widget === 'miniApp' && form.microAppId" class="hint">这个小程序还没设版权方。到「小程序」页补上后再选一次。</p>
+                  <p v-else-if="field.widget === 'miniApp' && activeCopyright" class="hint">还没有版权方是{{ activeCopyright }}的小程序。到「小程序」页标好后再选。</p>
                   <el-select
                     v-else-if="field.widget === 'aweme'"
                     v-model="form.awemeId"
@@ -172,7 +173,7 @@
                     <el-button type="primary" link :loading="miniAppsLoading" @click="loadMiniApps">重新拉取</el-button>
                   </p>
                   <p v-else-if="field.widget === 'aweme'" class="hint">
-                    用投放户「{{ awemeAccountName || "最近一次搭建的户" }}」查授权，各户目前是同一个号。
+                    用{{ activeCopyright ? activeCopyright + "的" : "" }}投放户「{{ awemeAccountName || "—" }}」查授权。
                     <el-button type="primary" link :loading="awemesLoading" @click="loadAwemes">重新拉取</el-button>
                   </p>
                   <p v-else-if="field.widget === 'namePattern'" class="hint">搭建时替换花括号。版权方用这次选的版权，选番茄就是番茄。示例：{{ namePreview }}</p>
@@ -235,6 +236,7 @@ const bidStrategies = ref([])
 const miniApps = ref([])
 const awemes = ref([])
 const awemeAccountName = ref("")
+let awemeTicket = 0
 const form = ref(emptyForm())
 const loading = ref(false)
 const saving = ref(false)
@@ -339,6 +341,21 @@ function miniAppLabel(item) {
   return same ? `字节小程序 · ${name}${copyright}（${item.appId}）` : `字节小程序 · ${name}${copyright}`
 }
 
+const activeCopyright = computed(() => {
+  if (form.value.copyrightOwner) return form.value.copyrightOwner
+  if (copyright.value && copyright.value !== "__unset__") return copyright.value
+  return ""
+})
+
+const miniAppOptions = computed(() => {
+  const owner = activeCopyright.value
+  if (!owner) return miniApps.value
+  const matched = miniApps.value.filter((item) => item.copyrightOwner === owner)
+  if (!form.value.microAppId || matched.some((item) => item.appId === form.value.microAppId)) return matched
+  const current = miniApps.value.find((item) => item.appId === form.value.microAppId)
+  return current ? [current, ...matched] : matched
+})
+
 const copyrightTabs = computed(() => {
   const names = []
   const seen = new Set()
@@ -364,14 +381,15 @@ function applyMiniCopyright(item) {
 }
 
 function bindMiniApp() {
+  const pool = activeCopyright.value ? miniAppOptions.value : miniApps.value
   const current = miniApps.value.find((item) => item.appId === form.value.microAppId)
-  if (current) {
+  if (current && (form.value.id || pool.some((item) => item.appId === current.appId))) {
     form.value.microAppName = current.name
     applyMiniCopyright(current)
     return
   }
-  const byName = miniApps.value.find((item) => form.value.microAppName && item.name === form.value.microAppName)
-  const next = byName || (form.value.microAppId ? null : miniApps.value[0])
+  const byName = pool.find((item) => form.value.microAppName && item.name === form.value.microAppName)
+  const next = byName || (form.value.id ? null : pool[0])
   if (!next) return
   form.value.microAppId = next.appId
   form.value.microAppName = next.name
@@ -384,12 +402,19 @@ function onMiniAppChange(appId) {
   form.value.microAppName = item ? item.name : ""
   applyMiniCopyright(item)
   syncName()
+  loadAwemes()
 }
 
 async function loadAwemes() {
+  const ticket = ++awemeTicket
   awemesLoading.value = true
+  const owner = activeCopyright.value
   try {
-    const res = await request({ url: "/admin-api/oceanengine/launch/awemes" })
+    const res = await request({
+      url: "/admin-api/oceanengine/launch/awemes",
+      params: owner ? { copyright: owner } : {},
+    })
+    if (ticket !== awemeTicket) return
     if (res.code !== 0) {
       ElMessage.error(res.msg || "读取抖音号失败")
       return
@@ -400,7 +425,7 @@ async function loadAwemes() {
     if (data.error && !awemes.value.length) ElMessage.warning(data.error)
     bindAweme()
   } finally {
-    awemesLoading.value = false
+    if (ticket === awemeTicket) awemesLoading.value = false
   }
 }
 
@@ -474,6 +499,7 @@ function copyName(name) {
 
 async function openCreate() {
   form.value = emptyForm()
+  if (copyright.value && copyright.value !== "__unset__") form.value.copyrightOwner = copyright.value
   nameTouched.value = false
   copiedFrom.value = ""
   bindBidStrategy()

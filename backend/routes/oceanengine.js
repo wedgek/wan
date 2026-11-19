@@ -423,6 +423,28 @@ router.post('/accounts/avatar', requireAuth, requireOceanAccounts, async (req, r
   }
 })
 
+router.post('/accounts/budgets', requireAuth, requireOceanAccounts, async (req, res) => {
+  try {
+    const result = await accounts.readBudgets((req.body || {}).advertiserIds)
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] accounts budgets', e.message)
+    res.json(fail(500, '读取预算失败'))
+  }
+})
+
+router.post('/accounts/budget', requireAuth, requireOceanAccounts, async (req, res) => {
+  try {
+    const result = await accounts.updateBudgets(req.body || {})
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] accounts budget', e.message)
+    res.json(fail(500, '修改账户预算失败'))
+  }
+})
+
 router.get('/events/accounts', requireAuth, requireOceanProducts, (req, res) => {
   try {
     res.json(ok(events.listAccountOptions(req.query.keyword)))
@@ -1019,7 +1041,7 @@ router.get('/launch/mini-apps', requireAuth, requireOceanProducts, async (req, r
 
 router.get('/launch/awemes', requireAuth, requireOceanProducts, async (req, res) => {
   try {
-    res.json(ok(await launch.listAwemes()))
+    res.json(ok(await launch.listAwemes(req.query.copyright)))
   } catch (e) {
     console.error('[oceanengine] launch awemes', e.message)
     res.json(fail(500, '读取抖音号失败'))

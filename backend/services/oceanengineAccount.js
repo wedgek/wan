@@ -15,6 +15,13 @@ const AVATAR_GET = '/open_api/2/advertiser/avatar/get/'
 const AVATAR_UPLOAD = '/open_api/2/advertiser/avatar/upload/'
 const AVATAR_SUBMIT = '/open_api/2/advertiser/avatar/submit/'
 const ADVERTISER_UPDATE = '/open_api/2/agent/advertiser/update/'
+const ADVERTISER_BUDGET_GET = '/open_api/2/advertiser/budget/get/'
+const ADVERTISER_BUDGET_UPDATE = '/open_api/2/advertiser/update/budget/'
+const PROJECT_LIST = '/open_api/v3.0/project/list/'
+const STD_PROJECT_LIST = '/open_api/v3.0/std_project/list/'
+const BUDGET_MIN = 1000
+const BUDGET_MAX = 9999999.99
+const BUDGET_BATCH = 50
 
 const RAW_NUMBER_KEYS = new Set(['account_id', 'advertiser_id', 'enterprise_organization_id', 'cc_account_id'])
 const INFO_FIELDS = [
@@ -1015,6 +1022,199 @@ async function downloadImage(imageUrl) {
   return { buffer, ...guessImageMeta(url, buffer) }
 }
 
+function cleanAdvertiserIds(ids, limit) {
+  const clean = []
+  const seen = new Set()
+  for (const id of Array.isArray(ids) ? ids : []) {
+    const advertiserId = String(id || '').trim()
+    if (!/^\d+$/.test(advertiserId) || seen.has(advertiserId)) continue
+    seen.add(advertiserId)
+    clean.push(advertiserId)
+    if (limit && clean.length >= limit) break
+  }
+  return clean
+}
+
+async function mapPool(items, limit, worker) {
+  const out = new Array(items.length)
+  let cursor = 0
+  async function run() {
+    while (cursor < items.length) {
+      const index = cursor
+      cursor += 1
+      out[index] = await worker(items[index], index)
+    }
+  }
+  const size = Math.min(Math.max(1, limit), items.length || 1)
+  if (items.length) await Promise.all(Array.from({ length: size }, () => run()))
+  return out
+}
+
+function moneyNumber(value) {
+  const n = Number(value)
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 : null
+}
+
+async function fetchAccountBudgets(token, ids) {
+  const map = new Map()
+  let error = ''
+  for (let i = 0; i < ids.length; i += 100) {
+    const chunk = ids.slice(i, i + 100)
+    const result = await oceanFetch(token, 'GET', ADVERTISER_BUDGET_GET, {
+      query: { advertiser_ids: `[${chunk.join(',')}]` },
+    })
+    if (result.error) {
+      error = result.error
+      continue
+    }
+    for (const row of asList(result.data, ['list'])) {
+      const advertiserId = idOf(row, ['advertiser_id'])
+      if (!advertiserId) continue
+      map.set(advertiserId, {
+        budgetMode: String(row.budget_mode || '').trim(),
+        budget: moneyNumber(row.budget),
+      })
+    }
+    if (i + 100 < ids.length) await sleep(120)
+  }
+  return { map, error }
+}
+
+function projectBudgetOf(row) {
+  const setting = row && row.delivery_setting && typeof row.delivery_setting === 'object' ? row.delivery_setting : {}
+  const mode = String((row && row.budget_mode) || setting.budget_mode || '').trim()
+  const raw = row && row.budget != null && row.budget !== '' ? row.budget : setting.budget
+  return { mode, budget: moneyNumber(raw) }
+}
+
+function summarizeProjects(rows, total, scope) {
+  const budgets = []
+  const seen = new Set()
+  let infinite = false
+  for (const row of rows) {
+    const item = projectBudgetOf(row)
+    if (item.mode === 'BUDGET_MODE_INFINITE') {
+      infinite = true
+      continue
+    }
+    if (item.budget == null) continue
+    const key = `${item.mode}:${item.budget}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    budgets.push(item.budget)
+  }
+  return {
+    projectCount: Number(total) || rows.length,
+    projectSampled: rows.length,
+    projectScope: scope,
+    projectBudgets: budgets,
+    projectInfinite: infinite,
+    projectError: '',
+  }
+}
+
+function projectEnabled(row) {
+  const status = String((row && (row.status_first || row.status || row.opt_status)) || '')
+  if (!status) return false
+  if (/DELETE|DISABLE|DONE|STOP|NO_SCHEDULE|NOT_START/i.test(status)) return false
+  return /ENABLE/i.test(status)
+}
+
+async function listProjectPage(token, advertiserId) {
+  const query = { advertiser_id: advertiserId, page: 1, page_size: 100 }
+  let result = await oceanFetch(token, 'GET', PROJECT_LIST, { query, timeout: 15000 })
+  const empty = !result.error && !asList(result.data, ['list']).length
+  if (result.error || empty) {
+    const std = await oceanFetch(token, 'GET', STD_PROJECT_LIST, { query, timeout: 15000 })
+    if (!std.error && (asList(std.data, ['list']).length || result.error)) result = std
+  }
+  if (result.error) return { error: result.error, rows: [], total: 0 }
+  const rows = asList(result.data, ['list'])
+  const info = pageInfo(result.data)
+  return { rows, total: info.totalNumber || rows.length }
+}
+
+async function loadProjectSummary(token, advertiserId) {
+  const listed = await listProjectPage(token, advertiserId)
+  if (listed.error) {
+    return {
+      projectCount: 0,
+      projectSampled: 0,
+      projectScope: '',
+      projectBudgets: [],
+      projectInfinite: false,
+      projectError: listed.error,
+    }
+  }
+  const enabled = listed.rows.filter(projectEnabled)
+  const rows = enabled.length ? enabled : listed.rows
+  const scope = enabled.length ? '启用中' : rows.length ? '未删除' : ''
+  const summary = summarizeProjects(rows, rows.length, scope)
+  summary.projectTruncated = listed.rows.length >= 100 && listed.total > listed.rows.length
+  if (!enabled.length && summary.projectTruncated) summary.projectCount = listed.total
+  return summary
+}
+
+async function readBudgets(ids) {
+  const clean = cleanAdvertiserIds(ids)
+  if (!clean.length) return { error: '请选择账户' }
+  if (clean.length > 100) return { error: '一次最多查询 100 个账户' }
+  const tokenResult = await auth.getAccessToken()
+  if (tokenResult.error) return tokenResult
+  const [accounts, projects] = await Promise.all([
+    fetchAccountBudgets(tokenResult.token, clean),
+    mapPool(clean, 4, (advertiserId) => loadProjectSummary(tokenResult.token, advertiserId)),
+  ])
+  return {
+    list: clean.map((advertiserId, index) => {
+      const account = accounts.map.get(advertiserId)
+      const project = projects[index] || {}
+      return {
+        advertiserId,
+        budgetMode: account ? account.budgetMode : '',
+        budget: account ? account.budget : null,
+        budgetError: account ? '' : accounts.error || '',
+        projectCount: project.projectCount || 0,
+        projectSampled: project.projectSampled || 0,
+        projectScope: project.projectScope || '',
+        projectBudgets: project.projectBudgets || [],
+        projectInfinite: !!project.projectInfinite,
+        projectTruncated: !!project.projectTruncated,
+        projectError: project.projectError || '',
+      }
+    }),
+  }
+}
+
+async function updateBudgets(body) {
+  const ids = cleanAdvertiserIds(body && body.advertiserIds, BUDGET_BATCH + 1)
+  if (!ids.length) return { error: '请选择账户' }
+  if (ids.length > BUDGET_BATCH) return { error: `一次最多修改 ${BUDGET_BATCH} 个账户预算` }
+  const mode = body && body.budgetMode === 'BUDGET_MODE_INFINITE' ? 'BUDGET_MODE_INFINITE' : 'BUDGET_MODE_DAY'
+  let budget = null
+  if (mode === 'BUDGET_MODE_DAY') {
+    budget = moneyNumber(body && body.budget)
+    if (budget == null || budget < BUDGET_MIN || budget > BUDGET_MAX) {
+      return { error: '日预算需在 1000 到 9999999.99 元之间' }
+    }
+  }
+  const tokenResult = await auth.getAccessToken(body && body.appPk)
+  if (tokenResult.error) return tokenResult
+  const results = await mapPool(ids, 3, async (advertiserId) => {
+    const payload = { advertiser_id: advertiserId, budget_mode: mode }
+    if (mode === 'BUDGET_MODE_DAY') payload.budget = budget
+    const updated = await oceanFetch(tokenResult.token, 'POST', ADVERTISER_BUDGET_UPDATE, { body: payload })
+    await sleep(120)
+    if (updated.error) return { advertiserId, ok: false, error: updated.error }
+    return { advertiserId, ok: true, budgetMode: mode, budget: mode === 'BUDGET_MODE_DAY' ? budget : 0, error: '' }
+  })
+  return {
+    results,
+    success: results.filter((item) => item.ok).length,
+    fail: results.filter((item) => !item.ok).length,
+  }
+}
+
 async function updateAvatars(body) {
   const ids = []
   const seen = new Set()
@@ -1073,5 +1273,7 @@ module.exports = {
   setCopyright,
   renameAccounts,
   updateAvatars,
+  readBudgets,
+  updateBudgets,
   nameWeight,
 }

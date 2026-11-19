@@ -1216,39 +1216,47 @@ async function syncBookReferralsWithRetry(d, extBookId, channelId, localBookId, 
 async function syncChangduReferralsFromRemote(d, input, fallbackBookId) {
   const channelId = String(input.channelId || input.appId || '').trim()
   if (!channelId) return { error: '请选择应用' }
-  const size = Math.min(200, Math.max(1, parseInt(input.size, 10) || 100))
-  let page = Math.max(1, parseInt(input.page, 10) || 1)
+  const size = Math.min(50, Math.max(1, parseInt(input.size, 10) || 50))
+  let offset = Math.max(0, parseInt(input.offset, 10) || 0)
   let upserted = 0
   let created = 0
   let total = 0
   const rows = []
-  const maxPages = 50
-  while (page <= maxPages) {
+  const seen = new Set()
+  for (let guard = 0; guard < 40; guard += 1) {
     const remote = await changdu.listReferrals({
       ...input,
       channelId,
       appId: channelId,
-      page,
+      page: 1,
       size,
+      offset,
       distributorId: input.distributorId,
     })
     if (remote.error) return remote
+    const payload = remote.data || {}
     const items = changdu
-      .pickRemoteList(remote.data)
+      .pickRemoteList(payload)
       .map((item) => changdu.normalizePromotionItem(item, { channelId, appId: channelId }))
-    const remoteTotal = Number(remote.data && remote.data.total)
-    if (page === 1) total = Number.isFinite(remoteTotal) && remoteTotal > 0 ? remoteTotal : items.length
+    const remoteTotal = Number(payload.total)
+    if (!total && Number.isFinite(remoteTotal) && remoteTotal > 0) total = remoteTotal
     for (const item of items) {
+      const key = String(item.referralId || item.promotion_id || item.path || '')
+      if (key && seen.has(key)) continue
+      if (key) seen.add(key)
       const r = upsertDianzhongReferral(d, item, fallbackBookId, channelId, 'changdu')
       if (r.error) continue
       upserted += 1
       if (r.created) created += 1
       rows.push(rowToPromo(fetchPromoRow(d, r.id)))
     }
-    if (items.length < size) break
-    if (Number.isFinite(remoteTotal) && remoteTotal > 0 && page * size >= remoteTotal) break
-    page += 1
+    const more = payload.has_more === true || payload.has_more === 1 || payload.has_more === 'true'
+    const next = Number(payload.next_offset)
+    if (!more || !Number.isFinite(next) || next <= offset) break
+    if (total && seen.size >= total) break
+    offset = next
   }
+  if (!total) total = seen.size
   return { upserted, created, total, list: rows, channelId }
 }
 

@@ -43,6 +43,7 @@
               <el-dropdown-item command="copyright">设置版权方</el-dropdown-item>
               <el-dropdown-item command="rename">修改名称</el-dropdown-item>
               <el-dropdown-item command="avatar">更换头像</el-dropdown-item>
+              <el-dropdown-item command="budget">修改账户预算</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -102,6 +103,25 @@
             <span v-else>—</span>
           </template>
         </el-table-column>
+        <el-table-column width="120" align="center">
+          <template #header>
+            <span title="巨量账户当前日预算。不限表示没有上限。">账户日预算</span>
+          </template>
+          <template #default="{ row }">
+            <span v-if="row.budgetMode === 'BUDGET_MODE_INFINITE'" class="budget-cell">不限</span>
+            <span v-else-if="row.budgetMode === 'BUDGET_MODE_DAY'" class="budget-cell">{{ formatBudget(row.budget) }}</span>
+            <span v-else class="budget-muted" :title="row.budgetError || ''">{{ budgetLoading ? "读取中" : "—" }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column width="140" align="center">
+          <template #header>
+            <span title="这个账户下巨量项目当前的预算。多个项目不一致时并列显示。">项目预算</span>
+          </template>
+          <template #default="{ row }">
+            <span v-if="projectBudgetText(row)" class="budget-cell" :title="projectBudgetTitle(row)">{{ projectBudgetText(row) }}</span>
+            <span v-else class="budget-muted" :title="projectBudgetTitle(row)">{{ budgetLoading ? "读取中" : "—" }}</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="advertiserId" label="账户ID" width="180" align="center">
           <template #default="{ row }">
             <span class="copy-id" title="点击复制" @click="copyText(row.advertiserId)">{{ row.advertiserId }}</span>
@@ -134,6 +154,22 @@
       />
     </div>
 
+    <el-dialog v-model="budgetVisible" title="批量修改账户预算" width="460px">
+      <p class="import-hint">改的是所选 {{ selectedRows.length }} 个账户在巨量上的账户日预算，项目自己的预算不会变。日预算最低 1000 元，每次至少调整 100 元。</p>
+      <p v-if="budgetPreview" class="import-hint">当前账户日预算：{{ budgetPreview }}</p>
+      <el-radio-group v-model="budgetMode" class="budget-mode">
+        <el-radio value="BUDGET_MODE_DAY">指定日预算</el-radio>
+        <el-radio value="BUDGET_MODE_INFINITE">不限</el-radio>
+      </el-radio-group>
+      <div v-if="budgetMode === 'BUDGET_MODE_DAY'" class="budget-input">
+        <el-input-number v-model="budgetValue" :min="1000" :max="9999999.99" :precision="2" :step="100" />
+        <span>元</span>
+      </div>
+      <template #footer>
+        <el-button @click="budgetVisible = false">取消</el-button>
+        <el-button type="primary" :loading="budgetSaving" @click="saveBudget">保存</el-button>
+      </template>
+    </el-dialog>
     <el-dialog v-model="copyrightVisible" title="设置版权方" width="420px">
       <p class="import-hint">巨量账户上没有版权方。这里记在本系统，用来区分这些户在投哪个版权方。</p>
       <el-select v-model="copyrightOwner" filterable allow-create default-first-option placeholder="选择或填写，例如番茄" style="width: 100%">
@@ -223,6 +259,12 @@ import { readCopyright, writeCopyright } from "../shared"
 const tableRef = ref(null)
 const syncing = ref(false)
 const avatarSaving = ref(false)
+const budgetVisible = ref(false)
+const budgetSaving = ref(false)
+const budgetLoading = ref(false)
+const budgetMode = ref("BUDGET_MODE_DAY")
+const budgetValue = ref(1000)
+let budgetTicket = 0
 const renameVisible = ref(false)
 const avatarVisible = ref(false)
 const selectedRows = ref([])
@@ -269,6 +311,7 @@ const { tableParams, tableData, tableTotal, tableLoading, getTableData, tableSea
       if (Array.isArray(data && data.templates)) templates.value = data.templates
       if (Array.isArray(data && data.copyrights)) copyrights.value = data.copyrights
       copyrightCounts.value = (data && data.copyrightCounts) || {}
+      loadBudgets(ctx.tableData.value)
     },
   },
 )
@@ -326,6 +369,144 @@ function copyText(value) {
     () => ElMessage.success("已复制"),
     () => ElMessage.error("复制失败"),
   )
+}
+
+function formatBudget(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return "—"
+  return n.toLocaleString("zh-CN", { maximumFractionDigits: 2 })
+}
+
+function projectBudgetText(row) {
+  if (!row || row.projectCount == null) return ""
+  const parts = (Array.isArray(row.projectBudgets) ? row.projectBudgets : []).map((item) => formatBudget(item))
+  if (row.projectInfinite) parts.unshift("不限")
+  if (!parts.length) return row.projectCount ? "" : row.projectError ? "" : "无项目"
+  if (parts.length === 1) return parts[0]
+  return `${parts.slice(0, 2).join(" / ")}${parts.length > 2 ? " 等" : ""}`
+}
+
+function projectBudgetTitle(row) {
+  if (!row) return ""
+  if (row.projectError) return row.projectError
+  if (row.projectCount == null) return ""
+  if (!row.projectCount) return "没有读到项目"
+  const scope = row.projectScope || "项目"
+  const extra = row.projectTruncated ? `，项目超过 100 个，这里只统计了前 100 个里的 ${row.projectSampled} 个` : ""
+  return `${scope} ${row.projectCount} 个${extra}`
+}
+
+const budgetPreview = computed(() => {
+  const rows = selectedRows.value
+  if (!rows.length) return ""
+  const infinite = rows.filter((row) => row.budgetMode === "BUDGET_MODE_INFINITE").length
+  const days = rows.filter((row) => row.budgetMode === "BUDGET_MODE_DAY")
+  const unknown = rows.length - infinite - days.length
+  const amounts = [...new Set(days.map((row) => Number(row.budget)).filter((n) => Number.isFinite(n)))]
+  const parts = []
+  if (infinite) parts.push(`不限 ${infinite} 个`)
+  if (amounts.length === 1) parts.push(`${formatBudget(amounts[0])} 元 ${days.length} 个`)
+  else if (amounts.length) parts.push(`日预算不一致 ${days.length} 个`)
+  if (unknown) parts.push(`未读到 ${unknown} 个`)
+  return parts.join("，")
+})
+
+async function loadBudgets(rows) {
+  const list = Array.isArray(rows) ? rows : []
+  const ids = list.map((row) => row.advertiserId).filter(Boolean)
+  const ticket = ++budgetTicket
+  if (!ids.length) {
+    budgetLoading.value = false
+    return
+  }
+  budgetLoading.value = true
+  try {
+    for (const part of chunk(ids, 20)) {
+      if (ticket !== budgetTicket) return
+      const res = await request({
+        url: "/admin-api/oceanengine/accounts/budgets",
+        method: "POST",
+        timeout: 90000,
+        data: { advertiserIds: part },
+      })
+      if (ticket !== budgetTicket) return
+      if (res.code !== 0) {
+        ElMessage.error(res.msg || "读取预算失败")
+        return
+      }
+      const map = new Map(((res.data && res.data.list) || []).map((item) => [String(item.advertiserId), item]))
+      for (const row of list) {
+        const hit = map.get(String(row.advertiserId))
+        if (!hit) continue
+        row.budgetMode = hit.budgetMode || ""
+        row.budget = hit.budget
+        row.budgetError = hit.budgetError || ""
+        row.projectCount = hit.projectCount || 0
+        row.projectSampled = hit.projectSampled || 0
+        row.projectScope = hit.projectScope || ""
+        row.projectBudgets = hit.projectBudgets || []
+        row.projectInfinite = !!hit.projectInfinite
+        row.projectTruncated = !!hit.projectTruncated
+        row.projectError = hit.projectError || ""
+      }
+    }
+  } catch (e) {
+    if (ticket === budgetTicket) ElMessage.error(e?.response?.data?.msg || e?.message || "读取预算失败")
+  } finally {
+    if (ticket === budgetTicket) budgetLoading.value = false
+  }
+}
+
+async function saveBudget() {
+  const ids = selectedIds.value
+  if (!ids.length) {
+    ElMessage.warning("请先选择账户")
+    return
+  }
+  if (budgetMode.value === "BUDGET_MODE_DAY") {
+    const amount = Number(budgetValue.value)
+    if (!Number.isFinite(amount) || amount < 1000 || amount > 9999999.99) {
+      ElMessage.warning("日预算需在 1000 到 9999999.99 元之间")
+      return
+    }
+  }
+  budgetSaving.value = true
+  try {
+    let success = 0
+    let fail = 0
+    const errors = []
+    for (const part of chunk(ids, 50)) {
+      const res = await request({
+        url: "/admin-api/oceanengine/accounts/budget",
+        method: "POST",
+        timeout: 180000,
+        data: {
+          advertiserIds: part,
+          budgetMode: budgetMode.value,
+          budget: budgetMode.value === "BUDGET_MODE_DAY" ? budgetValue.value : undefined,
+        },
+      })
+      if (res.code !== 0) {
+        ElMessage.error(res.msg || "修改账户预算失败")
+        return
+      }
+      const data = res.data || {}
+      success += Number(data.success) || 0
+      fail += Number(data.fail) || 0
+      for (const item of data.results || []) {
+        if (!item.ok && item.error) errors.push(`${item.advertiserId}：${item.error}`)
+      }
+    }
+    if (fail) ElMessage.warning(`成功 ${success} 个，失败 ${fail} 个`)
+    else ElMessage.success(`已修改 ${success} 个账户的日预算`)
+    if (errors.length && errors.length <= 3) ElMessage.warning(errors.join("；"))
+    budgetVisible.value = false
+    await afterBatch()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.msg || e?.message || "修改账户预算失败")
+  } finally {
+    budgetSaving.value = false
+  }
 }
 
 function tierClass(template) {
@@ -433,6 +614,11 @@ function onBatchCommand(command) {
   if (command === "copyright") {
     copyrightOwner.value = copyrights.value[0] || copyrightPresets[0]
     copyrightVisible.value = true
+  }
+  if (command === "budget") {
+    budgetMode.value = "BUDGET_MODE_DAY"
+    budgetValue.value = 1000
+    budgetVisible.value = true
   }
 }
 
@@ -640,6 +826,27 @@ async function afterBatch() {
   margin: 0 0 12px;
   color: var(--el-text-color-secondary);
   font-size: 13px;
+}
+
+.budget-cell {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.budget-muted {
+  color: var(--el-text-color-placeholder);
+}
+
+.budget-mode {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.budget-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .import-foot {

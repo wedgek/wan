@@ -176,6 +176,11 @@ function isSuccessCode(code) {
   return code === 0 || code === 1 || code === '0' || code === '1' || code === 200 || code === '200'
 }
 
+function parseChangduBody(text) {
+  const safe = String(text).replace(/([:\[,]\s*)(-?\d{16,})(?=\s*[,}\]])/g, '$1"$2"')
+  return JSON.parse(safe)
+}
+
 function errorMessage(json, httpStatus) {
   if (!json || typeof json !== 'object') return `常读接口失败（HTTP ${httpStatus}）`
   return (
@@ -225,7 +230,7 @@ async function requestJson(path, extra = {}, method, distributorId) {
   }
   let json
   try {
-    json = await res.json()
+    json = parseChangduBody(await res.text())
   } catch {
     return { error: `常读接口返回不是 JSON（HTTP ${res.status}）` }
   }
@@ -385,6 +390,7 @@ async function listReferrals(input = {}) {
     page_index: page - 1,
     page_size: size,
   }
+  if (input.offset != null && input.offset !== '') extra.offset = input.offset
   if (input.bookId) extra.book_id = String(input.bookId).trim()
   if (input.referralId) extra.promotion_id = String(input.referralId).trim()
   if (input.startTime) extra.start_time = String(input.startTime).trim()
@@ -458,6 +464,7 @@ function flattenPromotionItem(item) {
     url: promotionUrl,
     monitor1: info.monitor_url || '',
     monitor2: info.promotion_http_url || '',
+    book_id: book.book_id != null && book.book_id !== '' ? String(book.book_id) : '',
     book_name: book.book_name || '',
     chapter_index: book.chapter_order,
     iaa_config_id: delivery.recharge_template_id,

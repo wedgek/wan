@@ -1278,6 +1278,88 @@ async function syncChangduBookReferralsWithRetry(d, extBookId, channelId, localB
   return synced
 }
 
+function changduLaunchPathReady(path) {
+  const text = String(path || '').trim().replace(/^\//, '')
+  return /^pages\/[^?]+\?.+/i.test(text)
+}
+
+function changduStoredPath(d, referralId) {
+  const row = d
+    .prepare(
+      `SELECT path, url FROM novel_promo_links
+       WHERE referral_id = ? AND source = 'changdu'
+       ORDER BY id DESC LIMIT 1`,
+    )
+    .get(String(referralId || ''))
+  return String((row && (row.path || row.url)) || '').trim()
+}
+
+function changduReferralId(data) {
+  const item = changdu.normalizePromotionItem(data)
+  return String((item && (item.referralId || item.promotion_id)) || '').trim()
+}
+
+function changduPromotionRows(data) {
+  const listed = changdu.pickRemoteList(data)
+  const raw = listed.slice()
+  if (!raw.length && data && typeof data === 'object' && (data.promotion_info || data.promotion_id || data.promotion_url)) {
+    raw.push(data)
+  }
+  return raw
+    .map((item) => changdu.normalizePromotionItem(item))
+    .filter((item) => item && (item.referralId || item.path))
+}
+
+async function listChangduPromotionRows(channelId, distributorId, extra) {
+  const remote = await changdu.listReferrals({
+    channelId,
+    appId: channelId,
+    distributorId,
+    size: 50,
+    ...extra,
+  })
+  if (remote.error) return []
+  return changduPromotionRows(remote.data)
+}
+
+// 常读创建接口先回推广 ID，启动页要过一会儿才出现在列表里。只补还是 changdu:ID 的那几条。
+async function awaitChangduLaunchPaths(d, channelId, localBookId, extBookId, created) {
+  const pending = new Map()
+  for (const item of created || []) {
+    const referralId = String((item && item.referralId) || '').trim()
+    if (!referralId || changduLaunchPathReady(changduStoredPath(d, referralId))) continue
+    pending.set(referralId, String((item && item.distributorId) || '').trim())
+  }
+  const waits = [0, 600, 1200, 2000, 2500]
+  for (let round = 0; round < waits.length && pending.size; round += 1) {
+    if (waits[round]) await sleep(waits[round])
+    const byDist = new Map()
+    for (const [referralId, distributorId] of pending) {
+      if (!byDist.has(distributorId)) byDist.set(distributorId, [])
+      byDist.get(distributorId).push(referralId)
+    }
+    for (const [distributorId, ids] of byDist) {
+      const bookId = String(extBookId || '').trim()
+      let rows = bookId ? await listChangduPromotionRows(channelId, distributorId, { bookId }) : []
+      const found = new Set(rows.map((row) => String(row.referralId || '')))
+      for (const referralId of ids) {
+        if (found.has(referralId)) continue
+        rows = rows.concat(await listChangduPromotionRows(channelId, distributorId, { referralId }))
+      }
+      for (const row of rows) {
+        const referralId = String(row.referralId || '')
+        if (!pending.has(referralId) || !changduLaunchPathReady(row.path)) continue
+        const saved = upsertDianzhongReferral(d, row, localBookId, channelId, 'changdu')
+        if (!saved.error) pending.delete(referralId)
+      }
+    }
+  }
+  if (pending.size) {
+    console.log('[novel] changdu launch path pending', { bookId: extBookId, ids: [...pending.keys()] })
+  }
+  return [...pending.keys()]
+}
+
 function promoTemplateSelectSql() {
   return `
     SELECT t.*, r.name AS recharge_name, r.batch_id AS recharge_batch_id
@@ -2136,6 +2218,7 @@ router.post('/promo-links/changdu/create', requirePerm(PERM.promo, '推广链接
       if (rt.batch_id) batchId = String(rt.batch_id).trim()
     }
     const createdItems = []
+    const pendingPaths = []
     const warnings = []
     const mapped = batchId ? await changdu.templateDistributorMap(channelId) : { data: {} }
     const distributorId = batchId && mapped.data ? mapped.data[batchId] : ''
@@ -2157,6 +2240,8 @@ router.post('/promo-links/changdu/create', requirePerm(PERM.promo, '推广链接
         continue
       }
       createdItems.push(created.data)
+      const referralId = changduReferralId(created.data)
+      if (referralId) pendingPaths.push({ referralId, distributorId })
       upsertDianzhongReferral(
         d,
         changdu.normalizePromotionItem(created.data, {
@@ -2180,6 +2265,16 @@ router.post('/promo-links/changdu/create', requirePerm(PERM.promo, '推广链接
       book.id,
       createdItems.length,
     )
+    const missingPaths = await awaitChangduLaunchPaths(
+      d,
+      channelId,
+      book.id,
+      book.external_book_id,
+      pendingPaths,
+    )
+    if (missingPaths.length) {
+      warnings.push(`${missingPaths.length} 条启动页还在生成，请稍后再从常读拉取，生成前不要搭建`)
+    }
     if (synced.error) {
       warnings.push(synced.error)
       return res.json(
@@ -2227,6 +2322,7 @@ router.post('/promo-links/changdu/batch-create', requirePerm(PERM.promo, '推广
     const createdItems = []
     const warnings = []
     const syncedBooks = new Set()
+    const pendingByBook = new Map()
     const mapped = await changdu.templateDistributorMap(channelId)
     const distMap = mapped.data || {}
     for (const extBookId of bookIds) {
@@ -2254,6 +2350,11 @@ router.post('/promo-links/changdu/batch-create', requirePerm(PERM.promo, '推广
         createdItems.push(created.data)
         createdForBook += 1
         if (!bookDistributorId && distributorId) bookDistributorId = distributorId
+        const referralId = changduReferralId(created.data)
+        if (referralId) {
+          if (!pendingByBook.has(extBookId)) pendingByBook.set(extBookId, [])
+          pendingByBook.get(extBookId).push({ referralId, distributorId })
+        }
         upsertDianzhongReferral(
           d,
           changdu.normalizePromotionItem(created.data, {
@@ -2280,6 +2381,16 @@ router.post('/promo-links/changdu/batch-create', requirePerm(PERM.promo, '推广
       )
       if (synced && synced.error) warnings.push(`${extBookId} 回写：${synced.error}`)
       else syncedBooks.add(extBookId)
+      const missingPaths = await awaitChangduLaunchPaths(
+        d,
+        channelId,
+        localBookId,
+        extBookId,
+        pendingByBook.get(extBookId) || [],
+      )
+      if (missingPaths.length) {
+        warnings.push(`${extBookId} 有 ${missingPaths.length} 条启动页还在生成，请稍后再从常读拉取，生成前不要搭建`)
+      }
     }
     if (!createdItems.length) return res.json(fail(400, warnings.join('；') || '创建失败'))
     res.json(

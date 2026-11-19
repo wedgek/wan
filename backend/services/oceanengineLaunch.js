@@ -554,9 +554,13 @@ function assignVideos(books, videos) {
   return { byBook, ambiguous }
 }
 
+function promoPathPending(path) {
+  return /^(changdu|dianzhong):/i.test(String(path || '').trim())
+}
+
 function splitMiniPath(path) {
   const text = String(path || '').trim()
-  if (!text || /^https?:/i.test(text)) return { page: '', query: '' }
+  if (!text || /^https?:/i.test(text) || promoPathPending(text)) return { page: '', query: '' }
   const mark = text.indexOf('?')
   if (mark < 0) return { page: text.replace(/^\//, ''), query: '' }
   return { page: text.slice(0, mark).replace(/^\//, ''), query: text.slice(mark + 1) }
@@ -915,8 +919,9 @@ function mapPromo(row, allow) {
 
 function compactPromo(promo) {
   if (!promo) return null
+  if (promoPathPending(promo.path) || promoPathPending(promo.page)) return null
   const mini = promo.page ? { page: promo.page, query: promo.query } : splitMiniPath(promo.path)
-  if (!mini.page) return null
+  if (!mini.page || promoPathPending(mini.page)) return null
   return {
     id: promo.id,
     path: promo.path,
@@ -1194,7 +1199,8 @@ function buildPreview({ bookName, promos, accounts, accountTotal, selectedTiers,
   const bidPlan = bids.resolve(template && template.bidStrategyId)
   const priceOf = (tier) => bids.bidFor(bidPlan, tier)
   const bookKey = compact(bookName)
-  const promoList = (promos || []).map(compactPromo).filter(Boolean)
+  const promoRows = Array.isArray(promos) ? promos : []
+  const promoList = promoRows.map(compactPromo).filter(Boolean)
   const videoList = (materials || []).slice(0, VIDEO_LIMIT_MAX)
   const conflicts = (ambiguous || []).filter((row) => (row.books || []).some((name) => compact(name) === bookKey || name === bookName))
   const bookMessages = []
@@ -1207,7 +1213,13 @@ function buildPreview({ bookName, promos, accounts, accountTotal, selectedTiers,
     if (bookStatus !== 'block') bookStatus = 'warn'
     bookMessages.push(text)
   }
-  if (!promoList.length) bookBlock('没有对上书名的推广链接')
+  if (!promoList.length) {
+    bookBlock(
+      promoRows.some((item) => promoPathPending(item.path))
+        ? '推广链接的启动页还没生成，请先从常读拉取'
+        : '没有对上书名的推广链接',
+    )
+  }
   if (promoList.length && promoList.every((promo) => !promo.monitor)) bookWarn('没有监测链接')
   if (!videoList.length) {
     bookBlock(conflicts.length ? '视频和别的书重名，没有放进来' : extra.videoNotice || '巨量线上素材库里没有对上这本书的视频')
@@ -1254,6 +1266,7 @@ function buildPreview({ bookName, promos, accounts, accountTotal, selectedTiers,
   for (const tier of selectedTiers) {
     const bid = priceOf(tier)
     const promo = promoList.find((item) => item.tier === tier) || null
+    const tierPromos = promoRows.filter((item) => item.tier === tier)
     const rows = resolvedPool.filter((item) => item.tier === tier)
     const pickedRows = rows.filter((item) => pickedSet.has(idText(item.advertiserId)))
     const messages = []
@@ -1266,7 +1279,13 @@ function buildPreview({ bookName, promos, accounts, accountTotal, selectedTiers,
       if (status !== 'block') status = 'warn'
       messages.push(text)
     }
-    if (!promo) block('没有这一档的推广链接')
+    if (!promo) {
+      block(
+        tierPromos.some((item) => promoPathPending(item.path))
+          ? '这一档的启动页还没生成，请先从常读拉取'
+          : '没有这一档的推广链接',
+      )
+    }
     if (!rows.length) block('没有这一档的在投账户')
     else if (!pickedRows.length) warn('这一档还没勾选账户')
     if (!bid) block('没有这一档的出价规则')
@@ -3152,8 +3171,15 @@ async function executePending(taskId, template, token) {
       writeItem(taskId, { ...base, status: 'fail', message: '这个户没有对应档位的出价' })
       return
     }
-    if (!book.promo || !book.promo.page) {
-      writeItem(taskId, { ...base, status: 'fail', message: '没有对上档位的推广链接' })
+    const promoPage = String((book.promo && (book.promo.page || book.promo.path)) || '')
+    if (!book.promo || !book.promo.page || promoPathPending(promoPage)) {
+      writeItem(taskId, {
+        ...base,
+        status: 'fail',
+        message: promoPathPending(promoPage)
+          ? '推广链接的启动页还没生成，请先从常读拉取后再搭建'
+          : '没有对上档位的推广链接',
+      })
       return
     }
     if (!book.product || !book.product.productId) {

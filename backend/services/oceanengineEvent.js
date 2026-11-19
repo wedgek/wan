@@ -5,6 +5,7 @@
  */
 const db = require('../db')
 const auth = require('./oceanengineAuth')
+const accounts = require('./oceanengineAccount')
 
 const API = 'https://api.oceanengine.com'
 const AD = 'https://ad.oceanengine.com'
@@ -300,7 +301,7 @@ async function listAvailableEvents(advertiserId, assetId) {
   return { list: eventRows(result.data).map(toEvent).filter((row) => row.eventId) }
 }
 
-async function createEvent({ advertiserId, assetId, eventId, trackType }) {
+async function createEvent({ advertiserId, assetId, eventId, trackType, appId, assetName }) {
   const account = requireAdvertiser(advertiserId)
   if (account.error) return account
   const asset = idText(assetId)
@@ -328,6 +329,13 @@ async function createEvent({ advertiserId, assetId, eventId, trackType }) {
   })
   if (result.error) return result
   console.log('[oceanengine] event created', { advertiserId: account.advertiserId, assetId: asset, eventId: event, track })
+  markEventAdded({
+    appId,
+    advertiserId: account.advertiserId,
+    assetId: asset,
+    assetName,
+    eventName: match.name,
+  })
   return { eventId: event, name: match.name, trackType: track }
 }
 
@@ -355,17 +363,51 @@ function miniRows(data) {
   return []
 }
 
+function categoryText(tagInfo) {
+  if (!tagInfo) return ''
+  let data = tagInfo
+  if (typeof tagInfo === 'string') {
+    try {
+      data = JSON.parse(tagInfo)
+    } catch {
+      return ''
+    }
+  }
+  const names = []
+  let node = data
+  while (node && typeof node === 'object') {
+    if (node.category_name) names.push(String(node.category_name))
+    node = Array.isArray(node.categories) ? node.categories[0] : null
+  }
+  return names.filter((item) => item && item !== '小程序').join(' / ')
+}
+
 function toMiniApp(row) {
   return {
     instanceId: idText(row && (row.instance_id || row.micro_app_instance_id)),
     appId: String((row && (row.app_id || row.micro_app_id)) || ''),
     name: String((row && (row.name || row.micro_app_name || row.remark)) || ''),
-    auditStatus: String((row && row.audit_status) || ''),
+    auditStatus: String((row && (row.audit_status || row.status || row.auditStatus)) || ''),
+    remark: String((row && row.remark) || ''),
+    category: categoryText(row && row.tag_info),
+    createTime: String((row && row.create_time) || ''),
+    modifyTime: String((row && row.modify_time) || ''),
+    reason: String((row && row.reason) || ''),
+    ebpAsset: Boolean(row && row.is_ebp_asset),
   }
 }
 
-function pickMiniApp(list) {
+function pickMiniApp(list, target) {
   const accepted = (list || []).filter((item) => item.instanceId && (!item.auditStatus || item.auditStatus === 'AUDIT_ACCEPTED'))
+  const appId = String((target && target.appId) || '').trim()
+  const name = String((target && target.name) || '').trim()
+  if (appId || name) {
+    return (
+      accepted.find((item) => appId && item.appId === appId) ||
+      accepted.find((item) => name && item.name && (item.name === name || item.name.includes(name) || name.includes(item.name))) ||
+      null
+    )
+  }
   return (
     accepted.find((item) => item.appId === TARGET_APP_ID) ||
     accepted.find((item) => item.name.includes(TARGET_APP_NAME)) ||
@@ -373,8 +415,17 @@ function pickMiniApp(list) {
   )
 }
 
-function pickEventAsset(list) {
+function pickEventAsset(list, target) {
   const assets = list || []
+  const appId = String((target && target.appId) || '').trim()
+  const name = String((target && target.name) || '').trim()
+  if (appId || name) {
+    return (
+      assets.find((item) => appId && item.microAppId === appId) ||
+      assets.find((item) => name && String(item.name || '').includes(name)) ||
+      null
+    )
+  }
   return (
     assets.find((item) => item.microAppId === TARGET_APP_ID) ||
     assets.find((item) => String(item.name || '').includes(TARGET_APP_NAME)) ||
@@ -558,14 +609,17 @@ async function ensureEvent(token, account, asset, eventName, createdList, availa
   return { ...base, status: 'added', message: '已添加' }
 }
 
-async function listByteMiniApps(token, advertiserId) {
+async function listByteMiniApps(token, advertiserId, options = {}) {
+  const auditStatus = options.auditStatus === undefined ? 'AUDIT_ACCEPTED' : options.auditStatus
   const map = new Map()
   let lastError = ''
   for (const searchType of ['CREATE_ONLY', 'SHARE_ONLY']) {
+    const filtering = { search_type: searchType }
+    if (auditStatus) filtering.audit_status = auditStatus
     const result = await oceanFetch(token, 'GET', MICRO_APP_LIST, {
       query: {
         advertiser_id: advertiserId,
-        filtering: { audit_status: 'AUDIT_ACCEPTED', search_type: searchType },
+        filtering,
         page: 1,
         page_size: 100,
       },
@@ -609,23 +663,22 @@ async function createMiniEventAsset(token, account, mini) {
   }
   const again = await loadMiniAssets(token, account.advertiserId, false)
   if (again.error) return again
-  const found = pickEventAsset(again.list)
+  const found = pickEventAsset(again.list, mini)
   if (!found) return { error: '事件资产已提交，但没有读到资产 ID' }
   return { asset: found }
 }
 
-async function ensureMiniEventAsset(token, account) {
+async function ensureMiniEventAsset(token, account, target) {
+  const wanted = target && (target.appId || target.name) ? target : { appId: TARGET_APP_ID, name: TARGET_APP_NAME }
+  const label = wanted.name || wanted.appId
   const assets = await loadMiniAssets(token, account.advertiserId, false)
   if (assets.error) return assets
-  const existing = pickEventAsset(assets.list)
+  const existing = pickEventAsset(assets.list, wanted)
   if (existing) return { asset: existing, created: false }
-  if (assets.list.length) return { error: '这个户已有别的小程序事件资产，没有倾心书馆' }
   const apps = await listByteMiniApps(token, account.advertiserId)
   if (apps.error) return apps
-  const mini = pickMiniApp(apps.list)
-  if (!mini) {
-    return { error: '这个户还没有已过审的倾心书馆，请先把小程序共享到这个户' }
-  }
+  const mini = pickMiniApp(apps.list, wanted)
+  if (!mini) return { error: `这个户还没有已过审的「${label}」，请先把小程序共享到这个户` }
   const created = await createMiniEventAsset(token, account, mini)
   if (created.error) return created
   return { asset: created.asset, created: true }
@@ -695,19 +748,179 @@ async function mapLimit(items, limit, worker) {
   return out
 }
 
-async function summarizeOne(token, advertiserId) {
-  const base = { advertiserId, assetId: '', assetName: '', pay: false, roi: false, error: '' }
+function nowText() {
+  const date = new Date()
+  const pad = (value) => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
+function namesJson(names) {
+  const list = []
+  const seen = new Set()
+  for (const item of Array.isArray(names) ? names : []) {
+    const name = String(item || '').trim()
+    if (!name || seen.has(name)) continue
+    seen.add(name)
+    list.push(name)
+  }
+  return JSON.stringify(list)
+}
+
+function parseNames(text) {
+  if (!text) return []
+  try {
+    const data = JSON.parse(text)
+    return Array.isArray(data) ? data.map((item) => String(item || '').trim()).filter(Boolean) : []
+  } catch {
+    return []
+  }
+}
+
+function saveEventSnapshot(appId, row) {
+  const advertiserId = idText(row && row.advertiserId)
+  const app = String(appId || '').trim()
+  if (!advertiserId || !app) return
+  const current = database()
+    .prepare('SELECT asset_names, matched_count FROM oceanengine_event_status WHERE advertiser_id = ? AND app_id = ?')
+    .get(advertiserId, app)
+  const names = Array.isArray(row && row.assetNames) ? namesJson(row.assetNames) : (current && current.asset_names) || '[]'
+  const matchedCount = row && row.matchedCount != null ? Number(row.matchedCount) || 0 : (current && current.matched_count) || 0
+  database()
+    .prepare(
+      `INSERT INTO oceanengine_event_status (
+         advertiser_id, app_id, asset_id, asset_name, asset_names, matched_count, pay, roi, error, synced_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(advertiser_id, app_id) DO UPDATE SET
+         asset_id = excluded.asset_id,
+         asset_name = excluded.asset_name,
+         asset_names = excluded.asset_names,
+         matched_count = excluded.matched_count,
+         pay = excluded.pay,
+         roi = excluded.roi,
+         error = excluded.error,
+         synced_at = excluded.synced_at`,
+    )
+    .run(
+      advertiserId,
+      app,
+      String((row && row.assetId) || ''),
+      String((row && row.assetName) || ''),
+      names,
+      matchedCount,
+      row && row.pay ? 1 : 0,
+      row && row.roi ? 1 : 0,
+      String((row && row.error) || ''),
+      nowText(),
+    )
+}
+
+function mergeEventSnapshot(appId, row) {
+  const advertiserId = idText(row && row.advertiserId)
+  const app = String(appId || '').trim()
+  if (!advertiserId || !app) return
+  const current = database()
+    .prepare(
+      `SELECT asset_id, asset_name, pay, roi, error
+       FROM oceanengine_event_status WHERE advertiser_id = ? AND app_id = ?`,
+    )
+    .get(advertiserId, app)
+  const pay = row.pay == null ? (current ? current.pay : 0) : row.pay ? 1 : 0
+  const roi = row.roi == null ? (current ? current.roi : 0) : row.roi ? 1 : 0
+  saveEventSnapshot(app, {
+    advertiserId,
+    assetId: row.assetId || (current && current.asset_id) || '',
+    assetName: row.assetName || (current && current.asset_name) || '',
+    pay,
+    roi,
+    error: row.error == null ? (current && current.error) || '' : row.error,
+  })
+}
+
+function markEventAdded({ appId, advertiserId, assetId, assetName, eventName }) {
+  const event = normalizeEventName(eventName)
+  if (event !== '付费' && event !== '付费ROI') return
+  mergeEventSnapshot(appId, {
+    advertiserId,
+    assetId,
+    assetName,
+    pay: event === '付费' ? 1 : null,
+    roi: event === '付费ROI' ? 1 : null,
+    error: '',
+  })
+}
+
+function rememberBatchEvents(appId, results) {
+  const grouped = new Map()
+  for (const row of results || []) {
+    const advertiserId = idText(row && row.advertiserId)
+    if (!advertiserId) continue
+    const item = grouped.get(advertiserId) || {
+      advertiserId,
+      assetId: '',
+      assetName: '',
+      pay: null,
+      roi: null,
+      error: '',
+      ok: false,
+    }
+    if (row.assetId) item.assetId = String(row.assetId)
+    if (row.assetName && row.assetName !== '—') item.assetName = String(row.assetName)
+    const eventName = normalizeEventName(row.eventName)
+    if (row.status === 'added' || row.status === 'skip') {
+      item.ok = true
+      if (eventName === '付费') item.pay = 1
+      if (eventName === '付费ROI') item.roi = 1
+    } else if (row.status === 'fail' && !item.error) {
+      item.error = String(row.message || '添加失败')
+    }
+    grouped.set(advertiserId, item)
+  }
+  for (const item of grouped.values()) {
+    mergeEventSnapshot(appId, {
+      advertiserId: item.advertiserId,
+      assetId: item.assetId,
+      assetName: item.assetName,
+      pay: item.pay,
+      roi: item.roi,
+      error: item.ok || item.assetId ? '' : item.error,
+    })
+  }
+}
+
+function assetNameList(list) {
+  const names = []
+  const seen = new Set()
+  for (const item of list || []) {
+    const name = String((item && item.name) || '').trim()
+    if (!name || seen.has(name)) continue
+    seen.add(name)
+    names.push(name)
+  }
+  return names
+}
+
+function matchedAssets(list, target) {
+  const name = String((target && target.name) || '').trim()
+  const appId = String((target && target.appId) || '').trim()
+  return (list || []).filter((item) => {
+    if (appId && item.microAppId === appId) return true
+    return !!(name && String(item.name || '').includes(name))
+  })
+}
+
+async function summarizeOne(token, advertiserId, target) {
+  const base = { advertiserId, assetId: '', assetName: '', assetNames: [], matchedCount: 0, pay: false, roi: false, error: '' }
   const assets = await loadMiniAssets(token, advertiserId, false)
   if (assets.error) return { ...base, error: assets.error }
-  const asset = pickEventAsset(assets.list)
-  if (!asset) {
-    if (assets.list.length) return { ...base, error: '没有倾心书馆事件资产' }
-    return base
-  }
+  const names = assetNameList(assets.list)
+  const matched = matchedAssets(assets.list, target)
+  const asset = pickEventAsset(matched.length ? matched : [], target) || (matched.length ? matched[0] : null)
+  const found = { ...base, assetNames: names, matchedCount: matched.length }
+  if (!asset) return found
   const created = await eventFetch(token, 'GET', EVENT_CONFIGS, {
     query: { advertiser_id: advertiserId, asset_id: asset.assetId, sort_type: 'DESC' },
   })
-  const named = { ...base, assetId: asset.assetId, assetName: asset.name || asset.assetId }
+  const named = { ...found, assetId: asset.assetId, assetName: asset.name || asset.assetId }
   if (created.error) return { ...named, error: created.error }
   const events = eventRows(created.data).map(toEvent)
   return {
@@ -717,7 +930,14 @@ async function summarizeOne(token, advertiserId) {
   }
 }
 
-async function summarizeAccountEvents(advertiserIds) {
+function readTarget(input) {
+  const appId = String((input && input.appId) || '').trim()
+  const name = String((input && input.name) || '').trim()
+  if (!appId) return { error: '请选择小程序' }
+  return { appId, name }
+}
+
+async function summarizeAccountEvents(advertiserIds, target) {
   const ids = []
   const seen = new Set()
   for (const raw of Array.isArray(advertiserIds) ? advertiserIds : []) {
@@ -728,18 +948,230 @@ async function summarizeAccountEvents(advertiserIds) {
   }
   if (!ids.length) return { error: '请选择账户' }
   if (ids.length > STATUS_LIMIT) return { error: `一次最多查询 ${STATUS_LIMIT} 个账户的事件` }
+  const wanted = readTarget(target)
+  if (wanted.error) return wanted
   const token = await tokenOrError()
   if (token.error) return token
-  const list = await mapLimit(ids, 3, (id) => summarizeOne(token.token, id))
+  const list = await mapLimit(ids, 3, (id) => summarizeOne(token.token, id, wanted))
   return { list }
 }
 
-async function batchAddEvents({ text, eventNames, advertiserIds } = {}) {
+const SYNC_LIMIT = 10
+
+function listSyncAdvertiserIds(copyright) {
+  const name = String(copyright || '').trim()
+  if (!name) return { error: '请选择版权方' }
+  const page = accounts.listSortedUsingIds(name)
+  return { advertiserIds: page.advertiserIds || [], total: page.total || 0 }
+}
+
+function readLocalEventStatus(advertiserIds, appId) {
+  const app = String(appId || '').trim()
+  if (!app) return { error: '请选择小程序' }
+  const ids = []
+  const seen = new Set()
+  for (const raw of Array.isArray(advertiserIds) ? advertiserIds : []) {
+    const id = idText(raw)
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    ids.push(id)
+  }
+  const map = new Map()
+  for (let i = 0; i < ids.length; i += 400) {
+    const chunk = ids.slice(i, i + 400)
+    if (!chunk.length) continue
+    const marks = chunk.map(() => '?').join(',')
+    const rows = database()
+      .prepare(
+        `SELECT advertiser_id, asset_id, asset_name, asset_names, matched_count, pay, roi, error, synced_at
+         FROM oceanengine_event_status
+         WHERE app_id = ? AND advertiser_id IN (${marks})`,
+      )
+      .all(app, ...chunk)
+    for (const row of rows) map.set(row.advertiser_id, row)
+  }
+  return {
+    list: ids.map((id) => {
+      const hit = map.get(id)
+      if (!hit) return { advertiserId: id, synced: false, assetId: '', assetName: '', assetNames: [], matchedCount: 0, pay: false, roi: false, error: '', syncedAt: '' }
+      return {
+        advertiserId: id,
+        synced: true,
+        assetId: hit.asset_id || '',
+        assetName: hit.asset_name || '',
+        assetNames: parseNames(hit.asset_names),
+        matchedCount: Number(hit.matched_count) || 0,
+        pay: !!Number(hit.pay),
+        roi: !!Number(hit.roi),
+        error: hit.error || '',
+        syncedAt: hit.synced_at || '',
+      }
+    }),
+  }
+}
+
+let syncJob = null
+
+function syncJobView() {
+  if (!syncJob) {
+    return { running: false, done: 0, total: 0, failed: 0, stopped: false, stopRequested: false, copyright: '', appId: '', name: '', error: '', active: [] }
+  }
+  return {
+    running: !!syncJob.running,
+    done: syncJob.done,
+    total: syncJob.total,
+    failed: syncJob.failed,
+    stopped: !!syncJob.stopped,
+    stopRequested: !!syncJob.stopRequested,
+    copyright: syncJob.copyright,
+    appId: syncJob.appId,
+    name: syncJob.name,
+    error: syncJob.error || '',
+    active: [...syncJob.active],
+  }
+}
+
+async function runSyncJob(ids, wanted) {
+  const token = await tokenOrError()
+  if (token.error) {
+    syncJob.running = false
+    syncJob.error = token.error
+    return
+  }
+  let next = 0
+  const worker = async () => {
+    while (next < ids.length) {
+      if (syncJob.stopRequested) return
+      const index = next
+      next += 1
+      const advertiserId = ids[index]
+      syncJob.active.add(advertiserId)
+      try {
+        const result = await summarizeOneSaved(token.token, advertiserId, wanted)
+        if (result && result.error) syncJob.failed += 1
+      } catch (e) {
+        syncJob.failed += 1
+        console.error('[oceanengine] event sync one', advertiserId, e.message)
+      } finally {
+        syncJob.active.delete(advertiserId)
+        syncJob.done += 1
+      }
+    }
+  }
+  await Promise.all([worker(), worker()])
+  syncJob.running = false
+  syncJob.stopped = !!syncJob.stopRequested
+  syncJob.active.clear()
+  console.log('[oceanengine] event sync job', {
+    done: syncJob.done,
+    total: syncJob.total,
+    failed: syncJob.failed,
+    stopped: syncJob.stopped,
+    appId: wanted.appId,
+  })
+}
+
+function startSyncJob({ copyright, appId, name, advertiserIds } = {}) {
+  if (syncJob && syncJob.running) return syncJobView()
+  const wanted = readTarget({ appId, name })
+  if (wanted.error) return wanted
+  const picked = []
+  const seen = new Set()
+  for (const raw of Array.isArray(advertiserIds) ? advertiserIds : []) {
+    const id = idText(raw)
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    picked.push(id)
+  }
+  const ids = picked.length ? picked : null
+  const listed = ids ? null : listSyncAdvertiserIds(copyright)
+  if (listed && listed.error) return listed
+  const queue = ids || (listed && listed.advertiserIds) || []
+  if (!queue.length) return { error: picked.length ? '请选择账户' : '当前版权方下没有正在使用的账户' }
+  syncJob = {
+    running: true,
+    stopped: false,
+    stopRequested: false,
+    done: 0,
+    failed: 0,
+    total: queue.length,
+    copyright: String(copyright || '').trim(),
+    appId: wanted.appId,
+    name: wanted.name,
+    error: '',
+    active: new Set(),
+  }
+  runSyncJob(queue, wanted).catch((e) => {
+    console.error('[oceanengine] event sync job', e)
+    if (!syncJob) return
+    syncJob.running = false
+    syncJob.error = e.message || '同步失败'
+    syncJob.active.clear()
+  })
+  return syncJobView()
+}
+
+function stopSyncJob() {
+  if (!syncJob || !syncJob.running) return { error: '没有正在进行的同步' }
+  syncJob.stopRequested = true
+  return syncJobView()
+}
+
+async function summarizeOneSaved(token, advertiserId, target) {
+  await sleep(300)
+  let result = await summarizeOne(token, advertiserId, target)
+  for (let attempt = 0; attempt < 3 && result.error && rateLimited(result.error); attempt += 1) {
+    await sleep(2000 * (attempt + 1))
+    result = await summarizeOne(token, advertiserId, target)
+  }
+  saveSyncedResult(target.appId, result)
+  return result
+}
+
+function saveSyncedResult(appId, row) {
+  if (row && row.error) {
+    const advertiserId = idText(row.advertiserId)
+    const app = String(appId || '').trim()
+    const current = advertiserId && app
+      ? database()
+          .prepare(
+            `SELECT error FROM oceanengine_event_status WHERE advertiser_id = ? AND app_id = ?`,
+          )
+          .get(advertiserId, app)
+      : null
+    if (current && !current.error) return
+  }
+  saveEventSnapshot(appId, row)
+}
+
+async function syncAccountEvents(advertiserIds, target) {
+  const ids = []
+  const seen = new Set()
+  for (const raw of Array.isArray(advertiserIds) ? advertiserIds : []) {
+    const id = idText(raw)
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    ids.push(id)
+  }
+  if (!ids.length) return { error: '请选择账户' }
+  if (ids.length > SYNC_LIMIT) return { error: `一次最多同步 ${SYNC_LIMIT} 个账户` }
+  const wanted = readTarget(target)
+  if (wanted.error) return wanted
+  const token = await tokenOrError()
+  if (token.error) return token
+  const list = await mapLimit(ids, 2, (id) => summarizeOneSaved(token.token, id, wanted))
+  console.log('[oceanengine] event sync', { count: list.length, appId: wanted.appId })
+  return { list }
+}
+
+async function batchAddEvents({ text, eventNames, advertiserIds, appId, name } = {}) {
   const names = (Array.isArray(eventNames) ? eventNames : BATCH_EVENT_NAMES)
-    .map((name) => normalizeEventName(name))
-    .filter((name) => BATCH_EVENT_NAMES.includes(name))
-  const picked = BATCH_EVENT_NAMES.filter((name) => names.includes(name))
+    .map((item) => normalizeEventName(item))
+    .filter((item) => BATCH_EVENT_NAMES.includes(item))
+  const picked = BATCH_EVENT_NAMES.filter((item) => names.includes(item))
   if (!picked.length) return { error: '请至少选择付费或付费ROI' }
+  const wanted = readTarget({ appId, name })
+  if (wanted.error) return wanted
   const direct = (Array.isArray(advertiserIds) ? advertiserIds : []).map((id) => idText(id)).filter(Boolean)
   const resolved = direct.length ? resolveAccountLines(direct.join('\n')) : resolveAccountLines(text)
   if (resolved.error) return resolved
@@ -753,7 +1185,7 @@ async function batchAddEvents({ text, eventNames, advertiserIds } = {}) {
   let stopped = ''
   for (const account of resolved.accounts) {
     if (stopped) break
-    const ready = await ensureMiniEventAsset(token.token, account)
+    const ready = await ensureMiniEventAsset(token.token, account, wanted)
     if (ready.error) {
       results.push(resultRow(account, { message: ready.error }))
       if (fatalEventError(ready.error)) stopped = ready.error
@@ -762,7 +1194,7 @@ async function batchAddEvents({ text, eventNames, advertiserIds } = {}) {
     if (ready.created) {
       results.push(resultRow(account, {
         assetId: ready.asset.assetId,
-        assetName: ready.asset.name || TARGET_APP_NAME,
+        assetName: ready.asset.name || wanted.name,
         eventName: '事件资产',
         status: 'added',
         message: '已新建小程序事件资产',
@@ -770,7 +1202,8 @@ async function batchAddEvents({ text, eventNames, advertiserIds } = {}) {
     }
     stopped = await addEventsInOrder(token.token, account, ready.asset, picked, results)
   }
-  console.log('[oceanengine] batch events', { accounts: resolved.accounts.length, stopped: !!stopped })
+  rememberBatchEvents(wanted.appId, results)
+  console.log('[oceanengine] batch events', { accounts: resolved.accounts.length, appId: wanted.appId, stopped: !!stopped })
   return summarize(results, { stopped })
 }
 
@@ -783,6 +1216,12 @@ module.exports = {
   createEvent,
   batchAddEvents,
   summarizeAccountEvents,
+  listSyncAdvertiserIds,
+  readLocalEventStatus,
+  startSyncJob,
+  stopSyncJob,
+  syncJobView,
+  syncAccountEvents,
   stringifyOcean,
   queryParam,
   toAsset,

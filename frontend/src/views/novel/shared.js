@@ -119,6 +119,35 @@ export const COPYRIGHT_OPTIONS = [
   { value: "changdu", label: "番茄" },
 ]
 
+const COPYRIGHT_STORAGE_KEY = "novel.copyright"
+
+export function readCopyright(fallback = "点众") {
+  try {
+    const value = localStorage.getItem(COPYRIGHT_STORAGE_KEY)
+    if (value === "点众" || value === "番茄") return value
+  } catch {
+    /* 浏览器禁止本地存储时用默认版权方 */
+  }
+  return fallback
+}
+
+export function writeCopyright(value) {
+  if (value !== "点众" && value !== "番茄") return
+  try {
+    localStorage.setItem(COPYRIGHT_STORAGE_KEY, value)
+  } catch {
+    /* 忽略写入失败 */
+  }
+}
+
+export function copyrightSource(name) {
+  return name === "番茄" ? "changdu" : "dianzhong"
+}
+
+export function sourceCopyright(source) {
+  return source === "changdu" ? "番茄" : "点众"
+}
+
 export const PROMO_NAME_PREFIX = "点众-倾心书馆-公共配置"
 export const CHANGDU_PROMO_NAME_PREFIX = "番茄-迷机小说-公共配置"
 

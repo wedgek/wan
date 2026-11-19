@@ -34,7 +34,7 @@ export const shortcuts = [
 export const pagination = {
   currentPage: 1,
   pageSize: 20,
-  pageSizes: [10, 20, 50, 100],
+  pageSizes: [10, 20, 50, 100, 200],
   layout: 'total, sizes, prev, pager, next, jumper',
   total: 0,
 }

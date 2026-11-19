@@ -380,7 +380,7 @@ function rowToBatch(r) {
 
 function pageParams(query) {
   const pageNo = Math.max(1, parseInt(query.pageNo, 10) || 1)
-  const pageSize = Math.min(100, Math.max(1, parseInt(query.pageSize, 10) || 20))
+  const pageSize = Math.min(200, Math.max(1, parseInt(query.pageSize, 10) || 20))
   return { pageNo, pageSize, offset: (pageNo - 1) * pageSize }
 }
 
@@ -1004,15 +1004,14 @@ function upsertDianzhongReferral(d, item, fallbackBookId, fallbackChannel, sourc
   ).trim()
   const url = path || (referralId ? `${src}:${referralId}` : '') || monitor2 || monitor1
   if (!url) return { error: '缺少 path' }
-  const bookId = fallbackBookId || findOrCreateBookByExternal(d, extBookId, '', bookTitle)
+  const byRef = referralId
+    ? d.prepare('SELECT id, book_id FROM novel_promo_links WHERE referral_id = ? AND source = ?').get(referralId, src)
+    : null
+  const bookId = fallbackBookId || findOrCreateBookByExternal(d, extBookId, '', bookTitle) || (byRef && byRef.book_id)
   if (!bookId) return { error: '找不到对应书籍' }
   if (!applyRemoteBookTitle(d, bookId, bookTitle)) {
     d.prepare(`UPDATE novel_books SET last_seen_at = datetime('now') WHERE id = ?`).run(bookId)
   }
-
-  const byRef = referralId
-    ? d.prepare('SELECT id FROM novel_promo_links WHERE referral_id = ? AND source = ?').get(referralId, src)
-    : null
   const payload = {
     name,
     url,
@@ -1225,7 +1224,14 @@ async function syncChangduReferralsFromRemote(d, input, fallbackBookId) {
   const rows = []
   const maxPages = 50
   while (page <= maxPages) {
-    const remote = await changdu.listReferrals({ ...input, channelId, appId: channelId, page, size })
+    const remote = await changdu.listReferrals({
+      ...input,
+      channelId,
+      appId: channelId,
+      page,
+      size,
+      distributorId: input.distributorId,
+    })
     if (remote.error) return remote
     const items = changdu
       .pickRemoteList(remote.data)
@@ -1246,13 +1252,13 @@ async function syncChangduReferralsFromRemote(d, input, fallbackBookId) {
   return { upserted, created, total, list: rows, channelId }
 }
 
-async function syncChangduBookReferralsWithRetry(d, extBookId, channelId, localBookId, minCount) {
+async function syncChangduBookReferralsWithRetry(d, extBookId, channelId, localBookId, minCount, distributorId) {
   let synced
   const need = Math.max(1, Number(minCount) || 1)
   for (let i = 0; i < 5; i += 1) {
     synced = await syncChangduReferralsFromRemote(
       d,
-      { bookId: extBookId, size: 100, channelId },
+      { bookId: extBookId, size: 100, channelId, distributorId },
       localBookId,
     )
     if (synced.error) return synced
@@ -1380,11 +1386,30 @@ function findDupRechargeBatch(d, batchId, excludeId, source) {
 function upsertRemoteRechargeTemplate(d, item, channelId, source = 'dianzhong') {
   const src = promoSourceOf(source)
   const batchId = String(
-    pickField(item, ['id', 'batchId', 'batch_id', 'iaa_config_id', 'iaaConfigId', 'iaa_id', 'config_id', 'panel_id']) ||
-      '',
+    pickField(item, [
+      'recharge_template_id',
+      'rechargeTemplateId',
+      'id',
+      'batchId',
+      'batch_id',
+      'iaa_config_id',
+      'iaaConfigId',
+      'iaa_id',
+      'config_id',
+      'panel_id',
+    ]) || '',
   ).trim()
   const name = String(
-    pickField(item, ['name', 'title', 'goodsName', 'iaa_name', 'config_name', 'panel_name']) || '',
+    pickField(item, [
+      'recharge_template_name',
+      'rechargeTemplateName',
+      'name',
+      'title',
+      'goodsName',
+      'iaa_name',
+      'config_name',
+      'panel_name',
+    ]) || '',
   ).trim()
   if (!batchId || !name) return { skipped: true }
   const creator = String(pickField(item, ['creator', 'createUser', 'username', 'userName']) || '').trim()
@@ -1755,48 +1780,51 @@ router.post('/recharge-templates/changdu/refresh', requirePerm(PERM.promo, '充�
     const ready = changdu.assertConfig()
     if (ready.error) return res.json(fail(400, ready.error))
     const one = String((req.body && req.body.channelId) || '').trim()
-    const targets = one ? ready.cfg.apps.filter((c) => c.id === one) : ready.cfg.apps
-    if (!targets.length) return res.json(fail(400, '应用不在已配置列表中'))
+    if (one && !ready.cfg.apps.some((c) => c.id === one)) return res.json(fail(400, '应用不在已配置列表中'))
+    const remote = await changdu.listPayPanels({ appId: one })
+    if (remote.error) return res.json(fail(400, remote.error))
     const d = database()
     let upserted = 0
     let created = 0
     let disabled = 0
-    const warnings = []
-    for (const ch of targets) {
-      const remote = await changdu.listPayPanels({ appId: ch.id, channelId: ch.id })
-      if (remote.error) {
-        warnings.push(`${ch.label}：${remote.error}`)
-        continue
-      }
-      const items = remote.data || []
-      if (!items.length) continue
-      const seen = new Set()
-      for (const item of items) {
-        const r = upsertRemoteRechargeTemplate(d, item, ch.id, 'changdu')
-        if (r.skipped) continue
-        const batchId = String(
-          pickField(item, ['id', 'batchId', 'batch_id', 'iaa_config_id', 'iaaConfigId', 'iaa_id', 'config_id']) || '',
-        ).trim()
-        if (batchId) seen.add(batchId)
-        upserted += 1
-        if (r.created) created += 1
-      }
+    const items = remote.data || []
+    const seenByChannel = new Map()
+    for (const item of items) {
+      const channelId = one || String(item.app_id || '').trim()
+      const r = upsertRemoteRechargeTemplate(d, item, channelId, 'changdu')
+      if (r.skipped) continue
+      const batchId = String(
+        pickField(item, [
+          'recharge_template_id',
+          'rechargeTemplateId',
+          'id',
+          'batchId',
+          'batch_id',
+          'iaa_config_id',
+          'iaaConfigId',
+          'iaa_id',
+          'config_id',
+        ]) || '',
+      ).trim()
+      if (!seenByChannel.has(channelId)) seenByChannel.set(channelId, new Set())
+      if (batchId) seenByChannel.get(channelId).add(batchId)
+      upserted += 1
+      if (r.created) created += 1
+    }
+    for (const [channelId, seen] of seenByChannel) {
       const locals = d
         .prepare(
           `SELECT id, batch_id, locked, enabled FROM novel_recharge_templates
            WHERE channel_id = ? AND source = 'changdu' AND batch_id != ''`,
         )
-        .all(ch.id)
+        .all(channelId)
       for (const row of locals) {
         if (seen.has(String(row.batch_id)) || Number(row.locked) === 1 || Number(row.enabled) !== 1) continue
-        d.prepare(
-          `UPDATE novel_recharge_templates SET enabled = 0, updated_at = datetime('now') WHERE id = ?`,
-        ).run(row.id)
+        d.prepare(`UPDATE novel_recharge_templates SET enabled = 0, updated_at = datetime('now') WHERE id = ?`).run(row.id)
         disabled += 1
       }
     }
-    if (warnings.length && !upserted) return res.json(fail(400, warnings.join('；')))
-    res.json(ok({ upserted, created, disabled, warnings }))
+    res.json(ok({ upserted, created, disabled, warnings: remote.warnings || [] }))
   } catch (e) {
     console.error('[novel] recharge templates changdu refresh', e.message)
     res.json(fail(500, '从常读拉取付费面板失败'))
@@ -2101,8 +2129,10 @@ router.post('/promo-links/changdu/create', requirePerm(PERM.promo, '推广链接
     }
     const createdItems = []
     const warnings = []
+    const mapped = batchId ? await changdu.templateDistributorMap(channelId) : { data: {} }
+    const distributorId = batchId && mapped.data ? mapped.data[batchId] : ''
     for (let i = 0; i < count; i += 1) {
-      const name = count === 1 ? baseName : `${baseName}-${i + 1}`.slice(0, 60)
+      const name = changdu.legalPromoName(count === 1 ? baseName : `${baseName}-${i + 1}`)
       const created = await changdu.createReferral({
         bookId: book.external_book_id,
         name,
@@ -2112,6 +2142,7 @@ router.post('/promo-links/changdu/create', requirePerm(PERM.promo, '推广链接
         appId: channelId,
         batchId,
         callbackConfigId: body.callbackConfigId,
+        distributorId,
       })
       if (created.error) {
         warnings.push(`${name}：${created.error}`)
@@ -2188,11 +2219,16 @@ router.post('/promo-links/changdu/batch-create', requirePerm(PERM.promo, '推广
     const createdItems = []
     const warnings = []
     const syncedBooks = new Set()
+    const mapped = await changdu.templateDistributorMap(channelId)
+    const distMap = mapped.data || {}
     for (const extBookId of bookIds) {
       const localBookId = findOrCreateBookByExternal(d, extBookId, '', '')
       let createdForBook = 0
+      let bookDistributorId = ''
       for (const tpl of templates) {
-        const name = changdu.publicConfigPromoName(tpl.name)
+        const app = changdu.findChannel(channelId)
+        const name = changdu.publicConfigPromoName(tpl.name, app && app.label)
+        const distributorId = distMap[String(tpl.batch_id)] || ''
         const created = await changdu.createReferral({
           bookId: extBookId,
           name,
@@ -2201,6 +2237,7 @@ router.post('/promo-links/changdu/batch-create', requirePerm(PERM.promo, '推广
           channelId,
           appId: channelId,
           batchId: tpl.batch_id,
+          distributorId,
         })
         if (created.error) {
           warnings.push(`${extBookId} / ${tpl.name}：${created.error}`)
@@ -2208,6 +2245,7 @@ router.post('/promo-links/changdu/batch-create', requirePerm(PERM.promo, '推广
         }
         createdItems.push(created.data)
         createdForBook += 1
+        if (!bookDistributorId && distributorId) bookDistributorId = distributorId
         upsertDianzhongReferral(
           d,
           changdu.normalizePromotionItem(created.data, {
@@ -2230,6 +2268,7 @@ router.post('/promo-links/changdu/batch-create', requirePerm(PERM.promo, '推广
         channelId,
         localBookId,
         createdForBook,
+        bookDistributorId,
       )
       if (synced && synced.error) warnings.push(`${extBookId} 回写：${synced.error}`)
       else syncedBooks.add(extBookId)
@@ -2274,26 +2313,42 @@ router.post('/promo-links/changdu/refresh', requirePerm(PERM.promo, '推广链�
     let total = 0
     const warnings = []
     for (const ch of targets) {
-      const synced = await syncChangduReferralsFromRemote(
-        d,
-        {
-          bookId: remoteBookId,
-          referralId: body.referralId,
-          startTime: body.startTime,
-          endTime: body.endTime,
-          size: body.size,
-          channelId: ch.id,
-          appId: ch.id,
-        },
-        fallbackBookId || undefined,
-      )
-      if (synced.error) {
-        warnings.push(`${ch.label}：${synced.error}`)
+      const bound = await changdu.listBoundChannels(ch.id)
+      if (bound.error) {
+        warnings.push(`${ch.label}：${bound.error}`)
         continue
       }
-      upserted += synced.upserted
-      created += synced.created
-      total += synced.total
+      const distributorIds = []
+      const seenDist = new Set()
+      for (const row of bound.data || []) {
+        const distributorId = String(row.distributor_id || '').trim()
+        if (!distributorId || seenDist.has(distributorId)) continue
+        seenDist.add(distributorId)
+        distributorIds.push(distributorId)
+      }
+      for (const distributorId of distributorIds) {
+        const synced = await syncChangduReferralsFromRemote(
+          d,
+          {
+            bookId: remoteBookId,
+            referralId: body.referralId,
+            startTime: body.startTime,
+            endTime: body.endTime,
+            size: body.size,
+            channelId: ch.id,
+            appId: ch.id,
+            distributorId,
+          },
+          fallbackBookId || undefined,
+        )
+        if (synced.error) {
+          warnings.push(`${ch.label}：${synced.error}`)
+          continue
+        }
+        upserted += synced.upserted
+        created += synced.created
+        total += synced.total
+      }
     }
     if (warnings.length && !upserted) return res.json(fail(400, warnings.join('；')))
     res.json(ok({ upserted, created, total, warnings }))

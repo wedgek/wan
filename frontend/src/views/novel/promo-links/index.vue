@@ -142,7 +142,18 @@ import { useTable } from "@/hooks/useTable"
 import CzPagination from "@/components/cz-pagination/index.vue"
 import request from "@/request"
 import PromoBatchCreateDialog from "../components/promo-batch-create-dialog.vue"
-import { COPYRIGHT_OPTIONS, channelLabel, copyText, fmtNum, fmtPct, mediaSourceLabel } from "../shared"
+import {
+  COPYRIGHT_OPTIONS,
+  channelLabel,
+  copyText,
+  copyrightSource,
+  fmtNum,
+  fmtPct,
+  mediaSourceLabel,
+  readCopyright,
+  sourceCopyright,
+  writeCopyright,
+} from "../shared"
 
 const createRange = ref([])
 const batchVisible = ref(false)
@@ -151,7 +162,7 @@ const channels = ref([])
 
 const defaultTableParams = () => ({
   keyword: "",
-  source: "dianzhong",
+  source: copyrightSource(readCopyright()),
   channel: "",
   startTime: "",
   endTime: "",
@@ -196,6 +207,7 @@ async function loadChannels() {
 }
 
 function onSourceChange() {
+  writeCopyright(sourceCopyright(tableParams.source))
   tableParams.channel = ""
   loadChannels()
   tableParams.pageNo = 1

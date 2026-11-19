@@ -1,24 +1,9 @@
 <template>
   <div class="event-panel">
-    <section class="module">
-      <el-input
-        v-model="batchText"
-        type="textarea"
-        :rows="3"
-        placeholder="一行一个，可以是账户 ID，也可以是账户名称"
-      />
-      <div class="module-actions">
-        <el-button type="primary" :loading="pasteBatching" @click="addPasted">添加事件</el-button>
-        <el-tag type="primary" effect="plain">付费</el-tag>
-        <el-tag type="primary" effect="plain">付费ROI</el-tag>
-        <el-progress v-if="pasteBatching" class="side-progress" :percentage="pastePercent" :stroke-width="8" :show-text="false" />
-        <span v-if="pasteProgress" class="hint inline">{{ pasteProgress }}</span>
-        <span class="actions-spacer" />
-        <el-button :icon="$icons.Search" @click="lookupVisible = true">查询线上账户</el-button>
-      </div>
-    </section>
-
-    <section class="module list-module">
+    <el-tabs v-model="tableParams.copyright" class="copyright-tabs" @tab-change="onCopyrightTab">
+      <el-tab-pane v-for="item in copyrightTabs" :key="item.name" :name="item.name" :label="item.label" />
+    </el-tabs>
+    <section class="list-module">
       <div class="page-filter-box filter-bar">
         <div class="page-filter-left filters-wrap">
           <el-input
@@ -29,29 +14,36 @@
             clear-icon="Close"
             @keyup.enter="searchUsing"
           />
-          <el-select v-model="tableParams.copyright" placeholder="版权方" class="filter-select-sm" clearable clear-icon="Close">
-            <el-option v-for="item in copyrights" :key="item" :label="item" :value="item" />
-          </el-select>
           <el-select v-model="tableParams.subject" placeholder="主体" class="filter-select-sm" clearable clear-icon="Close" filterable>
             <el-option v-for="item in subjects" :key="item" :label="item" :value="item" />
+          </el-select>
+          <el-select v-model="tableParams.assetStatus" placeholder="状态" class="filter-select-status" clearable clear-icon="Close" @change="searchUsing">
+            <el-option v-for="item in assetStatusOptions" :key="item.value" :label="item.label" :value="item.value" />
+          </el-select>
+          <el-select v-model="miniAppId" placeholder="小程序" class="filter-select-batch" filterable @change="onMiniAppChange">
+            <el-option v-for="item in visibleMiniApps" :key="item.appId" :label="miniLabel(item)" :value="item.appId" />
           </el-select>
           <el-button type="primary" @click="searchUsing">查询</el-button>
           <el-button @click="resetUsing">重置</el-button>
         </div>
         <div class="page-filter-right list-side">
-          <el-checkbox v-model="onlyMissing" @change="onOnlyMissing">只看未绑定资产</el-checkbox>
           <span v-if="selectedRows.length" class="using-count">已选 {{ selectedRows.length }}</span>
-          <el-button type="primary" :loading="selectBatching" @click="addSelected">批量添加事件</el-button>
+          <el-button type="primary" :loading="selectBatching" :disabled="syncing || !selectedRows.length" @click="openAddDialog">批量添加事件</el-button>
           <el-progress v-if="selectBatching" class="side-progress" :percentage="selectPercent" :stroke-width="8" :show-text="false" />
           <span v-if="selectProgress" class="using-count">{{ selectProgress }}</span>
+          <el-button v-if="syncing" :loading="stopping" @click="stopSync">{{ stopping ? "正在停止" : "停止同步" }}</el-button>
+          <el-button v-else :icon="$icons.Refresh" :disabled="selectBatching" @click="syncAll">从巨量同步</el-button>
+          <el-progress v-if="syncing" class="side-progress" :percentage="syncPercent" :stroke-width="8" :show-text="false" />
+          <span v-if="syncing && syncProgress" class="using-count">{{ syncProgress }}</span>
         </div>
       </div>
+      <p v-if="!miniAppId" class="hint">先选小程序。付费和付费ROI按这个小程序的事件资产统计，添加事件也只补这一份。</p>
       <p v-if="authReady && !authorized" class="hint">请先在「授权」里完成巨量授权，才能读取和添加事件。</p>
 
     <div class="page-table-box">
       <el-table
         ref="tableRef"
-        :data="shownRows"
+        :data="tableData"
         v-loading="tableLoading"
         border
         height="100%"
@@ -70,9 +62,6 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="版权方" width="100" align="center">
-          <template #default="{ row }">{{ row.copyrightOwner || "—" }}</template>
-        </el-table-column>
         <el-table-column label="主体" width="110" align="center" show-overflow-tooltip>
           <template #default="{ row }">{{ row.subject || "—" }}</template>
         </el-table-column>
@@ -83,9 +72,10 @@
         </el-table-column>
         <el-table-column label="事件资产" min-width="140" show-overflow-tooltip>
           <template #default="{ row }">
-            <span v-if="statusOf(row).loading" class="evt wait">读取中</span>
+            <span v-if="statusOf(row).syncing" class="evt wait">同步中</span>
+            <span v-else-if="statusOf(row).pending" class="evt wait">未同步</span>
             <span v-else-if="statusOf(row).error" class="evt bad" :title="statusOf(row).error">{{ statusOf(row).error }}</span>
-            <span v-else>{{ statusOf(row).assetName || "无资产" }}</span>
+            <span v-else :class="{ 'evt miss': statusOf(row).foreign }" :title="assetTitle(row)">{{ assetText(row) }}</span>
           </template>
         </el-table-column>
         <el-table-column label="付费" width="90" align="center">
@@ -205,39 +195,45 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="lookupVisible" title="查询线上账户" width="820px">
-      <p class="lookup-note">按账户 ID 或名称查巨量上的户有没有绑定事件资产。正在使用的户、还没导入的户都可以。</p>
-      <div class="lookup-bar">
-        <el-input
-          v-model="lookupText"
-          type="textarea"
-          :rows="4"
-          placeholder="账户 ID 或名称，多个用换行或逗号分开"
-        />
-        <el-button type="primary" :icon="$icons.Search" :loading="lookupLoading" @click="runLookup">查询</el-button>
+    <el-dialog v-model="addBatchVisible" title="批量添加事件" width="760px" :close-on-click-modal="!selectBatching" :close-on-press-escape="!selectBatching">
+      <div class="add-batch-field">
+        <span class="field-label">小程序</span>
+        <el-select v-model="miniAppId" placeholder="小程序" class="field-control" filterable :disabled="selectBatching" @change="onMiniAppChange">
+          <el-option v-for="item in visibleMiniApps" :key="item.appId" :label="miniLabel(item)" :value="item.appId" />
+        </el-select>
       </div>
-      <el-table :data="lookupRows" v-loading="lookupLoading" border class="lookup-table" max-height="320" :empty-text="lookupEmpty">
-        <el-table-column label="账户" min-width="220" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.name ? `${row.name}（${row.advertiserId || "—"}）` : row.advertiserId || "—" }}</template>
+      <div class="add-batch-field">
+        <span class="field-label">事件</span>
+        <el-checkbox-group v-model="addEventNames" :disabled="selectBatching">
+          <el-checkbox value="付费">付费</el-checkbox>
+          <el-checkbox value="付费ROI">付费ROI</el-checkbox>
+        </el-checkbox-group>
+      </div>
+      <el-table :data="selectedRows" border max-height="360" empty-text="还没有选择账户">
+        <el-table-column label="账户名称" min-width="200" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.name || "—" }}</template>
         </el-table-column>
-        <el-table-column label="事件资产" min-width="140" show-overflow-tooltip>
-          <template #default="{ row }">
-            <span v-if="row.error" class="evt bad">{{ row.error }}</span>
-            <span v-else>{{ row.assetName || "无资产" }}</span>
-          </template>
+        <el-table-column label="主体" width="100" align="center" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.subject || "—" }}</template>
         </el-table-column>
-        <el-table-column label="付费" width="90" align="center">
-          <template #default="{ row }">{{ row.error ? "—" : row.pay ? "已添加" : "未添加" }}</template>
-        </el-table-column>
-        <el-table-column label="付费ROI" width="100" align="center">
-          <template #default="{ row }">{{ row.error ? "—" : row.roi ? "已添加" : "未添加" }}</template>
+        <el-table-column label="账户ID" width="180" align="center">
+          <template #default="{ row }">{{ row.advertiserId }}</template>
         </el-table-column>
         <el-table-column label="操作" width="80" align="center">
           <template #default="{ row }">
-            <el-button v-if="row.advertiserId" link type="primary" @click="openLookupDetail(row)">查看</el-button>
+            <el-button link type="danger" :disabled="selectBatching" @click="removeSelectedAccount(row)">移除</el-button>
           </template>
         </el-table-column>
       </el-table>
+      <p class="lookup-note add-batch-note">已选 {{ selectedRows.length }} 个。在这里移除，表格里的勾选会一起取消。</p>
+      <div v-if="selectBatching" class="add-batch-progress">
+        <el-progress :percentage="selectPercent" :stroke-width="8" />
+        <span>{{ selectProgress }}</span>
+      </div>
+      <template #footer>
+        <el-button :disabled="selectBatching" @click="addBatchVisible = false">取消</el-button>
+        <el-button type="primary" :loading="selectBatching" :disabled="!selectedRows.length || !addEventNames.length" @click="confirmAdd">添加</el-button>
+      </template>
     </el-dialog>
 
     <el-dialog v-model="failVisible" title="添加失败" width="720px">
@@ -262,6 +258,7 @@
 <script setup>
 import request from "@/request"
 import CzPagination from "@/components/cz-pagination/index.vue"
+import { readCopyright, writeCopyright } from "../shared"
 
 const props = defineProps({
   authorized: { type: Boolean, default: false },
@@ -276,23 +273,35 @@ const pageNo = ref(1)
 const pageSize = ref(20)
 const subjects = ref([])
 const copyrights = ref([])
+const copyrightCounts = ref({})
+const miniApps = ref([])
+const miniAppId = ref("")
+const assetStatusOptions = [
+  { value: "unsynced", label: "未同步" },
+  { value: "unbound", label: "未绑定资产" },
+  { value: "bound", label: "已绑定资产" },
+  { value: "pay", label: "付费未添加" },
+  { value: "roi", label: "付费ROI未添加" },
+]
 const tableParams = reactive({
   keyword: "",
-  copyright: "",
+  copyright: readCopyright(),
   subject: "",
+  assetStatus: "",
 })
-const onlyMissing = ref(false)
 const selectedRows = ref([])
-const eventStatus = ref({})
-const lookupVisible = ref(false)
-const lookupText = ref("")
-const lookupLoading = ref(false)
-const lookupRows = ref([])
-const lookupSearched = ref(false)
+const eventSync = ref({ total: 0, synced: 0, latest: "" })
+const syncing = ref(false)
+const stopping = ref(false)
+const syncingIds = ref([])
+const syncProgress = ref("")
+const syncPercent = ref(0)
+let syncPollTimer = 0
+let syncPollLock = false
+let sawSyncRunning = false
 const failVisible = ref(false)
 const failRows = ref([])
 const quickAdding = ref(false)
-let statusSeq = 0
 let loadSeq = 0
 
 const advertiserId = ref("")
@@ -314,26 +323,14 @@ const availableEvents = ref([])
 const selectedEventId = ref("")
 const selectedTrack = ref("")
 const creating = ref(false)
-const batchText = ref("")
-const pasteBatching = ref(false)
 const selectBatching = ref(false)
-const pasteProgress = ref("")
 const selectProgress = ref("")
-const pastePercent = ref(0)
 const selectPercent = ref(0)
+const addBatchVisible = ref(false)
+const addEventNames = ref(["付费", "付费ROI"])
 const batchEventNames = ["付费", "付费ROI"]
 
-const emptyText = computed(() => (onlyMissing.value ? "这一页没有未绑定事件资产的户" : "没有正在使用的账户"))
-const shownRows = computed(() => {
-  if (!onlyMissing.value) return tableData.value
-  return tableData.value.filter((row) => {
-    const status = eventStatus.value[row.advertiserId]
-    if (!status || status.loading || status.error) return true
-    return !status.assetName
-  })
-})
-
-const lookupEmpty = computed(() => (lookupSearched.value ? "没有查到账户" : "输入账户后点查询"))
+const emptyText = computed(() => (tableParams.assetStatus ? "没有符合条件的账户" : "没有正在使用的账户"))
 
 const detailTitle = computed(() => {
   const row = detailAccount.value
@@ -384,8 +381,85 @@ watch(selectedEventId, () => {
 })
 
 onMounted(() => {
-  loadUsing()
+  loadMiniApps()
 })
+
+onUnmounted(() => {
+  window.clearInterval(syncPollTimer)
+  window.clearTimeout(missingRefillTimer)
+  syncPollTimer = 0
+})
+
+const visibleMiniApps = computed(() => {
+  const copyright = tableParams.copyright
+  if (!copyright || copyright === "__unset__") return miniApps.value.filter((item) => !item.copyrightOwner)
+  return miniApps.value.filter((item) => item.copyrightOwner === copyright)
+})
+const copyrightTabs = computed(() => {
+  const counts = copyrightCounts.value || {}
+  const names = []
+  const seen = new Set()
+  for (const name of ["点众", "番茄", ...copyrights.value]) {
+    if (!name || seen.has(name)) continue
+    seen.add(name)
+    names.push(name)
+  }
+  const tabs = names.map((name) => ({ name, label: name }))
+  if (counts[""]) tabs.push({ name: "__unset__", label: "未设置" })
+  return tabs
+})
+
+function selectedMini() {
+  return miniApps.value.find((item) => item.appId === miniAppId.value) || null
+}
+
+function miniLabel(item) {
+  const name = item.name || item.appId
+  return item.copyrightOwner ? `${name} · ${item.copyrightOwner}` : name
+}
+
+function miniPayload() {
+  const item = selectedMini()
+  if (!item) return null
+  return { appId: item.appId, name: item.name }
+}
+
+function requireMini() {
+  const payload = miniPayload()
+  if (payload) return payload
+  ElMessage.warning("请先选择小程序。还没有的话，到「小程序」页从巨量添加")
+  return null
+}
+
+async function loadMiniApps() {
+  try {
+    const res = await request({ url: "/admin-api/oceanengine/mini-apps" })
+    if (res.code !== 0) return
+    miniApps.value = ((res.data && res.data.list) || []).filter((item) => item.copyrightOwner)
+    const apps = visibleMiniApps.value
+    if (!apps.some((item) => item.appId === miniAppId.value)) miniAppId.value = apps[0] ? apps[0].appId : ""
+  } finally {
+    await loadUsing()
+    resumeSyncJob()
+  }
+}
+
+function onMiniAppChange() {
+  if (addBatchVisible.value) {
+    pageNo.value = 1
+    loadUsing()
+    return
+  }
+  searchUsing()
+}
+
+function onCopyrightTab() {
+  writeCopyright(tableParams.copyright)
+  const apps = visibleMiniApps.value
+  if (!apps.some((item) => item.appId === miniAppId.value)) miniAppId.value = apps[0] ? apps[0].appId : ""
+  tableParams.subject = ""
+  searchUsing()
+}
 
 function nameInitial(name) {
   const text = String(name || "").trim()
@@ -411,10 +485,6 @@ function searchUsing() {
   loadUsing()
 }
 
-function onOnlyMissing() {
-  tableRef.value?.clearSelection()
-}
-
 function showFailures(rows) {
   failRows.value = rows
   failVisible.value = true
@@ -422,9 +492,8 @@ function showFailures(rows) {
 
 function resetUsing() {
   tableParams.keyword = ""
-  tableParams.copyright = ""
   tableParams.subject = ""
-  onlyMissing.value = false
+  tableParams.assetStatus = ""
   searchUsing()
 }
 
@@ -433,16 +502,19 @@ function onPageChange() {
 }
 
 function accountQuery() {
-  return {
+  const query = {
     keyword: tableParams.keyword,
     copyright: tableParams.copyright,
     subject: tableParams.subject,
   }
+  if (miniAppId.value) query.eventAppId = miniAppId.value
+  if (tableParams.assetStatus) query.assetStatus = tableParams.assetStatus
+  return query
 }
 
-async function loadUsing() {
+async function loadUsing(options = {}) {
   const seq = ++loadSeq
-  tableLoading.value = true
+  if (!options.silent) tableLoading.value = true
   try {
     const res = await request({
       url: "/admin-api/oceanengine/accounts/page",
@@ -459,95 +531,11 @@ async function loadUsing() {
     tableTotal.value = data.total || 0
     if (Array.isArray(data.subjects)) subjects.value = data.subjects
     if (Array.isArray(data.copyrights)) copyrights.value = data.copyrights
-    loadEventStatus(tableData.value)
+    copyrightCounts.value = data.copyrightCounts || {}
+    eventSync.value = data.eventSync || { total: 0, synced: 0, latest: "" }
   } finally {
     if (seq === loadSeq) tableLoading.value = false
   }
-}
-
-async function findLookupAccount(keyword) {
-  const local = await request({
-    url: "/admin-api/oceanengine/accounts/page",
-    params: { keyword, pageNo: 1, pageSize: 20 },
-    timeout: 30000,
-  })
-  const list = local.code === 0 ? local.data?.list || [] : []
-  const exact = list.find((row) => row.name === keyword || row.advertiserId === keyword)
-  if (exact) return { advertiserId: exact.advertiserId, name: exact.name || "" }
-  if (list.length === 1) return { advertiserId: list[0].advertiserId, name: list[0].name || "" }
-  if (keyword.length < 2) return null
-  const ocean = await request({
-    url: "/admin-api/oceanengine/accounts/ocean-search",
-    params: { keyword, pageNo: 1, pageSize: 10 },
-    timeout: 30000,
-  })
-  const oceanList = ocean.code === 0 ? ocean.data?.list || [] : []
-  const hit = oceanList.find((row) => row.name === keyword) || (oceanList.length === 1 ? oceanList[0] : null)
-  if (!hit) return null
-  return { advertiserId: hit.advertiserId, name: hit.name || "" }
-}
-
-async function runLookup() {
-  const raw = lookupText.value.trim()
-  if (!raw) {
-    ElMessage.warning("请输入账户 ID 或名称")
-    return
-  }
-  if (props.authReady && !props.authorized) {
-    ElMessage.warning("请先在「授权」里完成巨量授权")
-    return
-  }
-  lookupLoading.value = true
-  lookupSearched.value = true
-  lookupRows.value = []
-  try {
-    const tokens = [...new Set(raw.split(/[\r\n,，;；]+/).map((item) => item.trim()).filter(Boolean))].slice(0, 20)
-    const accounts = []
-    for (const token of tokens) {
-      if (/^\d{8,}$/.test(token)) {
-        accounts.push({ advertiserId: token, name: "" })
-        continue
-      }
-      const found = await findLookupAccount(token)
-      accounts.push(found || { advertiserId: "", name: token, error: "没有找到这个账户" })
-    }
-    const ids = accounts.map((item) => item.advertiserId).filter(Boolean)
-    const byId = new Map()
-    if (ids.length) {
-      const res = await request({
-        url: "/admin-api/oceanengine/events/status",
-        method: "POST",
-        timeout: 120000,
-        data: { advertiserIds: ids },
-      })
-      if (res.code !== 0) {
-        ElMessage.error(res.msg || "查询失败")
-        return
-      }
-      for (const item of (res.data && res.data.list) || []) byId.set(item.advertiserId, item)
-    }
-    lookupRows.value = accounts.map((account) => {
-      if (!account.advertiserId) return { ...account, assetName: "", pay: false, roi: false }
-      const item = byId.get(account.advertiserId) || {}
-      return {
-        advertiserId: account.advertiserId,
-        name: account.name || "",
-        assetName: item.assetName || "",
-        error: item.error || "",
-        pay: !!item.pay,
-        roi: !!item.roi,
-      }
-    })
-  } catch (e) {
-    ElMessage.error(e?.response?.data?.msg || e?.message || "查询失败")
-  } finally {
-    lookupLoading.value = false
-  }
-}
-
-function openLookupDetail(row) {
-  lookupVisible.value = false
-  openDetail(row)
 }
 
 async function quickAddEvents() {
@@ -556,13 +544,14 @@ async function quickAddEvents() {
     ElMessage.warning("请先在「授权」里完成巨量授权")
     return
   }
+  if (!requireMini()) return
   quickAdding.value = true
   try {
     const res = await request({
       url: "/admin-api/oceanengine/events/batch",
       method: "POST",
       timeout: 300000,
-      data: { advertiserIds: [advertiserId.value], eventNames: batchEventNames },
+      data: { advertiserIds: [advertiserId.value], eventNames: batchEventNames, ...miniPayload() },
     })
     if (res.code !== 0) {
       showFailures([{ accountName: detailTitle.value, assetName: "—", eventName: "—", message: res.msg || "添加失败", status: "fail" }])
@@ -574,83 +563,265 @@ async function quickAddEvents() {
     else if (data.stopped) showFailures([{ accountName: detailTitle.value, assetName: "—", eventName: "—", message: data.stopped, status: "fail" }])
     else ElMessage.success(`已添加 ${data.added || 0}，跳过 ${data.skipped || 0}`)
     await loadAssets()
-    loadEventStatus([{ advertiserId: advertiserId.value }])
+    await loadUsing()
   } finally {
     quickAdding.value = false
   }
 }
 
 function statusOf(row) {
-  return eventStatus.value[row.advertiserId] || { loading: !props.authReady || props.authorized, pay: false, roi: false, assetName: "", error: "" }
+  const names = Array.isArray(row.eventAssetNames) ? row.eventAssetNames : []
+  const syncingRow = !row.eventSynced && syncingIds.value.includes(row.advertiserId)
+  if (!row.eventSynced) return { pending: true, syncing: syncingRow, pay: false, roi: false, assetName: "", assetNames: [], matchedCount: 0, foreign: false, error: "" }
+  const assetName = row.eventAssetName || ""
+  return {
+    pending: false,
+    syncing: false,
+    pay: !!row.eventPay,
+    roi: !!row.eventRoi,
+    assetName,
+    assetNames: names,
+    matchedCount: Number(row.eventMatchedCount) || 0,
+    foreign: !assetName && names.length > 0,
+    error: row.eventError || "",
+  }
+}
+
+function assetText(row) {
+  const status = statusOf(row)
+  if (status.assetName) return status.matchedCount > 1 ? `${status.assetName} 等 ${status.matchedCount} 个` : status.assetName
+  if (status.assetNames.length === 1) return status.assetNames[0]
+  if (status.assetNames.length > 1) return `${status.assetNames[0]} 等 ${status.assetNames.length} 个`
+  return "无资产"
+}
+
+function assetTitle(row) {
+  const status = statusOf(row)
+  const mini = selectedMini()
+  const miniName = (mini && mini.name) || "当前小程序"
+  if (status.assetName && status.matchedCount > 1) return `这个户有 ${status.matchedCount} 个「${miniName}」事件资产，付费和付费ROI按第一个统计`
+  if (status.foreign) return `不是「${miniName}」的资产：${status.assetNames.join("、")}`
+  return ""
 }
 
 function markText(row, key) {
   const status = statusOf(row)
-  if (status.loading) return "读取中"
-  if (status.error) return "—"
+  if (status.syncing) return "同步中"
+  if (status.pending) return "未同步"
+  if (status.error || status.foreign) return "—"
   return status[key] ? "已添加" : "未添加"
 }
 
 function markClass(row, key) {
   const status = statusOf(row)
-  if (status.loading) return "wait"
+  if (status.pending) return "wait"
   if (status.error || !status[key]) return "miss"
   return "ok"
 }
 
-async function loadEventStatus(rows) {
-  const ids = (rows || []).map((row) => row.advertiserId).filter(Boolean)
-  const seq = ++statusSeq
-  if (!ids.length) return
-  if (props.authReady && !props.authorized) {
-    const next = { ...eventStatus.value }
-    for (const id of ids) next[id] = { loading: false, pay: false, roi: false, assetName: "", error: "请先完成巨量授权" }
-    eventStatus.value = next
+let missingRefillTimer = 0
+
+function matchesAssetStatus(row, status) {
+  if (!status) return true
+  if (status === "unsynced") return !row.eventSynced
+  if (status === "unbound") return !row.eventAssetName
+  if (status === "bound") return !!row.eventAssetName
+  if (status === "pay") return !!row.eventSynced && !row.eventPay
+  if (status === "roi") return !!row.eventSynced && !row.eventRoi
+  return true
+}
+
+function applyLocalRows(list) {
+  const byId = new Map((list || []).filter((item) => item && item.synced).map((item) => [item.advertiserId, item]))
+  for (const row of tableData.value) {
+    const item = byId.get(row.advertiserId)
+    if (!item) continue
+    row.eventSynced = true
+    row.eventAssetId = item.assetId || ""
+    row.eventAssetName = item.assetName || ""
+    row.eventAssetNames = Array.isArray(item.assetNames) ? item.assetNames : []
+    row.eventMatchedCount = Number(item.matchedCount) || 0
+    row.eventPay = !!item.pay
+    row.eventRoi = !!item.roi
+    row.eventError = item.error || ""
+    row.eventSyncedAt = item.syncedAt || ""
+  }
+  refillIfFilterMisses()
+}
+
+function refillIfFilterMisses() {
+  const status = tableParams.assetStatus
+  if (!status || tableData.value.every((row) => matchesAssetStatus(row, status))) return
+  tableData.value = tableData.value.filter((row) => matchesAssetStatus(row, status))
+  window.clearTimeout(missingRefillTimer)
+  missingRefillTimer = window.setTimeout(() => {
+    if (tableParams.assetStatus) loadUsing({ silent: true })
+  }, 400)
+}
+
+function applyBatchResults(results) {
+  const grouped = new Map()
+  for (const row of results || []) {
+    const advertiserId = String(row.advertiserId || "")
+    if (!advertiserId) continue
+    const item = grouped.get(advertiserId) || { assetId: "", assetName: "", pay: false, roi: false, error: "", ok: false }
+    if (row.assetId) item.assetId = String(row.assetId)
+    if (row.assetName && row.assetName !== "—") item.assetName = String(row.assetName)
+    const eventName = String(row.eventName || "").replace(/\s+/g, "")
+    if (row.status === "added" || row.status === "skip") {
+      item.ok = true
+      if (eventName === "付费") item.pay = true
+      if (eventName === "付费ROI") item.roi = true
+    } else if (row.status === "fail" && !item.error) {
+      item.error = row.message || "添加失败"
+    }
+    grouped.set(advertiserId, item)
+  }
+  if (!grouped.size) return
+  for (const row of tableData.value) {
+    const item = grouped.get(String(row.advertiserId || ""))
+    if (!item) continue
+    row.eventSynced = true
+    if (item.assetId) row.eventAssetId = item.assetId
+    if (item.assetName) {
+      row.eventAssetName = item.assetName
+      const names = Array.isArray(row.eventAssetNames) ? row.eventAssetNames.slice() : []
+      if (!names.includes(item.assetName)) names.unshift(item.assetName)
+      row.eventAssetNames = names
+      row.eventMatchedCount = Math.max(Number(row.eventMatchedCount) || 0, 1)
+    }
+    if (item.pay) row.eventPay = true
+    if (item.roi) row.eventRoi = true
+    row.eventError = item.ok || item.assetId ? "" : item.error
+  }
+  refillIfFilterMisses()
+}
+
+function showSyncProgress(job) {
+  const done = job.done || 0
+  const total = job.total || 0
+  syncPercent.value = total ? Math.round((done / total) * 100) : 0
+  syncProgress.value = job.stopRequested && job.running ? `正在停止 ${done}/${total}` : `正在同步 ${done}/${total}`
+  stopping.value = !!(job.stopRequested && job.running)
+  syncingIds.value = Array.isArray(job.active) ? job.active : []
+}
+
+async function refreshVisibleStatus() {
+  const ids = tableData.value.map((row) => row.advertiserId).filter(Boolean)
+  const appId = miniAppId.value
+  if (!ids.length || !appId) return
+  const res = await request({
+    url: "/admin-api/oceanengine/events/local-status",
+    method: "POST",
+    data: { advertiserIds: ids, appId },
+  })
+  if (res.code === 0) applyLocalRows((res.data && res.data.list) || [])
+}
+
+function finishSyncJob(job) {
+  window.clearInterval(syncPollTimer)
+  syncPollTimer = 0
+  sawSyncRunning = false
+  syncing.value = false
+  stopping.value = false
+  syncingIds.value = []
+  syncProgress.value = ""
+  syncPercent.value = 0
+  loadUsing()
+  if (job.error) ElMessage.error(job.error)
+  else if (job.stopped) ElMessage.warning(`已停止，完成 ${job.done || 0}/${job.total || 0}`)
+  else if (job.failed) ElMessage.warning(`同步结束，${job.failed} 个账户这次没读成。已有结果的仍显示上次同步`)
+  else ElMessage.success("同步完成")
+}
+
+async function pullSyncJob() {
+  if (syncPollLock) return
+  syncPollLock = true
+  try {
+    const res = await request({ url: "/admin-api/oceanengine/events/sync/job" })
+    if (res.code !== 0) return
+    const job = res.data || {}
+    if (job.running) {
+      sawSyncRunning = true
+      syncing.value = true
+      showSyncProgress(job)
+      if (!job.appId || job.appId === miniAppId.value) await refreshVisibleStatus()
+      return
+    }
+    if (sawSyncRunning) finishSyncJob(job)
+  } catch {
+    // 这一拍没问到进度，下一秒再试
+  } finally {
+    syncPollLock = false
+  }
+}
+
+function beginSyncPoll() {
+  if (syncPollTimer) return
+  pullSyncJob()
+  syncPollTimer = window.setInterval(pullSyncJob, 1000)
+}
+
+async function resumeSyncJob() {
+  const res = await request({ url: "/admin-api/oceanengine/events/sync/job" })
+  if (res.code !== 0 || !res.data || !res.data.running) return
+  sawSyncRunning = true
+  syncing.value = true
+  showSyncProgress(res.data)
+  beginSyncPoll()
+}
+
+async function stopSync() {
+  if (!syncing.value || stopping.value) return
+  stopping.value = true
+  const res = await request({ url: "/admin-api/oceanengine/events/sync/stop", method: "POST" })
+  if (res.code !== 0) {
+    stopping.value = false
+    ElMessage.error(res.msg || "停止失败")
     return
   }
-  const pending = { ...eventStatus.value }
-  for (const id of ids) {
-    pending[id] = { ...(pending[id] || {}), loading: true, error: "" }
+  showSyncProgress(res.data || {})
+}
+
+async function syncAll() {
+  if (syncing.value || selectBatching.value) return
+  if (props.authReady && !props.authorized) {
+    ElMessage.warning("请先在「授权」里完成巨量授权")
+    return
   }
-  eventStatus.value = pending
+  const mini = requireMini()
+  if (!mini) return
+  const picked = selectedRows.value.map((row) => row.advertiserId).filter(Boolean)
+  const total = picked.length || eventSync.value.total || 0
+  if (!total) {
+    ElMessage.warning("当前版权方下没有正在使用的账户")
+    return
+  }
+  const tab = copyrightTabs.value.find((item) => item.name === tableParams.copyright)
+  const label = tab ? tab.label : "当前版权方"
+  const scope = picked.length ? `已选的 ${picked.length} 个账户` : `${label}下全部 ${total} 个账户`
   try {
-    const merged = []
-    for (let i = 0; i < ids.length; i += 20) {
-      const res = await request({
-        url: "/admin-api/oceanengine/events/status",
-        method: "POST",
-        timeout: 120000,
-        data: { advertiserIds: ids.slice(i, i + 20) },
-      })
-      if (seq !== statusSeq) return
-      if (res.code !== 0) {
-        const failed = { ...eventStatus.value }
-        for (const id of ids) failed[id] = { loading: false, pay: false, roi: false, assetName: "", error: res.msg || "读取事件失败" }
-        eventStatus.value = failed
-        return
-      }
-      merged.push(...((res.data && res.data.list) || []))
-    }
-    if (seq !== statusSeq) return
-    const next = { ...eventStatus.value }
-    for (const item of merged) {
-      next[item.advertiserId] = {
-        loading: false,
-        pay: !!item.pay,
-        roi: !!item.roi,
-        assetId: item.assetId || "",
-        assetName: item.assetName || "",
-        error: item.error || "",
-      }
-    }
-    eventStatus.value = next
-  } catch (e) {
-    if (seq !== statusSeq) return
-    const failed = { ...eventStatus.value }
-    const message = e?.response?.data?.msg || e?.message || "读取事件失败"
-    for (const id of ids) failed[id] = { loading: false, pay: false, roi: false, assetName: "", error: message }
-    eventStatus.value = failed
+    await ElMessageBox.confirm(
+      `同步${scope}。账户多的时候要几分钟，结果会留在本地。刷新页面也会继续，可以随时停止。`,
+      "从巨量同步",
+      { confirmButtonText: "开始同步", cancelButtonText: "取消", type: "warning" },
+    )
+  } catch {
+    return
   }
+  const res = await request({
+    url: "/admin-api/oceanengine/events/sync/start",
+    method: "POST",
+    data: { copyright: tableParams.copyright, advertiserIds: picked, ...mini },
+  })
+  if (res.code !== 0) {
+    ElMessage.error(res.msg || "开始同步失败")
+    return
+  }
+  sawSyncRunning = true
+  syncing.value = true
+  showSyncProgress(res.data || { done: 0, total, running: true })
+  beginSyncPoll()
 }
 
 function openDetail(row) {
@@ -768,8 +939,10 @@ async function submitEvent() {
       data: {
         advertiserId: advertiserId.value,
         assetId: selectedAssetId.value,
+        assetName: (selectedAsset.value && selectedAsset.value.name) || "",
         eventId: selectedEventId.value,
         trackType: selectedTrack.value,
+        ...(miniPayload() || {}),
       },
     })
     if (res.code !== 0) {
@@ -779,24 +952,10 @@ async function submitEvent() {
     ElMessage.success(`已添加${res.data && res.data.name ? `「${res.data.name}」` : "事件"}`)
     addVisible.value = false
     await loadEvents()
-    loadEventStatus(tableData.value.filter((row) => row.advertiserId === advertiserId.value))
+    await loadUsing()
   } finally {
     creating.value = false
   }
-}
-
-function splitAccountLines(text) {
-  const seen = new Set()
-  const lines = []
-  for (const part of String(text || "").split(/[\r\n,，;；]+/)) {
-    const line = part.trim()
-    if (!line) continue
-    const key = line.toLowerCase()
-    if (seen.has(key)) continue
-    seen.add(key)
-    lines.push(line)
-  }
-  return lines
 }
 
 function chunkList(list, size) {
@@ -805,7 +964,7 @@ function chunkList(list, size) {
   return out
 }
 
-async function addInChunks(parts, onStep) {
+async function addInChunks(parts, onStep, eventNames = batchEventNames) {
   let added = 0
   let skipped = 0
   const failed = []
@@ -818,7 +977,7 @@ async function addInChunks(parts, onStep) {
       url: "/admin-api/oceanengine/events/batch",
       method: "POST",
       timeout: 300000,
-      data: { ...part.data, eventNames: batchEventNames },
+      data: { ...part.data, eventNames },
     })
     done += part.count
     onStep(done, total)
@@ -830,6 +989,7 @@ async function addInChunks(parts, onStep) {
     added += data.added || 0
     skipped += data.skipped || 0
     failed.push(...(data.results || []).filter((row) => row.status === "fail"))
+    applyBatchResults(data.results)
     if (data.stopped) {
       stopped = data.stopped
       break
@@ -846,41 +1006,13 @@ function finishAdd(result, clearSelection) {
     if (clearSelection) tableRef.value?.clearSelection()
   }
   if (result.touched) {
-    loadEventStatus(tableData.value)
+    loadUsing()
     if (detailVisible.value && advertiserId.value) loadAssets()
   }
 }
 
-async function addPasted() {
-  const lines = splitAccountLines(batchText.value)
-  if (!lines.length) {
-    ElMessage.warning("请先粘贴账户")
-    return
-  }
-  if (props.authReady && !props.authorized) {
-    ElMessage.warning("请先在「授权」里完成巨量授权")
-    return
-  }
-  pasteBatching.value = true
-  pastePercent.value = 0
-  pasteProgress.value = `正在添加 0/${lines.length}`
-  try {
-    const parts = chunkList(lines, 5).map((group) => ({ count: group.length, data: { text: group.join("\n") } }))
-    const result = await addInChunks(parts, (done, total) => {
-      pastePercent.value = total ? Math.round((done / total) * 100) : 0
-      pasteProgress.value = `正在添加 ${done}/${total}`
-    })
-    finishAdd(result, false)
-  } finally {
-    pasteBatching.value = false
-    pasteProgress.value = ""
-    pastePercent.value = 0
-  }
-}
-
-async function addSelected() {
-  const ids = selectedRows.value.map((row) => row.advertiserId).filter(Boolean)
-  if (!ids.length) {
+function openAddDialog() {
+  if (!selectedRows.value.length) {
     ElMessage.warning("请先勾选账户")
     return
   }
@@ -888,16 +1020,41 @@ async function addSelected() {
     ElMessage.warning("请先在「授权」里完成巨量授权")
     return
   }
+  addEventNames.value = ["付费", "付费ROI"]
+  addBatchVisible.value = true
+}
+
+function removeSelectedAccount(row) {
+  tableRef.value?.toggleRowSelection(row, false)
+}
+
+async function confirmAdd() {
+  const ids = selectedRows.value.map((row) => row.advertiserId).filter(Boolean)
+  if (!ids.length) {
+    ElMessage.warning("请先勾选账户")
+    return
+  }
+  if (!addEventNames.value.length) {
+    ElMessage.warning("请至少选择付费或付费ROI")
+    return
+  }
+  if (props.authReady && !props.authorized) {
+    ElMessage.warning("请先在「授权」里完成巨量授权")
+    return
+  }
+  if (!requireMini()) return
+  const eventNames = [...addEventNames.value]
   selectBatching.value = true
   selectPercent.value = 0
   selectProgress.value = `正在添加 0/${ids.length}`
   try {
-    const parts = chunkList(ids, 5).map((group) => ({ count: group.length, data: { advertiserIds: group } }))
+    const parts = chunkList(ids, 5).map((group) => ({ count: group.length, data: { advertiserIds: group, ...miniPayload() } }))
     const result = await addInChunks(parts, (done, total) => {
       selectPercent.value = total ? Math.round((done / total) * 100) : 0
       selectProgress.value = `正在添加 ${done}/${total}`
-    })
+    }, eventNames)
     finishAdd(result, true)
+    if (!result.failed.length && !result.stopped) addBatchVisible.value = false
   } finally {
     selectBatching.value = false
     selectProgress.value = ""
@@ -911,18 +1068,24 @@ async function addSelected() {
 
 .event-panel {
   flex: 1;
-  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-height: 0;
+  height: 100%;
 }
 
-.module {
-  flex-shrink: 0;
-  padding: 16px 20px;
-  background: #fff;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 4px;
+.copyright-tabs {
+  flex: none;
+  margin-bottom: -8px;
+
+  :deep(.el-tabs__header) {
+    margin: 0;
+  }
+
+  :deep(.el-tabs__content) {
+    display: none;
+  }
 }
 
 .list-module {
@@ -932,18 +1095,6 @@ async function addSelected() {
   flex-direction: column;
 }
 
-.module-actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 16px;
-}
-
-.actions-spacer {
-  flex: 1;
-}
-
 .lookup-note {
   margin: 0 0 12px;
   color: var(--el-text-color-secondary);
@@ -951,19 +1102,26 @@ async function addSelected() {
   line-height: 1.6;
 }
 
-.lookup-bar {
+.add-batch-field {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
   gap: 12px;
+  margin-bottom: 16px;
 }
 
-.lookup-bar .el-textarea {
-  width: 100%;
+.add-batch-note {
+  margin: 12px 0 0;
 }
 
-.lookup-table {
-  margin-top: 20px;
+.add-batch-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+
+  .el-progress {
+    flex: 1;
+  }
 }
 
 .empty-asset {
@@ -1007,8 +1165,7 @@ async function addSelected() {
   flex-shrink: 0;
 }
 
-.using-count,
-.hint.inline {
+.using-count {
   margin: 0;
   color: var(--el-text-color-secondary);
   font-size: 13px;

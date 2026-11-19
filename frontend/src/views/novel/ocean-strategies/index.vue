@@ -1,6 +1,9 @@
 <template>
-  <div class="page-container novel-page has-toolbar ocean-strategies">
+  <div class="page-container novel-page has-toolbar has-copyright-tabs ocean-strategies">
     <template v-if="mode === 'list'">
+      <el-tabs v-model="copyright" class="copyright-tabs" @tab-change="onCopyrightTab">
+        <el-tab-pane v-for="item in copyrightTabs" :key="item.name" :name="item.name" :label="item.label" />
+      </el-tabs>
       <div class="page-table-header">
         <div class="page-table-header-left">
           <el-button type="primary" :icon="$icons.Plus" @click="openCreate">新建策略</el-button>
@@ -9,8 +12,11 @@
           <span class="hint">一套策略对应一个小程序。先把模板配好，搭建计划时再选户、商品和链接。</span>
       </div>
       <div class="page-table-box table-wrap">
-        <el-table :data="list" v-loading="loading" border height="100%">
+        <el-table :data="shown" v-loading="loading" border height="100%">
           <el-table-column prop="name" label="策略名称" min-width="160" show-overflow-tooltip />
+          <el-table-column label="版权方" width="100" align="center">
+            <template #default="{ row }">{{ row.copyrightOwner || "—" }}</template>
+          </el-table-column>
           <el-table-column prop="summary" label="模板内容" min-width="280" show-overflow-tooltip />
           <el-table-column prop="updatedAt" label="更新时间" width="170" align="center" />
           <el-table-column label="操作" width="196" align="center" fixed="right">
@@ -64,6 +70,8 @@
                       :value="item.appId"
                     />
                   </el-select>
+                  <p v-if="field.widget === 'miniApp' && form.copyrightOwner" class="hint">版权方 {{ form.copyrightOwner }}，跟这个小程序走。</p>
+                  <p v-else-if="field.widget === 'miniApp' && form.microAppId" class="hint">这个小程序还没设版权方。到「小程序」页补上后再选一次。</p>
                   <el-select
                     v-else-if="field.widget === 'aweme'"
                     v-model="form.awemeId"
@@ -190,6 +198,7 @@
 
 <script setup name="novelOceanStrategies">
 import request from "@/request"
+import { readCopyright, writeCopyright } from "../shared"
 import { STRATEGY_SECTIONS, strategyFieldDefaults } from "./schema"
 
 const emptyForm = () => ({
@@ -215,9 +224,11 @@ const emptyForm = () => ({
   titleLibraryId: null,
   microAppId: "",
   microAppName: "",
+  copyrightOwner: "",
 })
 
 const mode = ref("list")
+const copyright = ref(readCopyright())
 const list = ref([])
 const titleLibraries = ref([])
 const bidStrategies = ref([])
@@ -281,7 +292,7 @@ const namePreview = computed(() => {
   const date = `${today.getMonth() + 1}.${today.getDate()}`
   return String(form.value.namePattern || "{档位}{版权方}-{书名}-{日期}")
     .replaceAll("{日期}", date)
-    .replaceAll("{版权方}", "点众")
+    .replaceAll("{版权方}", form.value.copyrightOwner || "版权方")
     .replaceAll("{书名}", "书名")
     .replaceAll("{档位}", "9.9")
 })
@@ -323,14 +334,40 @@ async function loadMiniApps() {
 
 function miniAppLabel(item) {
   const name = item && item.name ? item.name : item.appId
+  const copyright = item && item.copyrightOwner ? ` · ${item.copyrightOwner}` : ""
   const same = miniApps.value.filter((row) => row.name === name).length > 1
-  return same ? `字节小程序 · ${name}（${item.appId}）` : `字节小程序 · ${name}`
+  return same ? `字节小程序 · ${name}${copyright}（${item.appId}）` : `字节小程序 · ${name}${copyright}`
+}
+
+const copyrightTabs = computed(() => {
+  const names = []
+  const seen = new Set()
+  for (const name of ["点众", "番茄", ...list.value.map((item) => item.copyrightOwner)]) {
+    if (!name || seen.has(name)) continue
+    seen.add(name)
+    names.push(name)
+  }
+  const tabs = names.map((name) => ({ name, label: name }))
+  if (list.value.some((item) => !item.copyrightOwner)) tabs.push({ name: "__unset__", label: "未设置" })
+  return tabs
+})
+const shown = computed(() =>
+  list.value.filter((item) => (copyright.value === "__unset__" ? !item.copyrightOwner : item.copyrightOwner === copyright.value)),
+)
+
+function onCopyrightTab() {
+  writeCopyright(copyright.value)
+}
+
+function applyMiniCopyright(item) {
+  form.value.copyrightOwner = (item && item.copyrightOwner) || ""
 }
 
 function bindMiniApp() {
   const current = miniApps.value.find((item) => item.appId === form.value.microAppId)
   if (current) {
     form.value.microAppName = current.name
+    applyMiniCopyright(current)
     return
   }
   const byName = miniApps.value.find((item) => form.value.microAppName && item.name === form.value.microAppName)
@@ -338,12 +375,14 @@ function bindMiniApp() {
   if (!next) return
   form.value.microAppId = next.appId
   form.value.microAppName = next.name
+  applyMiniCopyright(next)
 }
 
 function onMiniAppChange(appId) {
   const item = miniApps.value.find((row) => row.appId === appId)
   form.value.microAppId = appId || ""
   form.value.microAppName = item ? item.name : ""
+  applyMiniCopyright(item)
   syncName()
 }
 

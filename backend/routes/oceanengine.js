@@ -14,6 +14,7 @@ const oceanengine = require('../services/oceanengineAuth')
 const products = require('../services/oceanengineProduct')
 const accounts = require('../services/oceanengineAccount')
 const events = require('../services/oceanengineEvent')
+const miniApps = require('../services/oceanengineMiniApps')
 const sites = require('../services/oceanengineSite')
 const materials = require('../services/oceanengineMaterial')
 const launch = require('../services/oceanengineLaunch')
@@ -466,12 +467,85 @@ router.get('/events/available', requireAuth, requireOceanProducts, async (req, r
 
 router.post('/events/status', requireAuth, requireOceanProducts, async (req, res) => {
   try {
-    const result = await events.summarizeAccountEvents((req.body || {}).advertiserIds)
+    const body = req.body || {}
+    const result = await events.summarizeAccountEvents(body.advertiserIds, { appId: body.appId, name: body.name })
     if (result.error) return res.json(fail(400, result.error))
     res.json(ok(result))
   } catch (e) {
     console.error('[oceanengine] event status', e.message)
     res.json(fail(500, '读取事件状态失败'))
+  }
+})
+
+router.get('/events/sync-ids', requireAuth, requireOceanProducts, (req, res) => {
+  try {
+    const result = events.listSyncAdvertiserIds(req.query.copyright)
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] event sync ids', e.message)
+    res.json(fail(500, '读取待同步账户失败'))
+  }
+})
+
+router.get('/events/sync/job', requireAuth, requireOceanProducts, (req, res) => {
+  try {
+    res.json(ok(events.syncJobView()))
+  } catch (e) {
+    console.error('[oceanengine] event sync job', e.message)
+    res.json(fail(500, '读取同步进度失败'))
+  }
+})
+
+router.post('/events/sync/start', requireAuth, requireOceanProducts, (req, res) => {
+  try {
+    const body = req.body || {}
+    const result = events.startSyncJob({
+      copyright: body.copyright,
+      appId: body.appId,
+      name: body.name,
+      advertiserIds: body.advertiserIds,
+    })
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] event sync start', e.message)
+    res.json(fail(500, '开始同步失败'))
+  }
+})
+
+router.post('/events/sync/stop', requireAuth, requireOceanProducts, (req, res) => {
+  try {
+    const result = events.stopSyncJob()
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] event sync stop', e.message)
+    res.json(fail(500, '停止同步失败'))
+  }
+})
+
+router.post('/events/local-status', requireAuth, requireOceanProducts, (req, res) => {
+  try {
+    const body = req.body || {}
+    const result = events.readLocalEventStatus(body.advertiserIds, body.appId)
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] event local status', e.message)
+    res.json(fail(500, '读取同步结果失败'))
+  }
+})
+
+router.post('/events/sync', requireAuth, requireOceanProducts, async (req, res) => {
+  try {
+    const body = req.body || {}
+    const result = await events.syncAccountEvents(body.advertiserIds, { appId: body.appId, name: body.name })
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] event sync', e.message)
+    res.json(fail(500, '同步事件资产失败'))
   }
 })
 
@@ -482,12 +556,79 @@ router.post('/events/batch', requireAuth, requireOceanProducts, async (req, res)
       text: body.text,
       eventNames: body.eventNames,
       advertiserIds: body.advertiserIds,
+      appId: body.appId,
+      name: body.name,
     })
     if (result.error) return res.json(fail(400, result.error))
     res.json(ok(result))
   } catch (e) {
     console.error('[oceanengine] batch events', e.message)
     res.json(fail(500, '批量添加事件失败'))
+  }
+})
+
+router.get('/mini-apps', requireAuth, requireOceanProducts, (req, res) => {
+  try {
+    res.json(ok({ list: miniApps.list() }))
+  } catch (e) {
+    console.error('[oceanengine] mini apps', e.message)
+    res.json(fail(500, '读取小程序失败'))
+  }
+})
+
+router.post('/mini-apps/refresh', requireAuth, requireOceanProducts, async (req, res) => {
+  try {
+    const list = await miniApps.fillAudit()
+    res.json(ok({ list }))
+  } catch (e) {
+    console.error('[oceanengine] mini apps refresh', e.message)
+    res.json(fail(500, '同步小程序信息失败'))
+  }
+})
+
+router.get('/mini-apps/search', requireAuth, requireOceanProducts, async (req, res) => {
+  try {
+    const result = await miniApps.searchOcean(req.query.keyword)
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] mini apps search', e.message)
+    res.json(fail(500, '读取巨量小程序失败'))
+  }
+})
+
+router.post('/mini-apps', requireAuth, requireOceanProducts, (req, res) => {
+  try {
+    const body = req.body || {}
+    const result = miniApps.addSelected(body.items, body.copyrightOwner)
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] mini apps add', e.message)
+    res.json(fail(500, '添加小程序失败'))
+  }
+})
+
+router.post('/mini-apps/remove', requireAuth, requireOceanProducts, (req, res) => {
+  try {
+    const result = miniApps.remove((req.body || {}).appIds)
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] mini apps remove', e.message)
+    res.json(fail(500, '移除小程序失败'))
+  }
+})
+
+router.post('/mini-apps/copyright', requireAuth, requireOceanProducts, (req, res) => {
+  try {
+    const body = req.body || {}
+    const result = miniApps.setCopyright(body.appId, body.copyrightOwner)
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] mini app copyright', e.message)
+    res.json(fail(500, '保存版权方失败'))
   }
 })
 
@@ -544,6 +685,38 @@ router.post('/sites/generate', requireAuth, requireOceanProducts, async (req, re
   } catch (e) {
     console.error('[oceanengine] generate sites', e.message)
     res.json(fail(500, '生成落地页失败'))
+  }
+})
+
+router.get('/sites/sync/job', requireAuth, requireOceanProducts, (req, res) => {
+  try {
+    res.json(ok(sites.siteJobView()))
+  } catch (e) {
+    console.error('[oceanengine] site sync job', e.message)
+    res.json(fail(500, '读取落地页同步进度失败'))
+  }
+})
+
+router.post('/sites/sync/start', requireAuth, requireOceanProducts, (req, res) => {
+  try {
+    const body = req.body || {}
+    const result = sites.startSiteSync({ copyright: body.copyright, advertiserIds: body.advertiserIds })
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] site sync start', e.message)
+    res.json(fail(500, '开始同步落地页失败'))
+  }
+})
+
+router.post('/sites/sync/stop', requireAuth, requireOceanProducts, (req, res) => {
+  try {
+    const result = sites.stopSiteSync()
+    if (result.error) return res.json(fail(400, result.error))
+    res.json(ok(result))
+  } catch (e) {
+    console.error('[oceanengine] site sync stop', e.message)
+    res.json(fail(500, '停止同步落地页失败'))
   }
 })
 

@@ -25,6 +25,10 @@
           <el-checkbox v-model="onlyMissing" @change="onOnlyMissing">只看没有落地页</el-checkbox>
           <span v-if="selectedCount" class="hint inline">已选 {{ selectedCount }}</span>
           <el-button type="primary" :loading="siteBatching" @click="generateSelected">批量生成</el-button>
+          <el-button v-if="syncing" :loading="stopping" @click="stopSync">{{ stopping ? "正在停止" : "停止同步" }}</el-button>
+          <el-button v-else :icon="$icons.Refresh" :disabled="siteBatching" @click="syncAll">从巨量同步</el-button>
+          <el-progress v-if="syncing" class="side-progress" :percentage="syncPercent" :stroke-width="8" :show-text="false" />
+          <span v-if="syncing && syncProgress" class="hint inline">{{ syncProgress }}</span>
           <span v-if="siteProgress" class="hint inline">{{ siteProgress }}</span>
         </div>
       </div>
@@ -79,7 +83,8 @@
           </el-table-column>
           <el-table-column label="落地页名称" min-width="180" show-overflow-tooltip>
             <template #default="{ row }">
-              <el-icon v-if="linkOf(row).loading" class="is-loading site-loading"><component :is="$icons.Loading" /></el-icon>
+              <span v-if="linkOf(row).pending" class="site-empty">未同步</span>
+              <el-icon v-else-if="linkOf(row).loading" class="is-loading site-loading"><component :is="$icons.Loading" /></el-icon>
               <span v-else-if="linkOf(row).error" class="site-status">
                 <span class="fail" :title="linkOf(row).error">{{ shortError(linkOf(row).error) }}</span>
                 <el-button
@@ -221,7 +226,6 @@ const copyrights = ref([])
 const tableParams = reactive({ keyword: "", copyright: "", subject: "" })
 const selectedIds = ref(new Set())
 const onlyMissing = ref(false)
-const siteStatus = ref({})
 const posterReady = ref(false)
 const posterVisible = ref(false)
 const posterInput = ref(null)
@@ -231,6 +235,13 @@ const refreshing = reactive({})
 const siteBatching = ref(false)
 const siteProgress = ref("")
 const sitePercent = ref(0)
+const syncing = ref(false)
+const stopping = ref(false)
+const syncProgress = ref("")
+const syncPercent = ref(0)
+let syncPollTimer = 0
+let syncPollLock = false
+let sawSyncRunning = false
 const failVisible = ref(false)
 const failRows = ref([])
 const sitesVisible = ref(false)
@@ -243,6 +254,12 @@ onMounted(() => {
   loadAuth()
   loadPoster()
   loadUsing()
+  resumeSync()
+})
+
+onUnmounted(() => {
+  window.clearInterval(syncPollTimer)
+  syncPollTimer = 0
 })
 
 async function loadAuth() {
@@ -272,12 +289,9 @@ function copyText(value) {
   )
 }
 
-const emptyText = computed(() => (onlyMissing.value ? "这一页没有未建落地页的账户" : "没有正在使用的账户"))
+const emptyText = computed(() => (onlyMissing.value ? "没有未建落地页的账户" : "没有正在使用的账户"))
 const selectedCount = computed(() => selectedIds.value.size)
-const shownAccounts = computed(() => {
-  if (!onlyMissing.value) return tableData.value
-  return tableData.value.filter((account) => !accountHasSite(account))
-})
+const shownAccounts = computed(() => tableData.value)
 const pageIds = computed(() => shownAccounts.value.map((row) => row.advertiserId).filter(Boolean))
 const pageAllChecked = computed(() => pageIds.value.length > 0 && pageIds.value.every((id) => selectedIds.value.has(id)))
 const pagePartChecked = computed(() => {
@@ -287,8 +301,7 @@ const pagePartChecked = computed(() => {
 const displayRows = computed(() => {
   const out = []
   for (const account of shownAccounts.value) {
-    const status = siteStatus.value[account.advertiserId]
-    const sites = status && !status.loading && !status.error ? status.sites || [] : []
+    const sites = account.siteSynced && !account.siteError ? account.sites || [] : []
     if (!sites.length) {
       out.push({ ...account, site: null, span: 1, spanIndex: 0, rowKey: account.advertiserId })
       continue
@@ -305,12 +318,6 @@ const displayRows = computed(() => {
   }
   return out
 })
-
-function accountHasSite(account) {
-  const status = siteStatus.value[account.advertiserId]
-  if (!status || status.loading || status.error) return false
-  return status.total > 0 || (status.sites && status.sites.length > 0)
-}
 
 function clearSelected() {
   selectedIds.value = new Set()
@@ -387,6 +394,7 @@ function searchUsing() {
 
 function onOnlyMissing() {
   clearSelected()
+  searchUsing()
 }
 
 function resetUsing() {
@@ -401,8 +409,8 @@ function onPageChange() {
   loadUsing()
 }
 
-async function loadUsing() {
-  tableLoading.value = true
+async function loadUsing(options = {}) {
+  if (!options.silent) tableLoading.value = true
   try {
     const res = await request({
       url: "/admin-api/oceanengine/accounts/page",
@@ -410,6 +418,8 @@ async function loadUsing() {
         keyword: tableParams.keyword,
         copyright: tableParams.copyright,
         subject: tableParams.subject,
+        withSites: "1",
+        siteMissing: onlyMissing.value ? "1" : "",
         pageNo: pageNo.value,
         pageSize: pageSize.value,
       },
@@ -424,105 +434,30 @@ async function loadUsing() {
     tableTotal.value = data.total || 0
     if (Array.isArray(data.subjects)) subjects.value = data.subjects
     if (Array.isArray(data.copyrights)) copyrights.value = data.copyrights
-    loadSiteSummary(tableData.value)
   } finally {
-    tableLoading.value = false
+    if (!options.silent) tableLoading.value = false
   }
 }
 
 function linkOf(row) {
-  return siteStatus.value[row.advertiserId] || { loading: true, total: 0, sites: [], error: "" }
+  if (refreshing[row.advertiserId]) return { loading: true, pending: false, error: "" }
+  if (!row.siteSynced) return { loading: false, pending: true, error: "" }
+  return { loading: false, pending: false, error: row.siteError || "" }
 }
 
-let summarySeq = 0
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-function isRateLimit(message) {
-  return /频率超限|请求频率|限频|40100/.test(String(message || ""))
-}
-
-function writeSiteStatus(id, patch) {
-  siteStatus.value = { ...siteStatus.value, [id]: patch }
-}
-
-async function loadSiteSummary(rows) {
-  const seq = ++summarySeq
-  const ids = (rows || []).map((row) => row.advertiserId).filter(Boolean)
-  if (!ids.length) return
-  const pending = { ...siteStatus.value }
-  for (const id of ids) pending[id] = { ...(pending[id] || {}), loading: true, error: "" }
-  siteStatus.value = pending
-  let cursor = 0
-  async function pullOne() {
-    while (seq === summarySeq) {
-      const index = cursor
-      cursor += 1
-      if (index >= ids.length) return
-      const id = ids[index]
-      let lastError = ""
-      for (let attempt = 1; attempt <= 2; attempt += 1) {
-        if (seq !== summarySeq) return
-        try {
-          const res = await request({
-            url: "/admin-api/oceanengine/sites/summary",
-            method: "POST",
-            timeout: 60000,
-            data: { advertiserIds: [id] },
-          })
-          if (seq !== summarySeq) return
-          if (res.code !== 0) {
-            lastError = res.msg || "读取失败"
-            if (isRateLimit(lastError) && attempt < 2) {
-              await sleep(800)
-              continue
-            }
-            break
-          }
-          const item = ((res.data && res.data.list) || [])[0] || { advertiserId: id, total: 0, sites: [], error: "" }
-          if (isRateLimit(item.error) && attempt < 2) {
-            lastError = item.error
-            await sleep(800)
-            continue
-          }
-          writeSiteStatus(id, {
-            loading: false,
-            total: item.total || 0,
-            sites: item.sites || [],
-            error: item.error || "",
-          })
-          lastError = ""
-          break
-        } catch (e) {
-          if (seq !== summarySeq) return
-          lastError = e?.response?.data?.msg || e?.message || "读取失败"
-          if (attempt < 2) {
-            await sleep(800)
-            continue
-          }
-        }
-      }
-      if (lastError && seq === summarySeq) {
-        writeSiteStatus(id, {
-          loading: false,
-          total: 0,
-          sites: [],
-          error: isRateLimit(lastError) ? "接口繁忙，请稍后再查" : lastError,
-        })
-      }
-    }
-  }
-  const width = Math.min(4, ids.length)
-  await Promise.all(Array.from({ length: width }, () => pullOne()))
+function patchAccountSites(id, item) {
+  const account = tableData.value.find((row) => row.advertiserId === id)
+  if (!account) return
+  account.siteSynced = true
+  account.sites = item.sites || []
+  account.siteCount = item.total || account.sites.length
+  account.siteError = item.error || ""
 }
 
 async function refreshSite(row) {
   const id = row && row.advertiserId
   if (!id || refreshing[id]) return
   refreshing[id] = true
-  writeSiteStatus(id, { ...(siteStatus.value[id] || {}), loading: true, error: "" })
   try {
     const res = await request({
       url: "/admin-api/oceanengine/sites/summary",
@@ -531,26 +466,116 @@ async function refreshSite(row) {
       data: { advertiserIds: [id] },
     })
     if (res.code !== 0) {
-      writeSiteStatus(id, { loading: false, total: 0, sites: [], error: res.msg || "读取失败" })
+      patchAccountSites(id, { total: 0, sites: [], error: res.msg || "读取失败" })
       return
     }
     const item = ((res.data && res.data.list) || [])[0] || {}
-    writeSiteStatus(id, {
-      loading: false,
-      total: item.total || 0,
-      sites: item.sites || [],
-      error: item.error || "",
-    })
+    patchAccountSites(id, item)
+    if (onlyMissing.value && item.total) loadUsing({ silent: true })
   } catch (e) {
-    writeSiteStatus(id, {
-      loading: false,
-      total: 0,
-      sites: [],
-      error: e?.response?.data?.msg || e?.message || "读取失败",
-    })
+    patchAccountSites(id, { total: 0, sites: [], error: e?.response?.data?.msg || e?.message || "读取失败" })
   } finally {
     refreshing[id] = false
   }
+}
+
+function showSyncProgress(job) {
+  const done = job.done || 0
+  const total = job.total || 0
+  syncPercent.value = total ? Math.round((done / total) * 100) : 0
+  syncProgress.value = job.stopRequested && job.running ? `正在停止 ${done}/${total}` : `正在同步 ${done}/${total}`
+  stopping.value = !!(job.stopRequested && job.running)
+}
+
+async function pullSync() {
+  if (syncPollLock) return
+  syncPollLock = true
+  try {
+    const res = await request({ url: "/admin-api/oceanengine/sites/sync/job" })
+    if (res.code !== 0) return
+    const job = res.data || {}
+    if (job.running) {
+      sawSyncRunning = true
+      syncing.value = true
+      showSyncProgress(job)
+      await loadUsing({ silent: true })
+      return
+    }
+    if (!sawSyncRunning) return
+    sawSyncRunning = false
+    window.clearInterval(syncPollTimer)
+    syncPollTimer = 0
+    syncing.value = false
+    stopping.value = false
+    syncProgress.value = ""
+    await loadUsing()
+    if (job.error) ElMessage.error(job.error)
+    else if (job.stopped) ElMessage.warning(`已停止，完成 ${job.done || 0}/${job.total || 0}`)
+    else if (job.failed) ElMessage.warning(`同步结束，${job.failed} 个账户这次没读成`)
+    else ElMessage.success("同步完成")
+  } catch {
+    /* 下一拍再问 */
+  } finally {
+    syncPollLock = false
+  }
+}
+
+function beginSyncPoll() {
+  if (syncPollTimer) return
+  pullSync()
+  syncPollTimer = window.setInterval(pullSync, 1500)
+}
+
+async function resumeSync() {
+  const res = await request({ url: "/admin-api/oceanengine/sites/sync/job" })
+  if (res.code !== 0 || !res.data || !res.data.running) return
+  sawSyncRunning = true
+  syncing.value = true
+  showSyncProgress(res.data)
+  beginSyncPoll()
+}
+
+async function stopSync() {
+  if (!syncing.value || stopping.value) return
+  stopping.value = true
+  const res = await request({ url: "/admin-api/oceanengine/sites/sync/stop", method: "POST" })
+  if (res.code !== 0) {
+    stopping.value = false
+    ElMessage.error(res.msg || "停止失败")
+  }
+}
+
+async function syncAll() {
+  if (syncing.value || siteBatching.value) return
+  if (authReady.value && !authorized.value) {
+    ElMessage.warning("请先在「授权」里完成巨量授权")
+    return
+  }
+  const copyright = tableParams.copyright || ""
+  const picked = [...selectedIds.value]
+  const label = picked.length ? `已选的 ${picked.length} 个账户` : copyright ? `${copyright}下的全部账户` : "全部正在使用的账户"
+  try {
+    await ElMessageBox.confirm(
+      `从巨量同步${label}的落地页，并保存到本地。账户多的时候要几分钟，刷新页面也会继续。`,
+      "从巨量同步",
+      { confirmButtonText: "开始同步", cancelButtonText: "取消", type: "warning" },
+    )
+  } catch {
+    return
+  }
+  const res = await request({
+    url: "/admin-api/oceanengine/sites/sync/start",
+    method: "POST",
+    data: { copyright, advertiserIds: picked },
+  })
+  if (res.code !== 0) {
+    ElMessage.error(res.msg || "开始同步失败")
+    return
+  }
+  sawSyncRunning = true
+  syncing.value = true
+  showSyncProgress(res.data || {})
+  beginSyncPoll()
 }
 
 function shortError(message) {
@@ -560,13 +585,11 @@ function shortError(message) {
 }
 
 function hasSite(row) {
-  const status = linkOf(row)
-  return !status.loading && !status.error && (status.total > 0 || (status.sites && status.sites.length > 0))
+  return !!(row.site || row.siteCount)
 }
 
 function canGenerate(row) {
-  const status = linkOf(row)
-  return !status.loading && !status.error && !hasSite(row)
+  return !refreshing[row.advertiserId] && !row.siteError && !hasSite(row)
 }
 
 async function loadPoster() {
@@ -642,18 +665,19 @@ async function savePoster(event) {
 }
 
 function applyGenerated(results) {
-  const next = { ...siteStatus.value }
+  let gained = false
   for (const row of results || []) {
     if (!row.advertiserId) continue
     if (row.status === "fail") {
-      next[row.advertiserId] = { loading: false, total: 0, sites: [], error: row.message || "生成失败" }
+      patchAccountSites(row.advertiserId, { total: 0, sites: [], error: row.message || "生成失败" })
       continue
     }
     const pageUrl = row.pageUrl || ""
-    const sites = pageUrl ? [{ pageUrl, name: row.assetName || "" }] : next[row.advertiserId]?.sites || []
-    next[row.advertiserId] = { loading: false, total: Math.max(sites.length, 1), sites, error: "" }
+    const sites = pageUrl ? [{ pageUrl, name: row.assetName || "", siteId: row.siteId || "" }] : []
+    if (sites.length) gained = true
+    patchAccountSites(row.advertiserId, { total: Math.max(sites.length, row.status === "skip" ? 1 : 0), sites, error: "" })
   }
-  siteStatus.value = next
+  if (gained && onlyMissing.value) loadUsing({ silent: true })
 }
 
 async function generateIds(ids) {
@@ -666,8 +690,9 @@ async function generateIds(ids) {
     return null
   }
   const pending = ids.filter((id) => {
-    const status = siteStatus.value[id]
-    return status && !status.loading && !status.error && !(status.total > 0 || (status.sites && status.sites.length))
+    const account = tableData.value.find((row) => row.advertiserId === id)
+    if (!account) return true
+    return !account.siteError && !account.siteCount
   })
   if (!pending.length) {
     ElMessage.info("选中的账户都已经有落地页")

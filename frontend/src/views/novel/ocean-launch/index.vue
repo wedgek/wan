@@ -6,26 +6,7 @@
           <div class="task-split">
             <div class="setup-col">
               <section class="step">
-                <header class="step-head"><em>1</em><h3>策略模板</h3></header>
-                <div class="pick-row">
-                  <el-select
-                    v-model="strategyId"
-                    class="full-select"
-                    fit-input-width
-                    teleported
-                    placeholder="先选一个策略模板"
-                    popper-class="ocean-launch-select-popper"
-                    @change="onStrategyChange"
-                  >
-                    <el-option v-for="item in strategies" :key="item.id" :label="item.name" :value="item.id" />
-                  </el-select>
-                  <el-button link type="primary" @click="goStrategies">去配置</el-button>
-                </div>
-                <p class="hint">{{ strategyHint }}</p>
-              </section>
-
-              <section class="step">
-                <header class="step-head"><em>2</em><h3>版权</h3></header>
+                <header class="step-head"><em>1</em><h3>版权</h3></header>
                 <div class="chip-row">
                   <button
                     v-for="item in copyrightOptions"
@@ -39,7 +20,27 @@
                     <em>{{ item.count }}</em>
                   </button>
                 </div>
-                <p class="hint">先选版权。书名可远程搜索，书籍库里的书都能找，打过链接的就能投。</p>
+                <p class="hint">先选版权。下面只列出这个版权的策略。书名可远程搜索，打过链接的就能投。</p>
+              </section>
+
+              <section class="step">
+                <header class="step-head"><em>2</em><h3>策略模板</h3></header>
+                <div class="pick-row">
+                  <el-select
+                    v-model="strategyId"
+                    class="full-select"
+                    fit-input-width
+                    teleported
+                    :placeholder="copyrightFilter ? '选择这个版权下的策略' : '先选版权'"
+                    :disabled="!copyrightFilter"
+                    popper-class="ocean-launch-select-popper"
+                    @change="onStrategyChange"
+                  >
+                    <el-option v-for="item in visibleStrategies" :key="item.id" :label="item.name" :value="item.id" />
+                  </el-select>
+                  <el-button link type="primary" @click="goStrategies">去配置</el-button>
+                </div>
+                <p class="hint">{{ strategyHint }}</p>
               </section>
 
               <section class="step">
@@ -487,6 +488,7 @@
 <script setup name="novelOceanLaunch">
 import { useRouter } from "vue-router"
 import request from "@/request"
+import { readCopyright, writeCopyright } from "../shared"
 import CzPagination from "@/components/cz-pagination/index.vue"
 
 const router = useRouter()
@@ -503,7 +505,7 @@ const libraries = ref([])
 const launchTiers = ref(DEFAULT_TIERS.slice())
 const strategyId = ref(null)
 const bookName = ref("")
-const copyrightFilter = ref("点众")
+const copyrightFilter = ref(readCopyright())
 const platformId = ref("")
 const selectedTiers = ref([])
 const plan = ref(null)
@@ -594,6 +596,7 @@ const copyrightOptions = computed(() =>
   })),
 )
 const visibleBooks = computed(() => books.value)
+const visibleStrategies = computed(() => strategies.value.filter((item) => strategyCopyright(item) === copyrightFilter.value))
 const currentStrategy = computed(() => strategies.value.find((item) => item.id === strategyId.value) || null)
 const currentTitlePack = computed(() => {
   const id = (currentStrategy.value && currentStrategy.value.titleLibraryId) || confirm.value.titleLibraryId
@@ -621,7 +624,8 @@ const currentLibrary = computed(() => libraries.value.find((item) => item.id ===
 const currentLibraryName = computed(() => (currentLibrary.value && currentLibrary.value.name) || "")
 const strategyHint = computed(() => {
   const row = currentStrategy.value
-  if (!row) return "复用的智擎参数放在策略模板里，最后套上即可。"
+  if (!copyrightFilter.value) return "先选版权。"
+  if (!row) return visibleStrategies.value.length ? "选择这个版权下的策略模板。" : "这个版权还没有策略。到策略模板里建一套。"
   const pack = titleLibraries.value.find((item) => item.id === row.titleLibraryId)
   const bits = [row.summary || row.name]
   if (pack) bits.push(`标题包 ${pack.name}`)
@@ -1068,6 +1072,22 @@ function syncLaunchTiers() {
   launchTiers.value = tiers
   selectedTiers.value = selectedTiers.value.filter((tier) => tiers.includes(tier))
 }
+function strategyCopyright(strategy) {
+  if (!strategy) return ""
+  const names = copyrights.value
+  const named = String(strategy.copyrightOwner || "").trim()
+  if (named && (!names.length || names.includes(named))) return named
+  return ""
+}
+function pickStrategyForCopyright() {
+  const list = strategies.value.filter((item) => strategyCopyright(item) === copyrightFilter.value)
+  if (list.some((item) => item.id === strategyId.value)) {
+    syncLaunchTiers()
+    return
+  }
+  strategyId.value = list[0] ? list[0].id : null
+  syncLaunchTiers()
+}
 function onStrategyChange() {
   syncLaunchTiers()
   markDirty()
@@ -1078,6 +1098,8 @@ function goStrategies() {
 function setCopyright(value) {
   if (copyrightFilter.value === value) return
   copyrightFilter.value = value
+  writeCopyright(value)
+  pickStrategyForCopyright()
   excludedSubjects.value = defaultExcludedSubjects()
   loadedBookKey = ""
   const keepName = bookName.value
@@ -1153,11 +1175,11 @@ async function loadOptions() {
   tasks.value = res.data.tasks || []
   taskTotal.value = Number(res.data.taskTotal) || tasks.value.length
   pickDefaultLibrary()
-  if (!strategyId.value && strategies.value.length) strategyId.value = strategies.value[0].id
-  syncLaunchTiers()
-  if (copyrights.value.length && !copyrights.value.includes(copyrightFilter.value)) {
+  if (copyrights.value.includes(readCopyright())) copyrightFilter.value = readCopyright()
+  else if (copyrights.value.length && !copyrights.value.includes(copyrightFilter.value)) {
     copyrightFilter.value = copyrights.value[0]
   }
+  pickStrategyForCopyright()
   await fetchBooks("")
   const active = tasks.value.find((item) => item.status === "running")
     || tasks.value.find((item) => item.status === "preparing")

@@ -74,5 +74,12 @@ assert.strictEqual(mini.instanceId, '7602204508193917990')
 assert.strictEqual(events.pickEventAsset([{ assetId: '1', name: '别的' }, { assetId: '2', name: '倾心书馆' }]).assetId, '2')
 assert.strictEqual(events.findEventByName([{ name: '付费 ROI', eventId: '3' }], '付费ROI').eventId, '3')
 assert.ok(Array.isArray(events.listAccountOptions('__no_such_account__')))
+const table = require('../db').getDb().prepare(
+  "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'oceanengine_event_status'",
+).get()
+assert.ok(table)
+const ids = events.listSyncAdvertiserIds('__no_such_copyright__')
+assert.strictEqual(ids.total, 0)
+assert.deepStrictEqual(ids.advertiserIds, [])
 
 console.log('oceanengine event ok')

@@ -31,5 +31,6 @@ async function load() {
 <style scoped lang="scss">
 .ocean-events {
   min-height: 0;
+  padding-top: 0;
 }
 </style>

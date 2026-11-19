@@ -738,7 +738,7 @@ function listLocal(query) {
     console.error('[oceanengine] backfill categories', e.message)
   }
   const pageNo = Math.max(1, parseInt(query && query.pageNo, 10) || 1)
-  const pageSize = Math.min(100, Math.max(1, parseInt(query && query.pageSize, 10) || 20))
+  const pageSize = Math.min(200, Math.max(1, parseInt(query && query.pageSize, 10) || 20))
   const platformId = String((query && query.platformId) || '').trim()
   const keyword = String((query && query.keyword) || '').trim()
   const category = String((query && query.category) || '').trim()

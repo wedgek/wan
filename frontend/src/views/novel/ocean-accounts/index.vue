@@ -30,7 +30,7 @@
     <div class="page-table-header">
       <div class="page-table-header-left">
         <el-button type="primary" @click="importVisible = true">从巨量导入</el-button>
-        <el-button :icon="$icons.Refresh" :loading="syncing" title="只更新正在使用的账户：名称、授权状态、账户主体、所属组织、创建时间和缺失的头像" @click="syncRemote()">同步线上信息</el-button>
+        <el-button :icon="$icons.Refresh" :loading="syncing" title="只更新正在使用的账户：名称、授权状态、账户主体、所属组织、创建时间和缺失的头像" @click="syncRemote()">同步巨量信息</el-button>
         <el-button v-if="selectedRows.length" :loading="syncing" @click="syncRemote(selectedIds)">同步所选</el-button>
         <el-button v-if="selectedRows.length" @click="removeUsing">移出使用</el-button>
         <el-dropdown v-if="selectedRows.length" @command="onBatchCommand">
@@ -218,6 +218,7 @@ import CzPagination from "@/components/cz-pagination/index.vue"
 import CzImageCropperModal from "@/components/cz-image-cropper-modal/index.vue"
 import request from "@/request"
 import AccountRenameDialog from "./account-rename-dialog.vue"
+import { readCopyright, writeCopyright } from "../shared"
 
 const tableRef = ref(null)
 const syncing = ref(false)
@@ -249,7 +250,7 @@ const defaultTableParams = () => ({
   keyword: "",
   subject: "",
   template: "",
-  copyright: "点众",
+  copyright: readCopyright(),
   scope: "using",
   pageNo: 1,
   pageSize: 20,
@@ -297,6 +298,7 @@ const copyrightTabs = computed(() => {
 })
 
 function onCopyrightTab() {
+  writeCopyright(tableParams.copyright)
   tableParams.pageNo = 1
   tableParams.subject = ""
   tableParams.template = ""

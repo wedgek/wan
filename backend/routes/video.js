@@ -249,7 +249,7 @@ router.get('/jobs/get', async (req, res) => {
 
 router.get('/jobs/page', (req, res) => {
   const pageNo = Math.max(1, parseInt(req.query.pageNo, 10) || 1)
-  const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 20))
+  const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize, 10) || 20))
   const offset = (pageNo - 1) * pageSize
   const d = database()
   const total = d.prepare('SELECT COUNT(*) AS c FROM video_jobs WHERE user_id = ?').get(req.userId).c
@@ -267,7 +267,7 @@ router.get('/jobs/page', (req, res) => {
 router.get('/projects/page', (req, res) => {
   try {
     const pageNo = Math.max(1, parseInt(req.query.pageNo, 10) || 1)
-    const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 20))
+    const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize, 10) || 20))
     const offset = (pageNo - 1) * pageSize
     const d = database()
     const total = d.prepare('SELECT COUNT(*) AS c FROM video_projects WHERE user_id = ?').get(req.userId)

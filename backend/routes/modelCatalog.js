@@ -15,7 +15,7 @@ const database = () => db.getDb()
 
 router.get('/model-catalog/page', (req, res) => {
   const pageNo = Math.max(1, parseInt(req.query.pageNo, 10) || 1)
-  const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 20))
+  const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize, 10) || 20))
   const keyword = (req.query.keyword || req.query.name || '').trim()
   const modality = (req.query.modality || '').trim()
   const vendor = (req.query.vendor || '').trim()

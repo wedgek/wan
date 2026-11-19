@@ -347,7 +347,7 @@ router.delete('/dept/delete', (req, res) => {
 /* ---------- 角色 ---------- */
 router.get('/role/page', (req, res) => {
   const pageNo = Math.max(1, parseInt(req.query.pageNo, 10) || 1)
-  const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 20))
+  const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize, 10) || 20))
   const name = (req.query.name || '').trim()
   const code = (req.query.code || '').trim()
   const status = req.query.status
@@ -494,7 +494,7 @@ function loadRoleNamesByUserIds(dbi, userIds) {
 /* ---------- 用户 ---------- */
 router.get('/user/page', (req, res) => {
   const pageNo = Math.max(1, parseInt(req.query.pageNo, 10) || 1)
-  const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 20))
+  const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize, 10) || 20))
   const username = (req.query.username || '').trim()
   const status = req.query.status
   const deptId = req.query.deptId
@@ -776,7 +776,7 @@ function rowToAiPrompt(r) {
 /* ---------- AI 提示词 ---------- */
 router.get('/ai-prompt/page', (req, res) => {
   const pageNo = Math.max(1, parseInt(req.query.pageNo, 10) || 1)
-  const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 20))
+  const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize, 10) || 20))
   const name = (req.query.name || '').trim()
   const scene = (req.query.scene || '').trim()
   const status = req.query.status
@@ -928,7 +928,7 @@ function resolveVideoModelModality(d, b) {
 
 router.get('/video-model/page', (req, res) => {
   const pageNo = Math.max(1, parseInt(req.query.pageNo, 10) || 1)
-  const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 20))
+  const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize, 10) || 20))
   const name = (req.query.name || '').trim()
   const status = req.query.status
   const modality = (req.query.modality || '').trim()

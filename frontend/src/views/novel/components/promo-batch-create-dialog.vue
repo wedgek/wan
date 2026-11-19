@@ -59,9 +59,13 @@ const createUrl = computed(() =>
     ? "/admin-api/novel/promo-links/changdu/batch-create"
     : "/admin-api/novel/promo-links/dianzhong/batch-create",
 )
+const selectedAppName = computed(() => {
+  const hit = channels.value.find((item) => item.id === form.channelId)
+  return (hit && hit.label) || "小程序"
+})
 const hintText = computed(() =>
   isChangdu.value
-    ? "起始章节默认第 1 章，回传走公共配置。链接名称：番茄-迷机小说-公共配置-档位名。"
+    ? `起始章节默认第 1 章，回传走公共配置。链接名称：番茄-${selectedAppName.value}-公共配置-档位名。`
     : "起始章节默认第 1 集，回传走公共配置。链接名称：点众-倾心书馆-公共配置-档位名。",
 )
 const missingTplText = computed(() =>

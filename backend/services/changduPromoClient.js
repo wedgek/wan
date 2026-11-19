@@ -1,20 +1,22 @@
 /**
  * 常读分销（番茄小说）推广链接：应用 / 付费面板 / 回传规则 / 创建 / 查询。
- * 签名：md5(distributor_id + secret_key + ts) 小写。密钥只读环境变量。
- * CHANGDU_APP_ID 支持多个应用：123:迷机小说,456:其他
- * 接口路径可用 CHANGDU_PATH_* 覆盖；默认对齐常读开放接口 novelsale/openapi。
+ * 签名（文档 1.2.1）：md5(distributor_id + secret_key + ts + params_value)，放在 header-sign / header-ts。
+ * CHANGDU_APP_ID 支持多个应用：123:迷机小说,456:其他。充值模板接口不按应用拆分。
+ * 接口路径可用 CHANGDU_PATH_* 覆盖；默认对齐常读 IAP Open API。
  */
 const crypto = require('crypto')
 
-const DEFAULT_BASE = 'https://www.changdupingtai.com'
+const DEFAULT_BASE = 'https://openapi.changdupingtai.com'
 const SOURCE = 'changdu'
 const MEDIA_SOURCES = new Set(['dy', 'ks', 'bd', 'adq', 'tx', 'no_back'])
+const MEDIA_SOURCE_CODE = { dy: 1, ks: 3, bd: 1, tx: 4, adq: 4, wx: 4, no_back: 1 }
 const DEFAULT_PATHS = {
   apps: '/novelsale/openapi/app/list/v1/',
-  payPanels: '/novelsale/openapi/iaa_config/list/v1/',
+  payPanels: '/novelsale/openapi/recharge_template/list/v1/',
+  boundPackages: '/novelsale/openapi/wx/get_bound_package_list/v1/',
   callbacks: '/novelsale/openapi/callback_config/list/v1/',
-  promotions: '/novelsale/openapi/promotion/list/v1/',
-  promotionCreate: '/novelsale/openapi/promotion/create/v1/',
+  promotions: '/novelsale/openapi/promotion/list/v2/',
+  promotionCreate: '/novelsale/openapi/promotion/create/v1',
 }
 
 function parseChannels(raw) {
@@ -52,6 +54,7 @@ function config() {
   const paths = {
     apps: envPath('CHANGDU_PATH_APPS', DEFAULT_PATHS.apps),
     payPanels: envPath('CHANGDU_PATH_PAY_PANELS', DEFAULT_PATHS.payPanels),
+    boundPackages: envPath('CHANGDU_PATH_BOUND_PACKAGES', DEFAULT_PATHS.boundPackages),
     callbacks: envPath('CHANGDU_PATH_CALLBACKS', DEFAULT_PATHS.callbacks),
     promotions: envPath('CHANGDU_PATH_PROMOTIONS', DEFAULT_PATHS.promotions),
     promotionCreate: envPath('CHANGDU_PATH_PROMOTION_CREATE', DEFAULT_PATHS.promotionCreate),
@@ -80,18 +83,62 @@ function assertConfig() {
   return { cfg }
 }
 
-function signKey(distributorId, secretKey, ts) {
-  return crypto.createHash('md5').update(`${distributorId}${secretKey}${ts}`).digest('hex')
+function signKey(distributorId, secretKey, ts, paramsValue) {
+  return crypto
+    .createHash('md5')
+    .update(`${distributorId}${secretKey}${ts}${paramsValue || ''}`, 'utf8')
+    .digest('hex')
 }
 
-function authParams() {
-  const { distributorId, secretKey } = config()
-  const ts = String(Math.floor(Date.now() / 1000))
-  return {
-    distributor_id: distributorId,
-    ts,
-    sign: signKey(distributorId, secretKey, ts),
+function jsonId(value) {
+  const s = String(value == null ? '' : value).trim()
+  if (!/^\d+$/.test(s)) return s
+  const n = Number(s)
+  return String(n) === s ? n : s
+}
+
+function pythonQuote(value) {
+  let out = '"'
+  for (const ch of String(value)) {
+    const c = ch.codePointAt(0)
+    if (ch === '"') out += '\\"'
+    else if (ch === '\\') out += '\\\\'
+    else if (ch === '\n') out += '\\n'
+    else if (ch === '\r') out += '\\r'
+    else if (ch === '\t') out += '\\t'
+    else if (c < 0x20 || c > 0x7e) out += `\\u${c.toString(16).padStart(4, '0')}`
+    else out += ch
   }
+  return `${out}"`
+}
+
+function pythonJsonDumps(obj) {
+  const body = Object.keys(obj)
+    .map((key) => {
+      const value = obj[key]
+      let dumped = 'null'
+      if (typeof value === 'number' && Number.isFinite(value)) dumped = String(value)
+      else if (typeof value === 'boolean') dumped = value ? 'true' : 'false'
+      else if (value != null) dumped = pythonQuote(value)
+      return `${pythonQuote(key)}: ${dumped}`
+    })
+    .join(', ')
+  return `{${body}}`
+}
+
+function paramsValueOf(param, method) {
+  if (method === 'POST') return pythonJsonDumps(param)
+  const keys = Object.keys(param)
+    .filter((key) => param[key] != null && param[key] !== '')
+    .sort()
+  if (!keys.length) return ''
+  return `${keys.map((key) => String(param[key])).join('|')}|`
+}
+
+function mediaSourceCode(raw) {
+  const s = String(raw || 'dy').trim().toLowerCase()
+  if (/^\d+$/.test(s)) return Number(s)
+  return MEDIA_SOURCE_CODE[s] || 1
 }
 
 function normalizeMediaSource(raw) {
@@ -113,6 +160,7 @@ function pickRemoteList(data) {
     'promotions',
     'iaa_list',
     'iaa_config_list',
+    'result',
     'callback_list',
     'callback_config_list',
     'configs',
@@ -139,30 +187,39 @@ function errorMessage(json, httpStatus) {
   )
 }
 
-async function requestJson(path, extra = {}, method) {
+async function requestJson(path, extra = {}, method, distributorId) {
   const ready = assertConfig()
   if (ready.error) return { error: ready.error }
   const verb = String(method || 'GET').toUpperCase() === 'POST' ? 'POST' : 'GET'
-  const auth = authParams()
-  const payload = { ...auth, ...extra }
+  const { secretKey } = ready.cfg
+  const id = String(distributorId || ready.cfg.distributorId).trim()
+  const ts = String(Math.floor(Date.now() / 1000))
+  const param = {}
+  if (verb === 'POST') param.distributor_id = jsonId(id)
+  else param.distributor_id = id
+  for (const [k, v] of Object.entries(extra)) {
+    if (v == null || v === '') continue
+    param[k] = v
+  }
+  const paramsValue = paramsValueOf(param, verb)
+  const headers = {
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+    'header-sign': signKey(id, secretKey, ts, paramsValue),
+    'header-ts': ts,
+  }
   const url = new URL(`${ready.cfg.base}${path}`)
+  let body
   if (verb === 'GET') {
-    for (const [k, v] of Object.entries(payload)) {
-      if (v == null || v === '') continue
-      url.searchParams.set(k, String(v))
+    for (const key of Object.keys(param).sort()) {
+      url.searchParams.set(key, String(param[key]))
     }
   } else {
-    for (const [k, v] of Object.entries(auth)) {
-      url.searchParams.set(k, String(v))
-    }
+    body = paramsValue
   }
   let res
   try {
-    res = await fetch(url, {
-      method: verb,
-      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-      body: verb === 'POST' ? JSON.stringify(payload) : undefined,
-    })
+    res = await fetch(url, { method: verb, headers, body })
   } catch (e) {
     return { error: `常读接口请求失败：${e.message || e}` }
   }
@@ -189,12 +246,72 @@ async function listApps() {
   return { data: pickRemoteList(remote.data), raw: remote.raw }
 }
 
+async function listBoundChannels(appId) {
+  const pageSize = 50
+  const all = []
+  for (let pageIndex = 0; pageIndex < 20; pageIndex += 1) {
+    const remote = await requestJson(
+      config().paths.boundPackages,
+      { app_id: appId, page_index: pageIndex, page_size: pageSize },
+      'GET',
+    )
+    if (remote.error) return pageIndex === 0 ? remote : { data: all }
+    const items = (remote.raw && remote.raw.wx_package_info_open_list) || []
+    all.push(...items)
+    const total = Number(remote.raw && remote.raw.total)
+    if (items.length < pageSize || (Number.isFinite(total) && all.length >= total)) break
+  }
+  return { data: all }
+}
+
+async function listTemplatesForDistributor(distributorId) {
+  const pageSize = 50
+  const all = []
+  for (let pageIndex = 0; pageIndex < 40; pageIndex += 1) {
+    const remote = await requestJson(
+      config().paths.payPanels,
+      { page_index: pageIndex, page_size: pageSize },
+      'GET',
+      distributorId,
+    )
+    if (remote.error) return pageIndex === 0 ? remote : { data: all }
+    const items = pickRemoteList(remote.data)
+    all.push(...items)
+    const total = Number(remote.raw && remote.raw.total)
+    if (items.length < pageSize || (Number.isFinite(total) && all.length >= total)) break
+  }
+  return { data: all }
+}
+
 async function listPayPanels(input = {}) {
-  const appId = String(input.appId || input.channelId || '').trim()
-  if (!appId) return { error: '请选择应用' }
-  const remote = await requestJson(config().paths.payPanels, { app_id: appId }, listMethod())
-  if (remote.error) return remote
-  return { data: pickRemoteList(remote.data), raw: remote.raw }
+  const wanted = String(input.appId || input.channelId || '').trim()
+  const apps = config().apps.filter((app) => !wanted || app.id === wanted)
+  if (!apps.length) return { error: '应用不在已配置列表中' }
+  const all = []
+  const warnings = []
+  for (const app of apps) {
+    const bound = await listBoundChannels(app.id)
+    if (bound.error) {
+      warnings.push(`${app.label}：${bound.error}`)
+      continue
+    }
+    const seen = new Set()
+    for (const channel of bound.data || []) {
+      const distributorId = String(channel.distributor_id || '').trim()
+      if (!distributorId || seen.has(distributorId)) continue
+      seen.add(distributorId)
+      const remote = await listTemplatesForDistributor(distributorId)
+      if (remote.error) {
+        warnings.push(`${app.label}/${channel.nick_name || distributorId}：${remote.error}`)
+        continue
+      }
+      for (const item of remote.data || []) {
+        all.push({ ...item, app_id: app.id, channel_nick: channel.nick_name || '' })
+      }
+    }
+  }
+  if (!all.length && warnings.length) return { error: warnings.join('；') }
+  return { data: all, warnings }
 }
 
 async function listCallbackConfigs(input = {}) {
@@ -245,42 +362,67 @@ async function createReferral(input) {
   let callbackConfigId = String(input.callbackConfigId || '').trim()
   if (!callbackConfigId) {
     const resolved = await resolveCallbackConfigId(appId)
-    if (resolved && resolved.error) return resolved
-    callbackConfigId = String(resolved || '0')
+    if (typeof resolved === 'string') callbackConfigId = resolved
   }
   const extra = {
-    app_id: appId,
     book_id: bookId,
     index: chapterIdx,
-    promotion_name: name.slice(0, 60),
-    iaa_config_id: String(input.batchId || input.iaaConfigId || '').trim(),
-    callback_config_id: callbackConfigId,
+    promotion_name: legalPromoName(name),
+    media_source: mediaSourceCode(input.mediaSource),
   }
-  if (!extra.iaa_config_id) delete extra.iaa_config_id
-  return requestJson(config().paths.promotionCreate, extra, 'POST')
+  const templateId = String(input.batchId || input.iaaConfigId || '').trim()
+  if (templateId) extra.recharge_template_id = jsonId(templateId)
+  if (callbackConfigId && callbackConfigId !== '0') extra.ad_callback_config_id = jsonId(callbackConfigId)
+  return requestJson(config().paths.promotionCreate, extra, 'POST', input.distributorId)
 }
 
 async function listReferrals(input = {}) {
   const appId = String(input.appId || input.channelId || '').trim()
-  if (!appId) return { error: '请选择应用' }
+  if (!appId && !input.distributorId) return { error: '请选择应用' }
+  const page = Math.max(1, parseInt(input.page, 10) || 1)
+  const size = Math.min(50, Math.max(1, parseInt(input.size, 10) || 50))
   const extra = {
-    app_id: appId,
-    page: Math.max(1, parseInt(input.page, 10) || 1),
-    page_index: Math.max(1, parseInt(input.page, 10) || 1),
-    page_size: Math.min(200, Math.max(1, parseInt(input.size, 10) || 100)),
-    size: Math.min(200, Math.max(1, parseInt(input.size, 10) || 100)),
+    page_index: page - 1,
+    page_size: size,
   }
   if (input.bookId) extra.book_id = String(input.bookId).trim()
   if (input.referralId) extra.promotion_id = String(input.referralId).trim()
   if (input.startTime) extra.start_time = String(input.startTime).trim()
   if (input.endTime) extra.end_time = String(input.endTime).trim()
-  return requestJson(config().paths.promotions, extra, listMethod())
+  return requestJson(config().paths.promotions, extra, listMethod(), input.distributorId)
 }
 
-function publicConfigPromoName(templateName) {
-  const prefix = config().promoNamePrefix
-  const n = String(templateName || '').trim()
-  return (n ? `${prefix}-${n}` : prefix).slice(0, 60)
+function legalPromoName(name) {
+  return String(name || '')
+    .replace(/\./g, '-')
+    .replace(/[^\u4e00-\u9fffA-Za-z0-9-]/g, '')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 60)
+}
+
+function publicConfigPromoName(templateName, appName) {
+  const app = legalPromoName(appName)
+  const prefix = app ? legalPromoName(`番茄-${app}-公共配置`) : legalPromoName(config().promoNamePrefix)
+  const n = legalPromoName(templateName)
+  return legalPromoName(n ? `${prefix}-${n}` : prefix)
+}
+
+async function templateDistributorMap(appId) {
+  const bound = await listBoundChannels(appId)
+  if (bound.error) return bound
+  const map = {}
+  for (const channel of bound.data || []) {
+    const distributorId = String(channel.distributor_id || '').trim()
+    if (!distributorId) continue
+    const remote = await listTemplatesForDistributor(distributorId)
+    if (remote.error) continue
+    for (const item of remote.data || []) {
+      const templateId = String(item.recharge_template_id || item.id || '').trim()
+      if (templateId) map[templateId] = distributorId
+    }
+  }
+  return { data: map }
 }
 
 function isRealBookName(name) {
@@ -300,12 +442,38 @@ function parseBookIds(raw) {
   return out
 }
 
+function flattenPromotionItem(item) {
+  if (!item || typeof item !== 'object' || !item.promotion_info) return item
+  const info = item.promotion_info || {}
+  const delivery = item.delivery || {}
+  const book = item.book_info || {}
+  const appName = item.package && item.package.package_name
+  let promotionName = String(info.promotion_name || '')
+  if (appName && promotionName.includes('迷机小说')) promotionName = promotionName.replace(/迷机小说/g, appName)
+  const promotionUrl = String(info.promotion_url || '').trim()
+  return {
+    promotion_id: info.promotion_id,
+    promotion_name: promotionName,
+    path: promotionUrl,
+    url: promotionUrl,
+    monitor1: info.monitor_url || '',
+    monitor2: info.promotion_http_url || '',
+    book_name: book.book_name || '',
+    chapter_index: book.chapter_order,
+    iaa_config_id: delivery.recharge_template_id,
+    callback_config_id: delivery.ad_callback_config_id || '',
+    media_source: delivery.media_source,
+    create_time: info.create_time,
+  }
+}
+
 function normalizePromotionItem(item, extra = {}) {
   if (item == null) return extra
   if (typeof item === 'number' || typeof item === 'string') {
     return { ...extra, promotion_id: item, referralId: item }
   }
   if (typeof item !== 'object') return extra
+  if (item.promotion_info) return normalizePromotionItem(flattenPromotionItem(item), extra)
   const page = String(
     item.path ||
       item.page ||
@@ -356,14 +524,19 @@ module.exports = {
   findChannel,
   assertConfig,
   signKey,
+  paramsValueOf,
   normalizeMediaSource,
+  mediaSourceCode,
   pickRemoteList,
   publicConfigPromoName,
+  legalPromoName,
+  templateDistributorMap,
   isRealBookName,
   parseBookIds,
   normalizePromotionItem,
   listApps,
   listPayPanels,
+  listBoundChannels,
   listCallbackConfigs,
   resolveCallbackConfigId,
   createReferral,

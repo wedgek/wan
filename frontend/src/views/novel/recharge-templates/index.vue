@@ -127,7 +127,7 @@
 import { useTable } from "@/hooks/useTable"
 import CzPagination from "@/components/cz-pagination/index.vue"
 import request from "@/request"
-import { COPYRIGHT_OPTIONS, channelLabel } from "../shared"
+import { COPYRIGHT_OPTIONS, channelLabel, copyrightSource, readCopyright, sourceCopyright, writeCopyright } from "../shared"
 
 const refreshing = ref(false)
 const editVisible = ref(false)
@@ -149,7 +149,7 @@ const editRules = {
 
 const defaultTableParams = () => ({
   keyword: "",
-  source: "dianzhong",
+  source: copyrightSource(readCopyright()),
   channel: "",
   enabled: "",
   pageNo: 1,
@@ -183,6 +183,7 @@ async function loadChannels() {
 }
 
 function onSourceChange() {
+  writeCopyright(sourceCopyright(tableParams.source))
   tableParams.channel = ""
   loadChannels()
   tableParams.pageNo = 1

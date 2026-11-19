@@ -23,6 +23,7 @@ export const routeComponents = {
   novelOceanUpload: () => import("@/views/novel/ocean-upload/index.vue"),
   novelOceanSettings: () => import("@/views/novel/ocean-settings/index.vue"),
   novelOceanEvents: () => import("@/views/novel/ocean-events/index.vue"),
+  novelOceanMiniApps: () => import("@/views/novel/ocean-mini-apps/index.vue"),
   novelOceanSites: () => import("@/views/novel/ocean-sites/index.vue"),
   novelOceanTitles: () => import("@/views/novel/ocean-titles/index.vue"),
   novelOceanBids: () => import("@/views/novel/ocean-bids/index.vue"),

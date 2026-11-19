@@ -628,7 +628,7 @@ function normalizeTemplate(input) {
   const titleLibraryId = Number(source.titleLibraryId) || 0
   const microAppId = String(source.microAppId || '').trim()
   const microAppName = String(source.microAppName || '').trim()
-  const copyrightOwner = String(source.copyrightOwner || '').trim().slice(0, 20)
+  const copyrightOwner = (copyrightForMiniApp(microAppId, microAppName) || String(source.copyrightOwner || '').trim()).slice(0, 20)
   const brand = String(source.source || base.source || microAppName || '').trim().slice(0, 10)
   const gender = pickEnum(source.gender, ['GENDER_UNLIMITED', 'GENDER_MALE', 'GENDER_FEMALE'], base.gender)
   const age = Array.isArray(source.age) ? source.age.filter((item) => AGE_OPTIONS.includes(item)) : []
@@ -758,6 +758,7 @@ function getStrategy(id) {
 }
 
 function listStrategies() {
+  fillStrategyCopyrights()
   return database()
     .prepare(`SELECT id, name, config, created_at, updated_at FROM oceanengine_launch_strategies ORDER BY id`)
     .all()
@@ -793,8 +794,35 @@ function migrateLaunchNamePatterns() {
   }
 }
 
+function copyrightForMiniApp(appId, appName) {
+  const catalog = require('./oceanengineMiniApps').list()
+  const id = String(appId || '').trim()
+  const name = String(appName || '').trim()
+  const hit = catalog.find((item) => id && item.appId === id) || catalog.find((item) => name && item.name === name)
+  return String((hit && hit.copyrightOwner) || '').trim()
+}
+
+function fillStrategyCopyrights() {
+  const rows = database().prepare('SELECT id, config FROM oceanengine_launch_strategies').all()
+  const update = database().prepare(`UPDATE oceanengine_launch_strategies SET config = ? WHERE id = ?`)
+  for (const row of rows) {
+    let config
+    try {
+      config = JSON.parse(row.config || '{}')
+    } catch {
+      continue
+    }
+    if (String(config.copyrightOwner || '').trim()) continue
+    const owner = copyrightForMiniApp(config.microAppId, config.microAppName)
+    if (!owner) continue
+    config.copyrightOwner = owner
+    update.run(JSON.stringify(config), row.id)
+  }
+}
+
 function migrateStrategies() {
   migrateLaunchNamePatterns()
+  fillStrategyCopyrights()
   const count = database().prepare(`SELECT COUNT(*) AS n FROM oceanengine_launch_strategies`).get()
   if (count && Number(count.n) > 0) return
   const legacy = readLegacyTemplate()
@@ -1567,7 +1595,7 @@ function backfillTaskNames() {
 function listTasks(query) {
   backfillTaskNames()
   backfillProductUse()
-  const pageSize = Math.min(100, Math.max(1, Number(query && query.pageSize) || 20))
+  const pageSize = Math.min(200, Math.max(1, Number(query && query.pageSize) || 20))
   const page = Math.max(1, Number(query && query.page) || 1)
   const keyword = String((query && (query.keyword || query.q)) || '').trim()
   const where = []
@@ -2065,8 +2093,12 @@ async function listMiniApps() {
   } catch (e) {
     console.error('[oceanengine] list mini apps', e.message)
   }
+  const catalog = require('./oceanengineMiniApps').list()
+  const copyrightById = new Map(catalog.map((item) => [item.appId, item.copyrightOwner || '']))
   return {
-    list: [...map.values()].sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh')),
+    list: [...map.values()]
+      .map((item) => ({ ...item, copyrightOwner: copyrightById.get(item.appId) || '' }))
+      .sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh')),
     copyrights: uniqueCopyrights(accounts),
   }
 }

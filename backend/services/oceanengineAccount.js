@@ -477,14 +477,129 @@ function toPublic(row) {
   }
 }
 
+function parseAssetNames(text) {
+  if (!text) return []
+  try {
+    const data = JSON.parse(text)
+    return Array.isArray(data) ? data.map((item) => String(item || '').trim()).filter(Boolean) : []
+  } catch {
+    return []
+  }
+}
+
+function attachEventStatus(list, appId) {
+  const ids = list.map((row) => row.advertiserId).filter(Boolean)
+  const map = new Map()
+  for (let i = 0; i < ids.length; i += 400) {
+    const chunk = ids.slice(i, i + 400)
+    const marks = chunk.map(() => '?').join(',')
+    const rows = database()
+      .prepare(
+        `SELECT advertiser_id, asset_id, asset_name, asset_names, matched_count, pay, roi, error, synced_at
+         FROM oceanengine_event_status
+         WHERE app_id = ? AND advertiser_id IN (${marks})`,
+      )
+      .all(appId, ...chunk)
+    for (const row of rows) map.set(row.advertiser_id, row)
+  }
+  for (const row of list) {
+    const hit = map.get(row.advertiserId)
+    row.eventSynced = !!hit
+    row.eventAssetId = hit ? hit.asset_id || '' : ''
+    row.eventAssetName = hit ? hit.asset_name || '' : ''
+    row.eventAssetNames = hit ? parseAssetNames(hit.asset_names) : []
+    row.eventMatchedCount = hit ? Number(hit.matched_count) || 0 : 0
+    row.eventPay = !!(hit && Number(hit.pay))
+    row.eventRoi = !!(hit && Number(hit.roi))
+    row.eventError = hit ? hit.error || '' : ''
+    row.eventSyncedAt = hit ? hit.synced_at || '' : ''
+  }
+}
+
+function parseSiteList(text) {
+  if (!text) return []
+  try {
+    const data = JSON.parse(text)
+    return Array.isArray(data) ? data : []
+  } catch {
+    return []
+  }
+}
+
+function attachSiteStatus(list) {
+  const ids = list.map((row) => row.advertiserId).filter(Boolean)
+  const map = new Map()
+  for (let i = 0; i < ids.length; i += 400) {
+    const chunk = ids.slice(i, i + 400)
+    if (!chunk.length) continue
+    const marks = chunk.map(() => '?').join(',')
+    const rows = database()
+      .prepare(
+        `SELECT advertiser_id, sites, total, error, synced_at
+         FROM oceanengine_site_status
+         WHERE advertiser_id IN (${marks})`,
+      )
+      .all(...chunk)
+    for (const row of rows) map.set(row.advertiser_id, row)
+  }
+  for (const row of list) {
+    const hit = map.get(row.advertiserId)
+    const sites = hit ? parseSiteList(hit.sites) : []
+    row.siteSynced = !!hit
+    row.siteCount = hit ? Number(hit.total) || sites.length : 0
+    row.sites = sites
+    row.siteError = hit ? hit.error || '' : ''
+  }
+}
+
+function matchAssetStatus(row, status) {
+  if (status === 'unsynced') return !row.eventSynced
+  if (status === 'unbound') return !row.eventAssetName
+  if (status === 'bound') return !!row.eventAssetName
+  if (status === 'pay') return !!row.eventSynced && !row.eventPay
+  if (status === 'roi') return !!row.eventSynced && !row.eventRoi
+  return true
+}
+
+function eventSyncSummary(copyright, appId) {
+  const d = database()
+  const scoped = !!copyright
+  const owner = copyright === '__unset__' ? '' : String(copyright || '')
+  const totalRow = scoped
+    ? d.prepare(`SELECT COUNT(*) AS n FROM oceanengine_advertisers WHERE in_use = 1 AND copyright_owner = ?`).get(owner)
+    : d.prepare(`SELECT COUNT(*) AS n FROM oceanengine_advertisers WHERE in_use = 1`).get()
+  const syncedRow = scoped
+    ? d.prepare(
+        `SELECT COUNT(*) AS n, IFNULL(MAX(s.synced_at), '') AS latest
+         FROM oceanengine_event_status s
+         INNER JOIN oceanengine_advertisers a ON a.advertiser_id = s.advertiser_id
+         WHERE s.app_id = ? AND a.in_use = 1 AND a.copyright_owner = ?`,
+      ).get(appId, owner)
+    : d.prepare(
+        `SELECT COUNT(*) AS n, IFNULL(MAX(s.synced_at), '') AS latest
+         FROM oceanengine_event_status s
+         INNER JOIN oceanengine_advertisers a ON a.advertiser_id = s.advertiser_id
+         WHERE s.app_id = ? AND a.in_use = 1`,
+      ).get(appId)
+  return {
+    total: (totalRow && totalRow.n) || 0,
+    synced: (syncedRow && syncedRow.n) || 0,
+    latest: (syncedRow && syncedRow.latest) || '',
+  }
+}
+
 function listLocal(query) {
   const pool = String((query && query.scope) || '') === 'pool'
   const pageNo = Math.max(1, parseInt(query && query.pageNo, 10) || 1)
-  const pageSize = Math.min(100, Math.max(1, parseInt(query && query.pageSize, 10) || 20))
+  const pageSize = Math.min(200, Math.max(1, parseInt(query && query.pageSize, 10) || 20))
   const keyword = String((query && query.keyword) || '').trim()
   const subject = String((query && query.subject) || '').trim()
   const template = String((query && query.template) || '').trim()
   const copyright = String((query && query.copyright) || '').trim()
+  const eventAppId = String((query && query.eventAppId) || '').trim()
+  const assetStatus = String((query && query.assetStatus) || '').trim()
+  const withSites = String((query && query.withSites) || '') === '1'
+  const siteMissing = String((query && query.siteMissing) || '') === '1' || String((query && query.siteMissing) || '') === 'true'
   const d = database()
   if (pool && keyword.length < 2) {
     return { list: [], total: 0, subjects: [], templates: [], copyrights: [], copyrightCounts: {}, usingTotal: usingCount(d) }
@@ -516,6 +631,13 @@ function listLocal(query) {
   const templates = [...new Set(list.map((row) => row.template).filter(Boolean))].sort((a, b) => Number(a) - Number(b))
   if (subject) list = list.filter((row) => row.subject === subject)
   if (template) list = list.filter((row) => row.template === template)
+  const eventSync = eventAppId ? eventSyncSummary(copyright, eventAppId) : null
+  if (eventAppId) {
+    attachEventStatus(list, eventAppId)
+    if (assetStatus) list = list.filter((row) => matchAssetStatus(row, assetStatus))
+  }
+  if (withSites || siteMissing) attachSiteStatus(list)
+  if (siteMissing) list = list.filter((row) => !row.siteCount)
   list.sort((a, b) => {
     const byCopyright = a.copyrightOwner.localeCompare(b.copyrightOwner, 'zh')
     if (byCopyright) return byCopyright
@@ -525,6 +647,9 @@ function listLocal(query) {
     if (byTemplate) return byTemplate
     return String(a.name || '').localeCompare(String(b.name || ''), 'zh', { numeric: true, sensitivity: 'base' })
   })
+  if (String((query && query.idsOnly) || '') === '1') {
+    return { advertiserIds: list.map((row) => row.advertiserId), total: list.length }
+  }
   const start = (pageNo - 1) * pageSize
   return {
     list: list.slice(start, start + pageSize),
@@ -534,7 +659,13 @@ function listLocal(query) {
     copyrights,
     copyrightCounts,
     usingTotal: usingCount(d),
+    eventSync,
   }
+}
+
+function listSortedUsingIds(copyright) {
+  const page = listLocal({ copyright, pageNo: 1, pageSize: 1, idsOnly: '1' })
+  return { advertiserIds: page.advertiserIds || [], total: page.total || 0 }
 }
 
 function usingCount(d) {
@@ -930,6 +1061,7 @@ module.exports = {
   TEMPLATE_BID,
   parseUsage,
   listLocal,
+  listSortedUsingIds,
   listPage,
   setUsing,
   searchOceanAccounts,

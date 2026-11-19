@@ -278,6 +278,22 @@ function applySchemaPatches(dbi) {
     ensureColumn(dbi, 'oceanengine_library_prefs', 'launch', 'INTEGER')
     ensureColumn(dbi, 'oceanengine_advertisers', 'in_use', 'INTEGER NOT NULL DEFAULT 0')
     ensureColumn(dbi, 'oceanengine_advertisers', 'copyright_owner', "TEXT NOT NULL DEFAULT ''")
+    dbi.exec(`
+      CREATE TABLE IF NOT EXISTS oceanengine_mini_apps (
+        app_id TEXT PRIMARY KEY,
+        name TEXT NOT NULL DEFAULT '',
+        copyright_owner TEXT NOT NULL DEFAULT '',
+        audit_status TEXT NOT NULL DEFAULT '',
+        synced_at TEXT
+      );
+    `)
+    ensureColumn(dbi, 'oceanengine_mini_apps', 'audit_status', "TEXT NOT NULL DEFAULT ''")
+    ensureColumn(dbi, 'oceanengine_mini_apps', 'remark', "TEXT NOT NULL DEFAULT ''")
+    ensureColumn(dbi, 'oceanengine_mini_apps', 'category', "TEXT NOT NULL DEFAULT ''")
+    ensureColumn(dbi, 'oceanengine_mini_apps', 'ocean_create_time', "TEXT NOT NULL DEFAULT ''")
+    ensureColumn(dbi, 'oceanengine_mini_apps', 'ocean_modify_time', "TEXT NOT NULL DEFAULT ''")
+    ensureColumn(dbi, 'oceanengine_mini_apps', 'reason', "TEXT NOT NULL DEFAULT ''")
+    ensureColumn(dbi, 'oceanengine_mini_apps', 'ebp_asset', 'INTEGER NOT NULL DEFAULT 0')
     dbi.prepare(
       `UPDATE oceanengine_advertisers SET copyright_owner = '点众'
        WHERE copyright_owner = '' AND name LIKE '%点众小说%'`,
@@ -877,11 +893,12 @@ function ensureNovelMenus(dbi) {
     { parentId: materialId, name: '产品图', path: '/novel/product-images', component: 'novelProductImages', icon: 'Picture', sort: 4, perm: 'novel:ocean-product:list', visible: 1 },
     { parentId: configId, name: '授权', path: '/novel/ocean-settings', component: 'novelOceanSettings', icon: 'Key', sort: 1, perm: 'novel:ocean-product:list', visible: 1 },
     { parentId: configId, name: '充值模板', path: '/novel/recharge-templates', component: 'novelRechargeTemplates', icon: 'Coin', sort: 2, perm: 'novel:promo:list', visible: 1 },
-    { parentId: configId, name: '投放账户', path: '/novel/ocean-accounts', component: 'novelOceanAccounts', icon: 'User', sort: 3, perm: 'novel:ocean-account:list', visible: 1 },
-    { parentId: configId, name: '事件管理', path: '/novel/ocean-events', component: 'novelOceanEvents', icon: 'Bell', sort: 4, perm: 'novel:ocean-product:list', visible: 1 },
-    { parentId: configId, name: '落地页', path: '/novel/ocean-sites', component: 'novelOceanSites', icon: 'Document', sort: 5, perm: 'novel:ocean-product:list', visible: 1 },
-    { parentId: configId, name: '标题库', path: '/novel/ocean-titles', component: 'novelOceanTitles', icon: 'EditPen', sort: 6, perm: 'novel:ocean-product:list', visible: 1 },
-    { parentId: configId, name: '出价策略', path: '/novel/ocean-bids', component: 'novelOceanBids', icon: 'Money', sort: 7, perm: 'novel:ocean-product:list', visible: 1 },
+    { parentId: configId, name: '小程序', path: '/novel/ocean-mini-apps', component: 'novelOceanMiniApps', icon: 'Cellphone', sort: 3, perm: 'novel:ocean-product:list', visible: 1 },
+    { parentId: configId, name: '投放账户', path: '/novel/ocean-accounts', component: 'novelOceanAccounts', icon: 'User', sort: 4, perm: 'novel:ocean-account:list', visible: 1 },
+    { parentId: configId, name: '事件管理', path: '/novel/ocean-events', component: 'novelOceanEvents', icon: 'Bell', sort: 5, perm: 'novel:ocean-product:list', visible: 1 },
+    { parentId: configId, name: '落地页', path: '/novel/ocean-sites', component: 'novelOceanSites', icon: 'Document', sort: 6, perm: 'novel:ocean-product:list', visible: 1 },
+    { parentId: configId, name: '标题库', path: '/novel/ocean-titles', component: 'novelOceanTitles', icon: 'EditPen', sort: 7, perm: 'novel:ocean-product:list', visible: 1 },
+    { parentId: configId, name: '出价策略', path: '/novel/ocean-bids', component: 'novelOceanBids', icon: 'Money', sort: 8, perm: 'novel:ocean-product:list', visible: 1 },
     { parentId: launchId, name: '推广链接', path: '/novel/promo-links', component: 'novelPromoLinks', icon: 'Link', sort: 1, perm: 'novel:promo:list', visible: 1 },
     { parentId: launchId, name: '商品库', path: '/novel/ocean-products', component: 'novelOceanProducts', icon: 'Goods', sort: 2, perm: 'novel:ocean-product:list', visible: 1 },
     { parentId: launchId, name: '策略模板', path: '/novel/ocean-strategies', component: 'novelOceanStrategies', icon: 'Collection', sort: 3, perm: 'novel:ocean-product:list', visible: 1 },
@@ -902,10 +919,10 @@ function ensureNovelMenus(dbi) {
     }
   }
   grantGroup(materialId, ['novelDouyinParse', 'novelMaterials', 'novelOceanUpload', 'novelProductImages'])
-  grantGroup(configId, ['novelOceanSettings', 'novelOceanAccounts', 'novelRechargeTemplates', 'novelOceanEvents', 'novelOceanSites', 'novelOceanTitles', 'novelOceanBids'])
+  grantGroup(configId, ['novelOceanSettings', 'novelOceanAccounts', 'novelRechargeTemplates', 'novelOceanEvents', 'novelOceanMiniApps', 'novelOceanSites', 'novelOceanTitles', 'novelOceanBids'])
   grantGroup(launchId, ['novelPromoLinks', 'novelOceanProducts', 'novelOceanStrategies', 'novelOceanLaunch', 'novelBooks', 'novelPromoTemplates', 'novelSync'])
   const oceanMenus = dbi
-    .prepare(`SELECT id FROM menus WHERE component_name IN ('novelOceanProducts', 'novelOceanStrategies', 'novelOceanLaunch', 'novelOceanUpload', 'novelProductImages', 'novelOceanSettings', 'novelOceanEvents', 'novelOceanSites', 'novelOceanTitles', 'novelOceanBids')`)
+    .prepare(`SELECT id FROM menus WHERE component_name IN ('novelOceanProducts', 'novelOceanStrategies', 'novelOceanLaunch', 'novelOceanUpload', 'novelProductImages', 'novelOceanSettings', 'novelOceanEvents', 'novelOceanMiniApps', 'novelOceanSites', 'novelOceanTitles', 'novelOceanBids')`)
     .all()
   if (oceanMenus.length) {
     const sources = dbi
@@ -1073,6 +1090,13 @@ function ensureOceanEngineSchema(dbi) {
     );
     CREATE INDEX IF NOT EXISTS idx_oceanengine_advertisers_company ON oceanengine_advertisers(company);
     CREATE INDEX IF NOT EXISTS idx_oceanengine_advertisers_app ON oceanengine_advertisers(app_pk);
+    CREATE TABLE IF NOT EXISTS oceanengine_mini_apps (
+      app_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL DEFAULT '',
+      copyright_owner TEXT NOT NULL DEFAULT '',
+      audit_status TEXT NOT NULL DEFAULT '',
+      synced_at TEXT
+    );
     CREATE TABLE IF NOT EXISTS oceanengine_title_libraries (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL DEFAULT '',
@@ -1104,7 +1128,30 @@ function ensureOceanEngineSchema(dbi) {
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT
     );
+    CREATE TABLE IF NOT EXISTS oceanengine_event_status (
+      advertiser_id TEXT NOT NULL,
+      app_id TEXT NOT NULL,
+      asset_id TEXT NOT NULL DEFAULT '',
+      asset_name TEXT NOT NULL DEFAULT '',
+      pay INTEGER NOT NULL DEFAULT 0,
+      roi INTEGER NOT NULL DEFAULT 0,
+      error TEXT NOT NULL DEFAULT '',
+      synced_at TEXT NOT NULL DEFAULT '',
+      asset_names TEXT NOT NULL DEFAULT '',
+      matched_count INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (advertiser_id, app_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_ocean_event_status_app ON oceanengine_event_status(app_id);
+    CREATE TABLE IF NOT EXISTS oceanengine_site_status (
+      advertiser_id TEXT PRIMARY KEY,
+      sites TEXT NOT NULL DEFAULT '[]',
+      total INTEGER NOT NULL DEFAULT 0,
+      error TEXT NOT NULL DEFAULT '',
+      synced_at TEXT NOT NULL DEFAULT ''
+    );
   `)
+  ensureColumn(dbi, 'oceanengine_event_status', 'asset_names', "TEXT NOT NULL DEFAULT ''")
+  ensureColumn(dbi, 'oceanengine_event_status', 'matched_count', 'INTEGER NOT NULL DEFAULT 0')
 }
 
 /** 小说投流：书籍主档、效果快照、素材、推广链接、同步批次 */

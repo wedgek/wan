@@ -266,7 +266,7 @@ function saveRecord(input) {
 }
 
 function listRecords(userId, query) {
-  const pageSize = Math.min(100, Math.max(1, Number(query && query.pageSize) || 20))
+  const pageSize = Math.min(200, Math.max(1, Number(query && query.pageSize) || 20))
   const page = Math.max(1, Number(query && query.page) || 1)
   const d = database()
   const user = Number(userId) || 0

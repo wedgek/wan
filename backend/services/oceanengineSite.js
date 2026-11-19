@@ -7,6 +7,7 @@ const fs = require('fs')
 const path = require('path')
 const auth = require('./oceanengineAuth')
 const db = require('../db')
+const accounts = require('./oceanengineAccount')
 const { stringifyOcean } = require('./oceanengineEvent')
 
 const API = 'https://api.oceanengine.com'
@@ -382,6 +383,60 @@ async function listCreatedSites(token, advertiserId) {
   return { list, total }
 }
 
+function nowText() {
+  const date = new Date()
+  const pad = (value) => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
+function siteJson(sites) {
+  const list = []
+  const seen = new Set()
+  for (const item of Array.isArray(sites) ? sites : []) {
+    const siteId = idText(item && item.siteId)
+    if (!siteId || seen.has(siteId)) continue
+    seen.add(siteId)
+    list.push({
+      siteId,
+      name: String((item && item.name) || ''),
+      pageUrl: String((item && item.pageUrl) || `https://www.chengzijianzhan.com/tetris/page/${siteId}/`),
+      status: String((item && item.status) || ''),
+      statusLabel: String((item && item.statusLabel) || ''),
+    })
+  }
+  return JSON.stringify(list)
+}
+
+function saveSiteSnapshot(advertiserId, { sites, total, error }) {
+  const id = idText(advertiserId)
+  if (!id) return
+  const message = String(error || '')
+  if (message && rateLimited(message)) {
+    const current = database().prepare('SELECT error FROM oceanengine_site_status WHERE advertiser_id = ?').get(id)
+    if (current && !current.error) return
+  }
+  database()
+    .prepare(
+      `INSERT INTO oceanengine_site_status (advertiser_id, sites, total, error, synced_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(advertiser_id) DO UPDATE SET
+         sites = excluded.sites,
+         total = excluded.total,
+         error = excluded.error,
+         synced_at = excluded.synced_at`,
+    )
+    .run(id, siteJson(sites), Number(total) || 0, message, nowText())
+}
+
+function rememberSiteResult(row) {
+  if (!row || row.status !== 'added' || !row.siteId) return
+  saveSiteSnapshot(row.advertiserId, {
+    sites: [{ siteId: row.siteId, name: row.assetName || '', pageUrl: row.pageUrl || '', status: 'published', statusLabel: '已发布' }],
+    total: 1,
+    error: '',
+  })
+}
+
 async function summarizeAccountSites(advertiserIds) {
   const ids = []
   const seen = new Set()
@@ -394,12 +449,108 @@ async function summarizeAccountSites(advertiserIds) {
   if (!ids.length) return { error: '请选择账户' }
   const tokenResult = await auth.getAccessToken()
   if (tokenResult.error) return tokenResult
-  const list = await mapLimit(ids, 6, async (advertiserId) => {
+  const list = await mapLimit(ids, 2, async (advertiserId) => {
     const found = await listCreatedSites(tokenResult.token, advertiserId)
-    if (found.error) return { advertiserId, total: 0, sites: [], error: found.error }
+    if (found.error) {
+      saveSiteSnapshot(advertiserId, { sites: [], total: 0, error: found.error })
+      return { advertiserId, total: 0, sites: [], error: found.error }
+    }
+    saveSiteSnapshot(advertiserId, { sites: found.list, total: found.total, error: '' })
     return { advertiserId, total: found.total, sites: found.list, error: '' }
   })
   return { list }
+}
+
+let siteJob = null
+
+function siteJobView() {
+  if (!siteJob) {
+    return { running: false, done: 0, total: 0, failed: 0, stopped: false, stopRequested: false, copyright: '', error: '' }
+  }
+  return {
+    running: !!siteJob.running,
+    done: siteJob.done,
+    total: siteJob.total,
+    failed: siteJob.failed,
+    stopped: !!siteJob.stopped,
+    stopRequested: !!siteJob.stopRequested,
+    copyright: siteJob.copyright,
+    error: siteJob.error || '',
+  }
+}
+
+async function runSiteJob(ids) {
+  const tokenResult = await auth.getAccessToken()
+  if (tokenResult.error) {
+    siteJob.running = false
+    siteJob.error = tokenResult.error
+    return
+  }
+  let next = 0
+  const worker = async () => {
+    while (next < ids.length) {
+      if (siteJob.stopRequested) return
+      const index = next
+      next += 1
+      const advertiserId = ids[index]
+      try {
+        const found = await listCreatedSites(tokenResult.token, advertiserId)
+        if (found.error) {
+          siteJob.failed += 1
+          saveSiteSnapshot(advertiserId, { sites: [], total: 0, error: found.error })
+        } else {
+          saveSiteSnapshot(advertiserId, { sites: found.list, total: found.total, error: '' })
+        }
+      } catch (e) {
+        siteJob.failed += 1
+        console.error('[oceanengine] site sync one', advertiserId, e.message)
+      } finally {
+        siteJob.done += 1
+      }
+    }
+  }
+  await Promise.all([worker(), worker()])
+  siteJob.running = false
+  siteJob.stopped = !!siteJob.stopRequested
+  console.log('[oceanengine] site sync job', { done: siteJob.done, total: siteJob.total, failed: siteJob.failed, stopped: siteJob.stopped })
+}
+
+function startSiteSync({ copyright, advertiserIds } = {}) {
+  if (siteJob && siteJob.running) return siteJobView()
+  const picked = []
+  const seen = new Set()
+  for (const raw of Array.isArray(advertiserIds) ? advertiserIds : []) {
+    const id = idText(raw)
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    picked.push(id)
+  }
+  const page = picked.length ? null : accounts.listSortedUsingIds(String(copyright || '').trim())
+  const ids = picked.length ? picked : (page && page.advertiserIds) || []
+  if (!ids.length) return { error: '没有要同步的账户' }
+  siteJob = {
+    running: true,
+    stopped: false,
+    stopRequested: false,
+    done: 0,
+    failed: 0,
+    total: ids.length,
+    copyright: String(copyright || '').trim(),
+    error: '',
+  }
+  runSiteJob(ids).catch((e) => {
+    console.error('[oceanengine] site sync job', e)
+    if (!siteJob) return
+    siteJob.running = false
+    siteJob.error = e.message || '同步失败'
+  })
+  return siteJobView()
+}
+
+function stopSiteSync() {
+  if (!siteJob || !siteJob.running) return { error: '没有正在进行的同步' }
+  siteJob.stopRequested = true
+  return siteJobView()
 }
 
 async function oceanJson(token, method, path, body, bases) {
@@ -554,6 +705,7 @@ async function generateSites(advertiserIds) {
       continue
     }
     if (found.total > 0 || (found.list && found.list.length)) {
+      saveSiteSnapshot(advertiserId, { sites: found.list, total: found.total, error: '' })
       const site = found.list[0] || {}
       results.push({
         advertiserId,
@@ -572,7 +724,9 @@ async function generateSites(advertiserIds) {
   if (!pending.length) return summarize(results)
   const created = await createImageSites({ advertiserIds: pending, file })
   if (created.error) return created
-  return summarize([...(created.results || []), ...results], { stopped: created.stopped || '' })
+  const merged = [...(created.results || []), ...results]
+  for (const row of merged) rememberSiteResult(row)
+  return summarize(merged, { stopped: created.stopped || '' })
 }
 
 async function createImageSites({ advertiserIds, names, name, file } = {}) {
@@ -614,6 +768,9 @@ module.exports = {
   listAccountSites,
   listCreatedSites,
   summarizeAccountSites,
+  startSiteSync,
+  stopSiteSync,
+  siteJobView,
   createImageSites,
   generateSites,
   savePoster,

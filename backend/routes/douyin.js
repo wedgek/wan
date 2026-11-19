@@ -759,7 +759,7 @@ router.get('/logs/page', (req, res) => {
     if (!bizType) return
     reconcileStaleProcessing()
     const pageNo = Math.max(1, parseInt(req.query.pageNo, 10) || 1)
-    const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 20))
+    const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize, 10) || 20))
     const offset = (pageNo - 1) * pageSize
     const userIdFilter = req.query.userId != null && req.query.userId !== '' ? Number(req.query.userId) : 0
     const statusRaw = String(req.query.status || '').trim().toLowerCase()

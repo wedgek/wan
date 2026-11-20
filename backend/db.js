@@ -1302,6 +1302,8 @@ function ensureNovelSchema(dbi) {
     );
     CREATE INDEX IF NOT EXISTS idx_novel_book_snapshots_date ON novel_book_snapshots(stat_date, slot);
     CREATE INDEX IF NOT EXISTS idx_novel_book_snapshots_book ON novel_book_snapshots(book_id, stat_date);
+    CREATE INDEX IF NOT EXISTS idx_novel_book_snapshots_latest ON novel_book_snapshots(book_id, id);
+    CREATE INDEX IF NOT EXISTS idx_novel_material_snapshots_latest ON novel_material_snapshots(material_id, id);
     CREATE INDEX IF NOT EXISTS idx_novel_materials_book ON novel_materials(book_id);
     CREATE INDEX IF NOT EXISTS idx_novel_materials_ext ON novel_materials(external_id);
     CREATE INDEX IF NOT EXISTS idx_novel_promo_book ON novel_promo_links(book_id);

@@ -350,7 +350,14 @@
               <el-table-column prop="name" label="书名" min-width="220" show-overflow-tooltip />
               <el-table-column prop="createdAt" label="提交时间" width="170" align="center" />
               <el-table-column prop="id" label="编号" width="72" align="center" />
-              <el-table-column prop="strategyName" label="策略" min-width="150" show-overflow-tooltip />
+              <el-table-column label="策略" min-width="180" show-overflow-tooltip>
+                <template #default="{ row }">
+                  <div class="strategy-cell">
+                    <span v-if="taskCopyright(row)" class="source-tag" :class="taskCopyright(row) === '番茄' ? 'is-fanqie' : 'is-dianzhong'">{{ taskCopyright(row) }}</span>
+                    <span class="strategy-name">{{ taskStrategyText(row) }}</span>
+                  </div>
+                </template>
+              </el-table-column>
               <el-table-column label="商品" min-width="220" show-overflow-tooltip>
                 <template #default="{ row }">
                   <div v-if="row.productLibrary || row.productSpan" class="product-cell">
@@ -454,6 +461,7 @@
       </div>
       <el-table
         ref="detailTable"
+        v-loading="detailLoading"
         :data="visibleDetailItems"
         border
         size="small"
@@ -523,6 +531,7 @@ const taskPageSize = ref(20)
 const taskTotal = ref(0)
 const liveTask = ref(null)
 const detailVisible = ref(false)
+const detailLoading = ref(false)
 const detailItems = ref([])
 const detailTitle = ref("任务详情")
 const detailFilter = ref("all")
@@ -794,6 +803,18 @@ function taskType(status) {
   if (status === "partial" || status === "running" || status === "preparing") return "warning"
   if (status === "queued" || status === "ready" || status === "stopped") return "info"
   return "danger"
+}
+function taskCopyright(row) {
+  const name = String((row && row.strategyName) || "")
+  if (name.startsWith("番茄")) return "番茄"
+  if (name.startsWith("点众")) return "点众"
+  return ""
+}
+function taskStrategyText(row) {
+  const name = String((row && row.strategyName) || "").trim()
+  const mark = taskCopyright(row)
+  if (!mark) return name || "—"
+  return name.slice(mark.length).replace(/^[-－\s]+/, "") || name
 }
 function taskHeading(row) {
   if (!row) return "任务详情"
@@ -1431,19 +1452,30 @@ async function stopRunning(row) {
     stopping.value = false
   }
 }
+let detailSeq = 0
 async function openTask(row) {
-  const res = await request({ url: `/admin-api/oceanengine/launch/tasks/${row.id}` })
-  if (res.code !== 0) {
-    ElMessage.error(res.msg || "读取详情失败")
-    return
-  }
+  const seq = ++detailSeq
   detailTaskId.value = row.id
-  detailFilter.value = res.data.failed ? "fail" : "all"
-  detailItems.value = res.data.items || []
-  detailTitle.value = taskHeading(res.data)
+  detailFilter.value = row.failed ? "fail" : "all"
+  detailItems.value = []
+  detailSelected.value = []
+  detailTitle.value = taskHeading(row)
   detailVisible.value = true
-  applyTask(res)
-  if (["running", "preparing", "ready"].includes(res.data.status)) pollTask(row.id)
+  detailLoading.value = true
+  try {
+    const res = await request({ url: `/admin-api/oceanengine/launch/tasks/${row.id}` })
+    if (seq !== detailSeq) return
+    if (res.code !== 0) {
+      ElMessage.error(res.msg || "读取详情失败")
+      return
+    }
+    detailItems.value = res.data.items || []
+    detailTitle.value = taskHeading(res.data)
+    applyTask(res)
+    if (["running", "preparing", "ready"].includes(res.data.status)) pollTask(row.id)
+  } finally {
+    if (seq === detailSeq) detailLoading.value = false
+  }
 }
 function onDetailSelect(rows) {
   detailSelected.value = rows.filter((row) => row.status === "fail")
@@ -2387,6 +2419,39 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 12px;
   margin-bottom: 12px;
+}
+
+.strategy-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.source-tag {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 20px;
+  font-weight: 600;
+}
+
+.source-tag.is-fanqie {
+  color: #c2410c;
+  background: #ffedd5;
+}
+
+.source-tag.is-dianzhong {
+  color: #1d4ed8;
+  background: #dbeafe;
+}
+
+.strategy-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .product-cell {

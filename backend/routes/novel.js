@@ -348,6 +348,48 @@ function rowToPromo(r) {
   }
 }
 
+function attachPromoStats(d, rows) {
+  const bookIds = [...new Set(rows.map((row) => row.book_id).filter(Boolean))]
+  if (!bookIds.length) return
+  const marks = bookIds.map(() => '?').join(',')
+  const snaps = d
+    .prepare(
+      `SELECT bs.book_id, bs.recharge_amount, bs.recharge_users, bs.stat_date
+       FROM novel_book_snapshots bs
+       INNER JOIN (
+         SELECT book_id, MAX(id) AS max_id
+         FROM novel_book_snapshots
+         WHERE book_id IN (${marks})
+         GROUP BY book_id
+       ) latest ON latest.max_id = bs.id`,
+    )
+    .all(...bookIds)
+  const costs = d
+    .prepare(
+      `SELECT m.book_id AS book_id, SUM(ms.cost) AS cost
+       FROM novel_materials m
+       INNER JOIN (
+         SELECT material_id, MAX(id) AS max_id
+         FROM novel_material_snapshots
+         WHERE material_id IN (SELECT id FROM novel_materials WHERE book_id IN (${marks}))
+         GROUP BY material_id
+       ) latest ON latest.material_id = m.id
+       INNER JOIN novel_material_snapshots ms ON ms.id = latest.max_id
+       WHERE m.book_id IN (${marks})
+       GROUP BY m.book_id`,
+    )
+    .all(...bookIds, ...bookIds)
+  const snapByBook = new Map(snaps.map((row) => [row.book_id, row]))
+  const costByBook = new Map(costs.map((row) => [row.book_id, row.cost]))
+  for (const row of rows) {
+    const snap = snapByBook.get(row.book_id)
+    row.snap_recharge_amount = snap ? snap.recharge_amount : null
+    row.snap_recharge_users = snap ? snap.recharge_users : null
+    row.snap_stat_date = snap ? snap.stat_date : ''
+    row.mat_cost = costByBook.has(row.book_id) ? costByBook.get(row.book_id) : null
+  }
+}
+
 function rowToBatch(r) {
   if (!r) return null
   let fails = []
@@ -794,34 +836,27 @@ router.get('/promo-links/page', requirePerm(PERM.promo, '推广链接'), (req, r
       FROM novel_promo_links p
       LEFT JOIN novel_books b ON b.id = p.book_id
       ${RECHARGE_JOIN_SQL}
-      LEFT JOIN (
-        SELECT book_id, MAX(id) AS max_id FROM novel_book_snapshots GROUP BY book_id
-      ) snap_idx ON snap_idx.book_id = p.book_id
-      LEFT JOIN novel_book_snapshots bs ON bs.id = snap_idx.max_id
-      LEFT JOIN (
-        SELECT m.book_id AS book_id, SUM(ms.cost) AS cost
-        FROM novel_materials m
-        INNER JOIN (
-          SELECT material_id, MAX(id) AS max_id FROM novel_material_snapshots GROUP BY material_id
-        ) lm ON lm.material_id = m.id
-        INNER JOIN novel_material_snapshots ms ON ms.id = lm.max_id
-        GROUP BY m.book_id
-      ) mc ON mc.book_id = p.book_id
       WHERE ${where}
     `
-    const total = d.prepare(`SELECT COUNT(*) AS c ${from}`).get(...params).c
+    const total = d
+      .prepare(
+        `SELECT COUNT(*) AS c
+         FROM novel_promo_links p
+         LEFT JOIN novel_books b ON b.id = p.book_id
+         WHERE ${where}`,
+      )
+      .get(...params).c
     const sortAsc = String(req.query.order || req.query.sortOrder || 'desc').toLowerCase() === 'asc'
     const dir = sortAsc ? 'ASC' : 'DESC'
     const rows = d
       .prepare(
-        `SELECT p.*, b.name AS book_name, b.external_book_id, b.store AS book_store, rt.name AS recharge_name,
-                bs.recharge_amount AS snap_recharge_amount, bs.recharge_users AS snap_recharge_users,
-                bs.stat_date AS snap_stat_date, mc.cost AS mat_cost
+        `SELECT p.*, b.name AS book_name, b.external_book_id, b.store AS book_store, rt.name AS recharge_name
          ${from}
          ORDER BY datetime(p.created_at) ${dir}, CAST(NULLIF(p.referral_id, '') AS INTEGER) ${dir}, p.id ${dir}
          LIMIT ? OFFSET ?`,
       )
       .all(...params, pageSize, offset)
+    attachPromoStats(d, rows)
     res.json(ok({ list: rows.map(rowToPromo), total }))
   } catch (e) {
     console.error('[novel] promo/page', e.message)
@@ -931,10 +966,6 @@ function stringifyGoods(raw) {
     return ''
   }
   return String(raw)
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function pickReferralList(data) {
@@ -1164,7 +1195,47 @@ function upsertDianzhongReferral(d, item, fallbackBookId, fallbackChannel, sourc
   return { id: Number(r.lastInsertRowid), created: true }
 }
 
-async function syncReferralsFromRemote(d, input, fallbackBookId) {
+function itemReferralId(item) {
+  return String(
+    pickField(item, ['referralId', 'referral_id', 'promotion_id', 'promotionId', 'id']) || '',
+  ).trim()
+}
+
+function createdReferralId(data, source) {
+  if (data == null) return ''
+  if (typeof data === 'number' || typeof data === 'string') return String(data).trim()
+  if (source === 'changdu') return changduReferralId(data)
+  return itemReferralId(data)
+}
+
+function applyReferralPage(d, items, fallbackBookId, channelId, source, opts) {
+  const only = opts.onlyReferralIds instanceof Set && opts.onlyReferralIds.size ? opts.onlyReferralIds : null
+  const collect = opts.collect === true
+  let upserted = 0
+  let created = 0
+  const rows = []
+  const hit = new Set()
+  const write = d.transaction(() => {
+    for (const item of items) {
+      const rid = itemReferralId(item)
+      if (only && (!rid || !only.has(rid))) {
+        const bookTitle = String(pickField(item, ['bookName', 'book_name', 'bookTitle', 'book_title']) || '').trim()
+        if (bookTitle) applyRemoteBookTitle(d, fallbackBookId, bookTitle)
+        continue
+      }
+      const r = upsertDianzhongReferral(d, item, fallbackBookId, channelId, source)
+      if (r.error) continue
+      upserted += 1
+      if (r.created) created += 1
+      if (rid) hit.add(rid)
+      if (collect) rows.push(rowToPromo(fetchPromoRow(d, r.id)))
+    }
+  })
+  write()
+  return { upserted, created, rows, hit }
+}
+
+async function syncReferralsFromRemote(d, input, fallbackBookId, opts = {}) {
   const channelId = String(input.channelId || '').trim()
   if (!channelId) return { error: '请选择投放账号' }
   const size = Math.min(200, Math.max(1, parseInt(input.size, 10) || 100))
@@ -1173,47 +1244,40 @@ async function syncReferralsFromRemote(d, input, fallbackBookId) {
   let created = 0
   let total = 0
   const rows = []
-  const maxPages = 50
+  const hit = new Set()
+  const maxPages = Math.min(50, Math.max(1, parseInt(opts.maxPages, 10) || 50))
+  const only = opts.onlyReferralIds instanceof Set ? opts.onlyReferralIds : null
   while (page <= maxPages) {
     const remote = await dianzhong.listReferrals({ ...input, channelId, page, size })
     if (remote.error) return remote
     const items = pickReferralList(remote.data)
     const remoteTotal = Number(remote.data && remote.data.total)
     if (page === 1) total = Number.isFinite(remoteTotal) && remoteTotal > 0 ? remoteTotal : items.length
-    for (const item of items) {
-      const r = upsertDianzhongReferral(d, item, fallbackBookId, channelId)
-      if (r.error) continue
-      upserted += 1
-      if (r.created) created += 1
-      rows.push(rowToPromo(fetchPromoRow(d, r.id)))
-    }
+    const wrote = applyReferralPage(d, items, fallbackBookId, channelId, 'dianzhong', opts)
+    upserted += wrote.upserted
+    created += wrote.created
+    rows.push(...wrote.rows)
+    for (const id of wrote.hit) hit.add(id)
+    if (only && only.size && [...only].every((id) => hit.has(id))) break
     if (items.length < size) break
     if (Number.isFinite(remoteTotal) && remoteTotal > 0 && page * size >= remoteTotal) break
+    if (page >= maxPages) break
     page += 1
+    await new Promise((resolve) => setImmediate(resolve))
   }
   return { upserted, created, total, list: rows, channelId }
 }
 
-async function syncBookReferralsWithRetry(d, extBookId, channelId, localBookId, minCount) {
-  let synced
-  const need = Math.max(1, Number(minCount) || 1)
-  for (let i = 0; i < 5; i += 1) {
-    synced = await syncReferralsFromRemote(
-      d,
-      { bookId: extBookId, size: 100, channelId },
-      localBookId,
-    )
-    if (synced.error) return synced
-    const localCount = d
-      .prepare('SELECT COUNT(*) AS c FROM novel_promo_links WHERE book_id = ?')
-      .get(localBookId).c
-    if (localCount >= need && bookHasRealName(d, localBookId)) return synced
-    await sleep(i === 0 ? 500 : 800)
-  }
-  return synced
+async function syncBookReferralsWithRetry(d, extBookId, channelId, localBookId, opts = {}) {
+  return syncReferralsFromRemote(
+    d,
+    { bookId: extBookId, size: 50, channelId },
+    localBookId,
+    { maxPages: 1, collect: opts.collect === true, onlyReferralIds: opts.onlyReferralIds },
+  )
 }
 
-async function syncChangduReferralsFromRemote(d, input, fallbackBookId) {
+async function syncChangduReferralsFromRemote(d, input, fallbackBookId, opts = {}) {
   const channelId = String(input.channelId || input.appId || '').trim()
   if (!channelId) return { error: '请选择应用' }
   const size = Math.min(50, Math.max(1, parseInt(input.size, 10) || 50))
@@ -1223,7 +1287,10 @@ async function syncChangduReferralsFromRemote(d, input, fallbackBookId) {
   let total = 0
   const rows = []
   const seen = new Set()
-  for (let guard = 0; guard < 40; guard += 1) {
+  const hit = new Set()
+  const maxPages = Math.min(40, Math.max(1, parseInt(opts.maxPages, 10) || 40))
+  const only = opts.onlyReferralIds instanceof Set ? opts.onlyReferralIds : null
+  for (let guard = 0; guard < maxPages; guard += 1) {
     const remote = await changdu.listReferrals({
       ...input,
       channelId,
@@ -1238,44 +1305,40 @@ async function syncChangduReferralsFromRemote(d, input, fallbackBookId) {
     const items = changdu
       .pickRemoteList(payload)
       .map((item) => changdu.normalizePromotionItem(item, { channelId, appId: channelId }))
-    const remoteTotal = Number(payload.total)
-    if (!total && Number.isFinite(remoteTotal) && remoteTotal > 0) total = remoteTotal
+    const fresh = []
     for (const item of items) {
       const key = String(item.referralId || item.promotion_id || item.path || '')
       if (key && seen.has(key)) continue
       if (key) seen.add(key)
-      const r = upsertDianzhongReferral(d, item, fallbackBookId, channelId, 'changdu')
-      if (r.error) continue
-      upserted += 1
-      if (r.created) created += 1
-      rows.push(rowToPromo(fetchPromoRow(d, r.id)))
+      fresh.push(item)
     }
+    const remoteTotal = Number(payload.total)
+    if (!total && Number.isFinite(remoteTotal) && remoteTotal > 0) total = remoteTotal
+    const wrote = applyReferralPage(d, fresh, fallbackBookId, channelId, 'changdu', opts)
+    upserted += wrote.upserted
+    created += wrote.created
+    rows.push(...wrote.rows)
+    for (const id of wrote.hit) hit.add(id)
+    if (only && only.size && [...only].every((id) => hit.has(id))) break
     const more = payload.has_more === true || payload.has_more === 1 || payload.has_more === 'true'
     const next = Number(payload.next_offset)
     if (!more || !Number.isFinite(next) || next <= offset) break
     if (total && seen.size >= total) break
+    if (guard + 1 >= maxPages) break
     offset = next
+    await new Promise((resolve) => setImmediate(resolve))
   }
   if (!total) total = seen.size
   return { upserted, created, total, list: rows, channelId }
 }
 
-async function syncChangduBookReferralsWithRetry(d, extBookId, channelId, localBookId, minCount, distributorId) {
-  let synced
-  const need = Math.max(1, Number(minCount) || 1)
-  for (let i = 0; i < 5; i += 1) {
-    synced = await syncChangduReferralsFromRemote(
-      d,
-      { bookId: extBookId, size: 100, channelId, distributorId },
-      localBookId,
-    )
-    if (synced.error) return synced
-    const localCount = d
-      .prepare(`SELECT COUNT(*) AS c FROM novel_promo_links WHERE book_id = ? AND source = 'changdu'`).get(localBookId).c
-    if (localCount >= need && bookHasRealName(d, localBookId)) return synced
-    await sleep(i === 0 ? 500 : 800)
-  }
-  return synced
+async function syncChangduBookReferralsWithRetry(d, extBookId, channelId, localBookId, distributorId, opts = {}) {
+  return syncChangduReferralsFromRemote(
+    d,
+    { bookId: extBookId, size: 50, channelId, distributorId },
+    localBookId,
+    { maxPages: 1, collect: opts.collect === true, onlyReferralIds: opts.onlyReferralIds },
+  )
 }
 
 function changduLaunchPathReady(path) {
@@ -1322,7 +1385,7 @@ async function listChangduPromotionRows(channelId, distributorId, extra) {
   return changduPromotionRows(remote.data)
 }
 
-// 常读创建接口先回推广 ID，启动页要过一会儿才出现在列表里。只补还是 changdu:ID 的那几条。
+// 常读创建接口先回推广 ID，启动页可能要过一会儿才出现。创建请求里只查一次，查不到就提示稍后刷新。
 async function awaitChangduLaunchPaths(d, channelId, localBookId, extBookId, created) {
   const pending = new Map()
   for (const item of created || []) {
@@ -1330,28 +1393,21 @@ async function awaitChangduLaunchPaths(d, channelId, localBookId, extBookId, cre
     if (!referralId || changduLaunchPathReady(changduStoredPath(d, referralId))) continue
     pending.set(referralId, String((item && item.distributorId) || '').trim())
   }
-  const waits = [0, 600, 1200, 2000, 2500]
-  for (let round = 0; round < waits.length && pending.size; round += 1) {
-    if (waits[round]) await sleep(waits[round])
-    const byDist = new Map()
-    for (const [referralId, distributorId] of pending) {
-      if (!byDist.has(distributorId)) byDist.set(distributorId, [])
-      byDist.get(distributorId).push(referralId)
-    }
-    for (const [distributorId, ids] of byDist) {
-      const bookId = String(extBookId || '').trim()
-      let rows = bookId ? await listChangduPromotionRows(channelId, distributorId, { bookId }) : []
-      const found = new Set(rows.map((row) => String(row.referralId || '')))
-      for (const referralId of ids) {
-        if (found.has(referralId)) continue
-        rows = rows.concat(await listChangduPromotionRows(channelId, distributorId, { referralId }))
-      }
-      for (const row of rows) {
-        const referralId = String(row.referralId || '')
-        if (!pending.has(referralId) || !changduLaunchPathReady(row.path)) continue
-        const saved = upsertDianzhongReferral(d, row, localBookId, channelId, 'changdu')
-        if (!saved.error) pending.delete(referralId)
-      }
+  if (!pending.size) return []
+  const byDist = new Map()
+  for (const [referralId, distributorId] of pending) {
+    if (!byDist.has(distributorId)) byDist.set(distributorId, [])
+    byDist.get(distributorId).push(referralId)
+  }
+  const bookId = String(extBookId || '').trim()
+  for (const [distributorId, ids] of byDist) {
+    const rows = bookId ? await listChangduPromotionRows(channelId, distributorId, { bookId }) : []
+    const wanted = new Set(ids)
+    for (const row of rows) {
+      const referralId = String(row.referralId || '')
+      if (!wanted.has(referralId) || !changduLaunchPathReady(row.path)) continue
+      const saved = upsertDianzhongReferral(d, row, localBookId, channelId, 'changdu')
+      if (!saved.error) pending.delete(referralId)
     }
   }
   if (pending.size) {
@@ -1993,6 +2049,7 @@ router.post('/promo-links/dianzhong/create', requirePerm(PERM.promo, '推广链�
       if (rt.batch_id) batchId = String(rt.batch_id).trim()
     }
     const createdItems = []
+    const createdIds = new Set()
     const warnings = []
     for (let i = 0; i < count; i += 1) {
       const name = count === 1 ? baseName : `${baseName}-${i + 1}`.slice(0, 60)
@@ -2013,6 +2070,8 @@ router.post('/promo-links/dianzhong/create', requirePerm(PERM.promo, '推广链�
         continue
       }
       createdItems.push(created.data)
+      const referralId = createdReferralId(created.data, 'dianzhong')
+      if (referralId) createdIds.add(referralId)
       upsertDianzhongReferral(
         d,
         asReferralItem(created.data, {
@@ -2027,13 +2086,10 @@ router.post('/promo-links/dianzhong/create', requirePerm(PERM.promo, '推广链�
       )
     }
     if (!createdItems.length) return res.json(fail(400, warnings.join('；') || '创建失败'))
-    const synced = await syncBookReferralsWithRetry(
-      d,
-      book.external_book_id,
-      channelId,
-      book.id,
-      createdItems.length,
-    )
+    const synced = await syncBookReferralsWithRetry(d, book.external_book_id, channelId, book.id, {
+      collect: true,
+      onlyReferralIds: createdIds,
+    })
     if (synced.error) {
       warnings.push(synced.error)
       return res.json(
@@ -2085,6 +2141,7 @@ router.post('/promo-links/dianzhong/batch-create', requirePerm(PERM.promo, '推�
     for (const extBookId of bookIds) {
       const localBookId = findOrCreateBookByExternal(d, extBookId, '', '')
       let createdForBook = 0
+      const createdIds = new Set()
       for (const tpl of templates) {
         const name = dianzhong.publicConfigPromoName(tpl.name)
         const created = await dianzhong.createReferral({
@@ -2101,6 +2158,8 @@ router.post('/promo-links/dianzhong/batch-create', requirePerm(PERM.promo, '推�
         }
         createdItems.push(created.data)
         createdForBook += 1
+        const referralId = createdReferralId(created.data, 'dianzhong')
+        if (referralId) createdIds.add(referralId)
         upsertDianzhongReferral(
           d,
           asReferralItem(created.data, {
@@ -2117,13 +2176,9 @@ router.post('/promo-links/dianzhong/batch-create', requirePerm(PERM.promo, '推�
         )
       }
       if (!createdForBook) continue
-      const synced = await syncBookReferralsWithRetry(
-        d,
-        extBookId,
-        channelId,
-        localBookId,
-        createdForBook,
-      )
+      const synced = await syncBookReferralsWithRetry(d, extBookId, channelId, localBookId, {
+        onlyReferralIds: createdIds,
+      })
       if (synced && synced.error) warnings.push(`${extBookId} 回写：${synced.error}`)
       else syncedBooks.add(extBookId)
     }
@@ -2218,10 +2273,16 @@ router.post('/promo-links/changdu/create', requirePerm(PERM.promo, '推广链接
       if (rt.batch_id) batchId = String(rt.batch_id).trim()
     }
     const createdItems = []
+    const createdIds = new Set()
     const pendingPaths = []
     const warnings = []
     const mapped = batchId ? await changdu.templateDistributorMap(channelId) : { data: {} }
     const distributorId = batchId && mapped.data ? mapped.data[batchId] : ''
+    let callbackConfigId = String(body.callbackConfigId || '').trim()
+    if (!callbackConfigId) {
+      const resolved = await changdu.resolveCallbackConfigId(channelId)
+      callbackConfigId = typeof resolved === 'string' && resolved ? resolved : '0'
+    }
     for (let i = 0; i < count; i += 1) {
       const name = changdu.legalPromoName(count === 1 ? baseName : `${baseName}-${i + 1}`)
       const created = await changdu.createReferral({
@@ -2232,7 +2293,7 @@ router.post('/promo-links/changdu/create', requirePerm(PERM.promo, '推广链接
         channelId,
         appId: channelId,
         batchId,
-        callbackConfigId: body.callbackConfigId,
+        callbackConfigId,
         distributorId,
       })
       if (created.error) {
@@ -2241,7 +2302,10 @@ router.post('/promo-links/changdu/create', requirePerm(PERM.promo, '推广链接
       }
       createdItems.push(created.data)
       const referralId = changduReferralId(created.data)
-      if (referralId) pendingPaths.push({ referralId, distributorId })
+      if (referralId) {
+        createdIds.add(referralId)
+        pendingPaths.push({ referralId, distributorId })
+      }
       upsertDianzhongReferral(
         d,
         changdu.normalizePromotionItem(created.data, {
@@ -2263,7 +2327,8 @@ router.post('/promo-links/changdu/create', requirePerm(PERM.promo, '推广链接
       book.external_book_id,
       channelId,
       book.id,
-      createdItems.length,
+      distributorId,
+      { collect: true, onlyReferralIds: createdIds },
     )
     const missingPaths = await awaitChangduLaunchPaths(
       d,
@@ -2325,10 +2390,13 @@ router.post('/promo-links/changdu/batch-create', requirePerm(PERM.promo, '推广
     const pendingByBook = new Map()
     const mapped = await changdu.templateDistributorMap(channelId)
     const distMap = mapped.data || {}
+    const resolvedCallback = await changdu.resolveCallbackConfigId(channelId)
+    const callbackConfigId = typeof resolvedCallback === 'string' && resolvedCallback ? resolvedCallback : '0'
     for (const extBookId of bookIds) {
       const localBookId = findOrCreateBookByExternal(d, extBookId, '', '')
       let createdForBook = 0
       let bookDistributorId = ''
+      const createdIds = new Set()
       for (const tpl of templates) {
         const app = changdu.findChannel(channelId)
         const name = changdu.publicConfigPromoName(tpl.name, app && app.label)
@@ -2342,6 +2410,7 @@ router.post('/promo-links/changdu/batch-create', requirePerm(PERM.promo, '推广
           appId: channelId,
           batchId: tpl.batch_id,
           distributorId,
+          callbackConfigId,
         })
         if (created.error) {
           warnings.push(`${extBookId} / ${tpl.name}：${created.error}`)
@@ -2352,6 +2421,7 @@ router.post('/promo-links/changdu/batch-create', requirePerm(PERM.promo, '推广
         if (!bookDistributorId && distributorId) bookDistributorId = distributorId
         const referralId = changduReferralId(created.data)
         if (referralId) {
+          createdIds.add(referralId)
           if (!pendingByBook.has(extBookId)) pendingByBook.set(extBookId, [])
           pendingByBook.get(extBookId).push({ referralId, distributorId })
         }
@@ -2376,8 +2446,8 @@ router.post('/promo-links/changdu/batch-create', requirePerm(PERM.promo, '推广
         extBookId,
         channelId,
         localBookId,
-        createdForBook,
         bookDistributorId,
+        { onlyReferralIds: createdIds },
       )
       if (synced && synced.error) warnings.push(`${extBookId} 回写：${synced.error}`)
       else syncedBooks.add(extBookId)

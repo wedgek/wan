@@ -109,7 +109,7 @@ function ensureColumn(db, table, column, defSql) {
   }
 }
 
-/** 热升级：已运行的进程拉新代码后，仍会在首次 getDb() 时补上缺失表 */
+/** 只在进程启动时补表。生产靠 PM2 重启加载新代码，不能在每个请求上重跑。 */
 function applySchemaPatches(dbi) {
   if (!dbi) return
   try {
@@ -217,6 +217,7 @@ function applySchemaPatches(dbi) {
         created_at TEXT DEFAULT (datetime('now'))
       );
       CREATE INDEX IF NOT EXISTS idx_ocean_launch_items_task ON oceanengine_launch_task_items(task_id, id);
+      CREATE INDEX IF NOT EXISTS idx_ocean_launch_tasks_status ON oceanengine_launch_tasks(status, id);
       CREATE TABLE IF NOT EXISTS oceanengine_launch_strategies (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL DEFAULT '',
@@ -1685,6 +1686,8 @@ function initDb() {
   const dbPath = getDbPath()
   dbInstance = new Database(dbPath)
   dbInstance.pragma('journal_mode = WAL')
+  dbInstance.pragma('synchronous = NORMAL')
+  dbInstance.pragma('busy_timeout = 5000')
 
   dbInstance.exec(`
     CREATE TABLE IF NOT EXISTS users (
@@ -1862,7 +1865,6 @@ function initDb() {
 
 function getDb() {
   if (!dbInstance) initDb()
-  else applySchemaPatches(dbInstance)
   return dbInstance
 }
 

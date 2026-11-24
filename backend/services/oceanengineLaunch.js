@@ -943,9 +943,14 @@ function matchPromo(list, account) {
   return rows.length === 1 ? rows[0] : null
 }
 
+const bookSearchCache = new Map()
+
 function searchBooks(keyword, copyright) {
   const text = String(keyword || '').trim()
   const wanted = normalizeCopyright(copyright)
+  const cacheKey = `${wanted}\n${text}`
+  const cached = bookSearchCache.get(cacheKey)
+  if (cached && Date.now() - cached.at < 8000) return cached.rows
   const where = ['1=1']
   const args = []
   if (text) {
@@ -956,7 +961,7 @@ function searchBooks(keyword, copyright) {
   if (wanted === '番茄') promoJoin += ` AND p.source = 'changdu'`
   else if (wanted === '点众') promoJoin += ` AND IFNULL(p.source, '') != 'changdu'`
   const having = text ? '' : 'HAVING COUNT(p.id) > 0'
-  return database()
+  const rows = database()
     .prepare(
       `SELECT b.id, b.external_book_id AS externalBookId, b.name AS bookName,
               GROUP_CONCAT(DISTINCT IFNULL(rt.name, '')) AS tiers,
@@ -979,6 +984,9 @@ function searchBooks(keyword, copyright) {
       tiers: sortTiers(String(row.tiers || '').split(',')),
       copyrights: orderCopyrights(String(row.copyrights || '').split(',')),
     }))
+  bookSearchCache.set(cacheKey, { at: Date.now(), rows })
+  if (bookSearchCache.size > 40) bookSearchCache.delete(bookSearchCache.keys().next().value)
+  return rows
 }
 
 function loadPromosByBook(bookName, allow) {
@@ -1087,6 +1095,33 @@ function sortLaunchLibraries(list) {
 function loadLibraries() {
   const flagged = products.withLaunchFlags(products.localStoredLibraries())
   return sortLaunchLibraries(flagged.filter((item) => item.launch).map(mapLaunchLibrary))
+}
+
+let libraryCache = { at: 0, list: null }
+let libraryInflight = null
+const LIBRARY_REFRESH_MS = 2 * 60 * 1000
+
+function launchLibraries() {
+  const local = loadLibraries()
+  if (libraryCache.list && Date.now() - libraryCache.at < LIBRARY_REFRESH_MS) return Promise.resolve(libraryCache.list)
+  if (libraryInflight) return libraryInflight
+  libraryInflight = products
+    .refreshLibraries()
+    .then((remote) => {
+      const list = remote && remote.length
+        ? sortLaunchLibraries(products.withLaunchFlags(remote).filter((item) => item.launch).map(mapLaunchLibrary))
+        : local
+      libraryCache = { at: Date.now(), list }
+      return list
+    })
+    .catch((e) => {
+      console.error('[oceanengine] launch libraries', e.message)
+      return local
+    })
+    .finally(() => {
+      libraryInflight = null
+    })
+  return libraryInflight
 }
 
 function loadVideos() {
@@ -1426,14 +1461,16 @@ function buildPreview({ bookName, promos, accounts, accountTotal, selectedTiers,
   }
 }
 
-function mapTask(task) {
-  const extra = database()
-    .prepare(
-      `SELECT COUNT(*) AS total,
-              SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending
-       FROM oceanengine_launch_task_items WHERE task_id = ?`,
-    )
-    .get(task.id)
+function mapTask(task, counts) {
+  const extra = counts === undefined
+    ? database()
+        .prepare(
+          `SELECT COUNT(*) AS total,
+                  SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending
+           FROM oceanengine_launch_task_items WHERE task_id = ?`,
+        )
+        .get(task.id)
+    : counts
   const phase = taskPhase(task.id)
   return {
     id: task.id,
@@ -1611,12 +1648,32 @@ function backfillTaskNames() {
   }
 }
 
+let launchBackfilled = false
+let taskListCache = null
+
+function invalidateTaskListCache() {
+  taskListCache = null
+}
+
+function ensureLaunchBackfill() {
+  if (launchBackfilled) return
+  launchBackfilled = true
+  try {
+    backfillTaskNames()
+    backfillProductUse()
+  } catch (e) {
+    launchBackfilled = false
+    console.warn('[oceanengine] launch backfill', e.message)
+  }
+}
+
 function listTasks(query) {
-  backfillTaskNames()
-  backfillProductUse()
+  ensureLaunchBackfill()
   const pageSize = Math.min(200, Math.max(1, Number(query && query.pageSize) || 20))
   const page = Math.max(1, Number(query && query.page) || 1)
   const keyword = String((query && (query.keyword || query.q)) || '').trim()
+  const cacheKey = `${page}|${pageSize}|${keyword}`
+  if (taskListCache && taskListCache.key === cacheKey && Date.now() - taskListCache.at < 800) return taskListCache.value
   const where = []
   const args = []
   if (keyword) {
@@ -1633,22 +1690,39 @@ function listTasks(query) {
        LIMIT ? OFFSET ?`,
     )
     .all(...args, pageSize, (page - 1) * pageSize)
+  const ids = rows.map((row) => row.id)
+  const countMap = new Map()
+  if (ids.length) {
+    const grouped = database()
+      .prepare(
+        `SELECT task_id,
+                COUNT(*) AS total,
+                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending
+         FROM oceanengine_launch_task_items
+         WHERE task_id IN (${ids.map(() => '?').join(',')})
+         GROUP BY task_id`,
+      )
+      .all(...ids)
+    for (const row of grouped) countMap.set(row.task_id, row)
+  }
   const active = database()
     .prepare(
       `SELECT id, name, status, added, failed, book_count, account_count, strategy_name, created_at, product_library, product_span
        FROM oceanengine_launch_tasks
-       WHERE status IN ('running', 'preparing', 'ready')
-       ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'preparing' THEN 1 ELSE 2 END, id
+       WHERE status IN ('running', 'preparing', 'ready', 'queued')
+       ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'preparing' THEN 1 WHEN 'ready' THEN 2 ELSE 3 END, id
        LIMIT 1`,
     )
     .get()
-  return {
-    list: rows.map(mapTask),
+  const value = {
+    list: rows.map((row) => mapTask(row, countMap.get(row.id) || { total: 0, pending: 0 })),
     total,
     page,
     pageSize,
-    active: active ? mapTask(active) : null,
+    active: active ? mapTask(active, countMap.get(active.id)) : null,
   }
+  taskListCache = { key: cacheKey, at: Date.now(), value }
+  return value
 }
 
 function recentTask() {
@@ -1741,15 +1815,7 @@ async function options() {
   migrateStrategies()
   const accounts = loadAccounts()
   const books = searchBooks('')
-  let libraries = loadLibraries()
-  try {
-    const remote = await products.refreshLibraries()
-    if (remote && remote.length) {
-      libraries = sortLaunchLibraries(products.withLaunchFlags(remote).filter((item) => item.launch).map(mapLaunchLibrary))
-    }
-  } catch (e) {
-    console.error('[oceanengine] launch libraries', e.message)
-  }
+  const libraries = await launchLibraries()
   const taskPage = listTasks({ page: 1, pageSize: 20 })
   return {
     accounts,
@@ -1767,6 +1833,7 @@ async function options() {
     libraries,
     tasks: taskPage.list,
     taskTotal: taskPage.total,
+    activeTask: taskPage.active,
   }
 }
 
@@ -2885,6 +2952,7 @@ function openTask(userId, accounts, books, strategyName, snapshot, taskStatus = 
   const name = buildTaskName(snap.bookName)
   database().prepare(`UPDATE oceanengine_launch_tasks SET name = ? WHERE id = ?`).run(name, id)
   rememberProductUse(id, snap)
+  invalidateTaskListCache()
   return id
 }
 
@@ -2900,6 +2968,7 @@ function refreshCounts(taskId) {
   database()
     .prepare(`UPDATE oceanengine_launch_tasks SET added = ?, failed = ?, updated_at = datetime('now') WHERE id = ?`)
     .run(Number(counts && counts.added) || 0, Number(counts && counts.failed) || 0, taskId)
+  invalidateTaskListCache()
 }
 
 function writeItem(taskId, item, options) {
@@ -2996,6 +3065,7 @@ function finishTask(taskId, status) {
   database()
     .prepare(`UPDATE oceanengine_launch_tasks SET status = ?, updated_at = datetime('now') WHERE id = ?`)
     .run(status, taskId)
+  invalidateTaskListCache()
   if (status === 'running' || status === 'queued' || status === 'preparing' || status === 'ready') return
   kickQueues()
 }
@@ -3024,10 +3094,11 @@ function taskById(id) {
     const key = row.errorKind || 'rejected'
     kinds[key] = (kinds[key] || 0) + 1
   }
+  const pending = items.filter((row) => row.status === 'pending').length
   return {
-    ...mapTask(task),
+    ...mapTask(task, { total: items.length, pending }),
     total: items.length,
-    pending: items.filter((row) => row.status === 'pending').length,
+    pending,
     failKinds: kinds,
     preparingProducts: items.some((row) => row.status === 'pending' && row.message === '正在创建商品'),
     phase: (taskPhase(task.id) && taskPhase(task.id).phase) || '',

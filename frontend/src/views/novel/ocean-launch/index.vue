@@ -560,9 +560,8 @@ const videoEmptyText = computed(() => {
   const first = ((plan.value && plan.value.tiers) || []).find((row) => row.messages && row.messages.length)
   return (first && first.messages[0]) || "巨量线上素材库里没有对上这本书的视频"
 })
-const liveActive = computed(() =>
-  ["running", "preparing", "ready"].includes(liveTask.value && liveTask.value.status),
-)
+const LIVE_STATUSES = ["running", "preparing", "ready", "queued"]
+const liveActive = computed(() => LIVE_STATUSES.includes(liveTask.value && liveTask.value.status))
 const videoList = computed(() => (plan.value && plan.value.videos) || [])
 const pickedVideoPreview = computed(() =>
   videoList.value.filter((item) => isPickedVideo(item) && item.posterUrl).slice(0, 8),
@@ -1195,6 +1194,7 @@ async function loadOptions() {
   launchTiers.value = (res.data.tiers && res.data.tiers.length ? res.data.tiers : DEFAULT_TIERS).slice()
   tasks.value = res.data.tasks || []
   taskTotal.value = Number(res.data.taskTotal) || tasks.value.length
+  liveTask.value = res.data.activeTask || activeTaskRow(tasks.value)
   pickDefaultLibrary()
   if (copyrights.value.includes(readCopyright())) copyrightFilter.value = readCopyright()
   else if (copyrights.value.length && !copyrights.value.includes(copyrightFilter.value)) {
@@ -1202,10 +1202,6 @@ async function loadOptions() {
   }
   pickStrategyForCopyright()
   await fetchBooks("")
-  const active = tasks.value.find((item) => item.status === "running")
-    || tasks.value.find((item) => item.status === "preparing")
-    || tasks.value.find((item) => item.status === "ready")
-  if (active) pollTask(active.id)
 }
 function mergeBookOptions(rows) {
   const list = Array.isArray(rows) ? rows : []
@@ -1281,6 +1277,7 @@ async function buildPreview() {
   }
 }
 function stopPoll() {
+  pollGeneration += 1
   if (pollTimer) clearInterval(pollTimer)
   pollTimer = 0
 }
@@ -1319,25 +1316,56 @@ function activeTaskRow(list) {
   return rows.find((item) => item.status === "running")
     || rows.find((item) => item.status === "preparing")
     || rows.find((item) => item.status === "ready")
+    || rows.find((item) => item.status === "queued")
 }
+function pageVisible() {
+  return typeof document === "undefined" || !document.hidden
+}
+function shouldPoll() {
+  if (!pageVisible()) return false
+  if (tab.value !== "records" && !(detailVisible.value && detailTaskId.value)) return false
+  if (LIVE_STATUSES.includes(liveTask.value && liveTask.value.status)) return true
+  return Boolean(activeTaskRow(tasks.value))
+}
+let pollBusy = false
+let pollGeneration = 0
 async function refreshBoard() {
-  await loadTasks(true)
-  if (detailVisible.value && detailTaskId.value) {
-    const res = await request({ url: `/admin-api/oceanengine/launch/tasks/${detailTaskId.value}` })
-    if (res.code === 0) {
-      detailItems.value = res.data.items || []
-      detailTitle.value = taskHeading(res.data)
-      applyTask(res)
+  if (pollBusy) return
+  pollBusy = true
+  try {
+    await loadTasks(true)
+    const openRow = tasks.value.find((item) => item.id === detailTaskId.value)
+    const detailLive = !openRow || LIVE_STATUSES.includes(openRow.status)
+    if (detailVisible.value && detailTaskId.value && detailLive) {
+      const res = await request({ url: `/admin-api/oceanengine/launch/tasks/${detailTaskId.value}` })
+      if (res.code === 0) {
+        detailItems.value = res.data.items || []
+        detailTitle.value = taskHeading(res.data)
+        applyTask(res)
+      }
     }
+  } finally {
+    pollBusy = false
   }
-  if (!liveTask.value || !["running", "preparing", "ready"].includes(liveTask.value.status)) stopPoll()
 }
 function pollTask() {
   stopPoll()
-  refreshBoard()
-  pollTimer = setInterval(() => {
-    refreshBoard()
-  }, 1500)
+  const generation = pollGeneration
+  refreshBoard().finally(() => {
+    if (generation !== pollGeneration || !shouldPoll()) return
+    pollTimer = setInterval(() => {
+      if (generation !== pollGeneration) return
+      if (!shouldPoll()) {
+        stopPoll()
+        return
+      }
+      refreshBoard()
+    }, 3000)
+  })
+}
+function onPageVisibility() {
+  if (pageVisible() && shouldPoll()) pollTask()
+  else stopPoll()
 }
 async function loadTasks(quiet) {
   if (!quiet) tasksLoading.value = true
@@ -1472,7 +1500,7 @@ async function openTask(row) {
     detailItems.value = res.data.items || []
     detailTitle.value = taskHeading(res.data)
     applyTask(res)
-    if (["running", "preparing", "ready"].includes(res.data.status)) pollTask(row.id)
+    if (LIVE_STATUSES.includes(res.data.status)) pollTask(row.id)
   } finally {
     if (seq === detailSeq) detailLoading.value = false
   }
@@ -1587,14 +1615,22 @@ async function submitLaunch() {
 }
 
 watch(tab, (value) => {
-  if (value === "records") loadTasks()
+  if (value === "records") {
+    loadTasks().finally(() => {
+      if (shouldPoll()) pollTask()
+    })
+  } else if (!(detailVisible.value && detailTaskId.value)) {
+    stopPoll()
+  }
 })
 
 onMounted(() => {
   loadOptions()
+  document.addEventListener("visibilitychange", onPageVisibility)
 })
 onBeforeUnmount(() => {
   stopPoll()
+  document.removeEventListener("visibilitychange", onPageVisibility)
   clearTimeout(previewTimer)
   clearTimeout(bookSearchTimer)
 })
